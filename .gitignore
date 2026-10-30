@@ -1,0 +1,13 @@
+node_modules/
+.next/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# test output
+.test-build/
+tests/artifacts/
+tsconfig.tsbuildinfo
+*.zip

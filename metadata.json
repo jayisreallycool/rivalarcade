@@ -1,0 +1,8 @@
+{
+  "name": "RivalArcade - Competitive Skill Gaming",
+  "description": "Mobile-first competitive arcade platform with playable custom avatars, 1v1 cash-free matches, automated tournaments, and cosmetic dressing room.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

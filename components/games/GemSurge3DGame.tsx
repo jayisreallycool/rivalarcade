@@ -3,7 +3,8 @@
 import React, { useCallback, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { create3DAvatar } from '@/lib/avatar-3d-model';
-import { sound, useMuted } from '@/lib/sound';
+import { sound } from '@/lib/sound';
+import { haptic } from '@/lib/haptics';
 import {
   ParticleBursts,
   addArenaLights,
@@ -16,8 +17,8 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
-import RivalBar from './RivalBar';
-import { Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import GameShell, { PopupApi, useSwipe, Swipe } from './GameShell';
+import { Move, Pointer, Layers } from 'lucide-react';
 
 type GemSurge3DProps = GameProps;
 
@@ -27,6 +28,9 @@ const GEM_COLORS = [0x00f0ff, 0xff0055, 0xffb800, 0x10b981, 0xa855f7];
 const ROUND_SECONDS = 60;
 const SPACING = 0.95;
 const ORIGIN = new THREE.Vector3(0.2, 4.4, 0);
+const BOARD_CENTER = new THREE.Vector3(ORIGIN.x + ((COLS - 1) * SPACING) / 2, ORIGIN.y - ((ROWS - 1) * SPACING) / 2, 0);
+const CLUTCH_SECONDS = 10;
+const TOUCH_SLOP = 34;
 
 interface Gem {
   r: number;
@@ -40,26 +44,37 @@ type Phase = 'ready' | 'playing' | 'over';
 
 const cellPos = (r: number, c: number, out = new THREE.Vector3()) => out.set(ORIGIN.x + c * SPACING, ORIGIN.y - r * SPACING, 0);
 
-export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', seed, rival }: GemSurge3DProps) {
+export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, onExit }: GemSurge3DProps) {
   const seedRef = useLatest(seed);
   // Starting board and refills come from the match seed: same board for every player.
   const rngRef = useRef(mulberry32(seed ?? randomSeed()));
   const stableAvatar = useStructuralMemo(avatar);
   const onFinishRef = useLatest(onFinish);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS });
-  const isMuted = useMuted();
-  const inputRef = useRef<{ down: (e: React.PointerEvent) => void; up: (e: React.PointerEvent) => void }>({ down: () => {}, up: () => {} });
+  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, clutch: false });
+  const popups = useRef<PopupApi | null>(null);
+  const inputRef = useRef<{ down: (x: number, y: number) => void; swipe: (s: Swipe) => void; tap: () => void }>({ down: () => {}, swipe: () => {}, tap: () => {} });
   const resetWorldRef = useRef<() => void>(() => {});
-  const sim = useRef({ playing: false, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS });
+  const fresh = () => ({ playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, clutchAnnounced: false, moves: 0, cleared: 0, pMatch: 0, pCascade: 0, pClutch: 0 });
+  const sim = useRef({ ...fresh(), playing: false });
 
   const startGame = useCallback(() => {
-    Object.assign(sim.current, { playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS });
+    Object.assign(sim.current, fresh());
     rngRef.current = mulberry32(seedRef.current ?? randomSeed());
     resetWorldRef.current();
-    pushHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS }, true);
+    pushHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, clutch: false }, true);
     setPhase('playing');
   }, [pushHud, seedRef]);
+
+  // Touch a gem and swipe toward a neighbour (fires mid-swipe), or tap-select then tap a neighbour.
+  const surface = useSwipe({
+    earlyThreshold: 22,
+    onDrag: (sw, ph) => {
+      if (ph === 'start') inputRef.current.down(sw.startX, sw.startY);
+    },
+    onSwipe: (sw) => inputRef.current.swipe(sw),
+    onTap: () => inputRef.current.tap(),
+  });
 
   const { hostRef } = useGameEngine(
     {
@@ -68,9 +83,10 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
       camera: { fov: 48, far: 90, position: [1.5, 2.5, 9.2], lookAt: [1.5, 2.2, 0] },
       exposure: 1.2,
       bloom: { strength: 0.65, radius: 0.3, threshold: 0.85 },
+      environment: 0.5,
     },
     (engine) => {
-      const { scene } = engine;
+      const { scene, camera } = engine;
       addArenaLights(engine, { sky: 0x9fdcff, ground: 0x1b1328, hemi: 1.1, key: 2.2, keyPos: [6, 12, 10], rim: 0xa855f7, shadowFrustum: 8 });
       scene.add(createStarfield(engine, { count: 500, radius: 40, color: '#d6b8ff', yMin: -10 }));
 
@@ -103,6 +119,31 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
       scene.add(avatar3D.group);
 
       const particles = new ParticleBursts(engine);
+
+      // Portrait: board fills the width with the avatar cheering below. Landscape: avatar beside it.
+      engine.onResize((_w, _h, aspect) => {
+        if (aspect < 0.8) {
+          const halfW = 3.7;
+          camera.fov = 58;
+          const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * aspect;
+          const dist = halfW / tanH;
+          camera.position.set(BOARD_CENTER.x, BOARD_CENTER.y - 1.2, dist);
+          camera.lookAt(BOARD_CENTER.x, BOARD_CENTER.y - 1.2, 0);
+          stage.position.set(BOARD_CENTER.x, -2.95, 0.6);
+          stageRing.position.set(BOARD_CENTER.x, -2.74, 0.6);
+          avatar3D.group.position.set(BOARD_CENTER.x, -2.75, 0.6);
+          avatar3D.group.rotation.y = 0;
+        } else {
+          camera.fov = 48;
+          camera.position.set(1.4, 2.0, 10.6);
+          camera.lookAt(1.4, 1.9, 0);
+          stage.position.set(-2.4, 0.2, 0);
+          stageRing.position.set(-2.4, 0.41, 0);
+          avatar3D.group.position.set(-2.4, 0.4, 0);
+          avatar3D.group.rotation.y = 0.4;
+        }
+        camera.updateProjectionMatrix();
+      });
 
       // One geometry + five materials for every gem that will ever exist
       const gemGeo = engine.own(new THREE.OctahedronGeometry(0.38, 0));
@@ -202,15 +243,30 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
           busy = false;
           return;
         }
+        const centre = new THREE.Vector3();
         matched.forEach((g) => {
           particles.emit(g.mesh.position, GEM_COLORS[g.colorIdx], { count: 8, speed: 3.5, life: 0.55, gravity: 4 });
+          centre.add(g.mesh.position);
           board[g.r][g.c] = null;
           dropMesh(g.mesh);
         });
-        // Combo = cascade step within this move: 1st clear ×1, 2nd ×2, …
+        centre.divideScalar(matched.size);
+        // Combo = cascade step within this move: 1st clear ×1, 2nd ×2, …  (4/5-matches score more gems)
         s.combo += 1;
-        s.score += matched.size * 60 * s.combo;
+        const clutch = s.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
+        const base = matched.size * 60;
+        const pts = base * s.combo * clutch;
+        s.pMatch += base;
+        s.pCascade += base * (s.combo - 1);
+        s.pClutch += base * s.combo * (clutch - 1);
+        s.score += pts;
+        s.cleared += matched.size;
         s.bestCombo = Math.max(s.bestCombo, s.combo);
+        const sp = engine.toScreen(centre);
+        popups.current?.pop(`+${pts}`, sp.x, sp.y, { color: s.combo >= 2 ? '#fde047' : '#ffffff', size: pts >= 600 ? 'lg' : 'md' });
+        if (s.combo >= 2) popups.current?.banner(`CASCADE ×${s.combo}`, s.combo >= 3 ? '#f0abfc' : '#c4b5fd');
+        if (matched.size >= 5) popups.current?.pop('MEGA MATCH', sp.x, sp.y + 26, { color: '#f0abfc', size: 'sm' });
+        haptic(s.combo >= 2 ? 'big' : 'score');
         sound.playScore(1 + Math.min(s.combo * 0.1, 1.5));
         engine.flash(Math.min(1, 0.25 + matched.size * 0.04));
         avatar3D.trigger('celebrate', 0.9);
@@ -221,6 +277,8 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
 
       const swap = (a: Gem, b: Gem) => {
         busy = true;
+        sim.current.moves += 1;
+        haptic('tap');
         sim.current.combo = 0; // each move starts a fresh cascade chain
         const place = (g: Gem, r: number, c: number) => {
           board[r][c] = g;
@@ -237,6 +295,8 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
           } else {
             place(a, ar, ac);
             place(b, br, bc);
+            sound.playTap();
+            haptic('light');
             sim.current.combo = 0;
             pushHud({ combo: 0 }, true);
             later(0.18, () => (busy = false));
@@ -244,47 +304,58 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
         });
       };
 
-      const gemAt = (clientX: number, clientY: number) => {
+      const scr = new THREE.Vector3();
+      /** Gem under a point in surface px: raycast, then nearest gem centre within the touch slop. */
+      const gemAt = (x: number, y: number) => {
+        const rect = engine.renderer.domElement.getBoundingClientRect();
         const meshes: THREE.Object3D[] = [];
         for (const row of board) for (const g of row) if (g) meshes.push(g.mesh);
-        const hit = engine.raycast(clientX, clientY, meshes, false)[0];
-        if (!hit) return null;
-        for (const row of board) for (const g of row) if (g && g.mesh === hit.object) return g;
-        return null;
+        const hit = engine.raycast(rect.left + x, rect.top + y, meshes, false)[0];
+        if (hit) for (const row of board) for (const g of row) if (g && g.mesh === hit.object) return g;
+        let best: Gem | null = null;
+        let bestD = TOUCH_SLOP;
+        for (const row of board)
+          for (const g of row) {
+            if (!g) continue;
+            const p = engine.toScreen(scr.copy(g.target));
+            const d = Math.hypot(p.x - x, p.y - y);
+            if (d < bestD) {
+              bestD = d;
+              best = g;
+            }
+          }
+        return best;
       };
 
-      let dragStart: { gem: Gem; x: number; y: number } | null = null;
+      let touched: Gem | null = null;
       inputRef.current = {
-        down: (e) => {
-          if (!sim.current.playing || busy) return;
-          const g = gemAt(e.clientX, e.clientY);
-          if (g) dragStart = { gem: g, x: e.clientX, y: e.clientY };
+        down: (x, y) => {
+          touched = sim.current.playing && !busy ? gemAt(x, y) : null;
         },
-        up: (e) => {
-          const start = dragStart;
-          dragStart = null;
-          if (!start || !sim.current.playing || busy) return;
-          const { gem } = start;
-          const dx = e.clientX - start.x;
-          const dy = e.clientY - start.y;
-
-          if (Math.hypot(dx, dy) < 20) {
-            // Tap-to-select, tap an adjacent gem to swap
-            if (selected && selected !== gem && Math.abs(selected.r - gem.r) + Math.abs(selected.c - gem.c) === 1) {
-              const a = selected;
-              selected = null;
-              swap(a, gem);
-            } else {
-              selected = selected === gem ? null : gem;
-            }
-            return;
-          }
+        swipe: ({ dx, dy }) => {
+          const gem = touched;
+          touched = null;
+          if (!gem || !sim.current.playing || busy) return;
           selected = null;
-          let r2 = gem.r, c2 = gem.c;
+          let r2 = gem.r;
+          let c2 = gem.c;
           if (Math.abs(dx) > Math.abs(dy)) c2 += dx > 0 ? 1 : -1;
           else r2 += dy > 0 ? 1 : -1;
           const other = board[r2]?.[c2];
           if (other) swap(gem, other);
+        },
+        tap: () => {
+          const gem = touched;
+          touched = null;
+          if (!gem || !sim.current.playing || busy) return;
+          if (selected && selected !== gem && Math.abs(selected.r - gem.r) + Math.abs(selected.c - gem.c) === 1) {
+            const a = selected;
+            selected = null;
+            swap(a, gem);
+          } else {
+            selected = selected === gem ? null : gem;
+            if (selected) haptic('tap');
+          }
         },
       };
 
@@ -309,15 +380,26 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
 
         if (s.playing) {
           s.timeLeft -= dt;
+          if (!s.clutchAnnounced && s.timeLeft <= CLUTCH_SECONDS) {
+            s.clutchAnnounced = true;
+            popups.current?.banner('CLUTCH TIME ×2', '#fbbf24');
+            haptic('big');
+          }
           if (s.timeLeft <= 0) {
             s.playing = false;
             selected = null;
             sound.playWin();
-            pushHud({ timeLeft: 0, score: s.score }, true);
+            haptic('big');
+            const breakdown = [
+              { label: `Gems cleared (${s.cleared})`, points: s.pMatch },
+              { label: `Cascade bonus (best ×${Math.max(1, s.bestCombo)})`, points: s.pCascade },
+              { label: 'Clutch time ×2', points: s.pClutch },
+            ].filter((b) => b.points > 0);
+            pushHud({ timeLeft: 0, score: s.score, clutch: false }, true);
             setPhase('over');
-            onFinishRef.current(s.score, { maxCombo: s.bestCombo });
+            onFinishRef.current(s.score, { maxCombo: s.bestCombo, breakdown });
           } else {
-            pushHud({ timeLeft: Math.ceil(s.timeLeft) });
+            pushHud({ timeLeft: s.timeLeft, clutch: s.timeLeft <= CLUTCH_SECONDS });
           }
         }
 
@@ -344,7 +426,7 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
       });
 
       return () => {
-        inputRef.current = { down: () => {}, up: () => {} };
+        inputRef.current = { down: () => {}, swipe: () => {}, tap: () => {} };
         resetWorldRef.current = () => {};
         spareMeshes.length = 0;
       };
@@ -352,67 +434,32 @@ export default function GemSurge3DGame({ avatar, onFinish, modeName = 'Match', s
     [stableAvatar],
   );
 
+  const chips = hud.combo > 1 ? <span className="px-2 py-0.5 rounded-full bg-fuchsia-400 text-black text-[11px] font-black">CASCADE ×{hud.combo}</span> : null;
+
   return (
-    <div className="relative flex flex-col items-center w-full max-w-3xl mx-auto select-none">
-      <div className="w-full flex items-center justify-between px-4 py-2.5 bg-[#12131d] border-b border-[#242738] rounded-t-xl text-sm gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="font-extrabold tracking-wider text-purple-400 text-xs sm:text-sm whitespace-nowrap">GEM SURGE 3D</span>
-          <span className="text-xs text-slate-400 hidden sm:inline">· {modeName}</span>
-        </div>
-        <div className="flex items-center gap-2.5 sm:gap-5 font-mono text-xs sm:text-sm">
-          <div className="text-slate-300">
-            <span className="hidden sm:inline">SCORE: </span><span className="text-white font-bold text-sm sm:text-base tabular-nums">{hud.score}</span>
-          </div>
-          <div className="text-purple-400 font-bold">{hud.combo > 1 ? `${hud.combo}x CASCADE` : ''}</div>
-          <div className="text-cyan-400 font-bold tabular-nums">{hud.timeLeft}s</div>
-          <button onClick={() => sound.toggleMute()} className="p-1 hover:text-cyan-400 text-slate-400 transition-colors">
-            {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-cyan-400" />}
-          </button>
-        </div>
-      </div>
-
-      {rival && <RivalBar rival={rival} score={hud.score} progress={phase === 'ready' ? 0 : 1 - hud.timeLeft / ROUND_SECONDS} />}
-
-      <div
-        onPointerDown={(e) => inputRef.current.down(e)}
-        onPointerUp={(e) => inputRef.current.up(e)}
-        className="relative w-full aspect-[16/9] bg-[#0a0b14] overflow-hidden border-x border-[#242738] touch-none cursor-pointer"
-      >
-        <div ref={hostRef} className="absolute inset-0" />
-
-        {phase === 'ready' && (
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex flex-col items-center justify-center p-6 text-center z-10">
-            <h2 className="text-3xl font-black italic tracking-wide text-purple-400 mb-2">GEM SURGE 3D</h2>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-md mb-6">
-              Full 3D Cascading Polyhedron Puzzle! Slide and drag any 3D crystal onto an adjacent gem to match 3-in-a-row and trigger chain reactions!
-            </p>
-            <button
-              onClick={startGame}
-              className="flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white font-extrabold text-sm rounded-xl shadow-lg shadow-purple-500/30 transition-transform active:scale-95"
-            >
-              <Play className="w-4 h-4 fill-white" /> START 3D PUZZLE
-            </button>
-          </div>
-        )}
-
-        {phase === 'over' && (
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-10">
-            <span className="text-xs font-semibold uppercase tracking-widest text-purple-400 mb-1">TIME EXPIRED</span>
-            <div className="text-4xl font-black text-white mb-2">{hud.score}</div>
-            <div className="text-xs text-slate-400 mb-6">Max Cascade Combo: {Math.max(1, hud.bestCombo)}x</div>
-            <button
-              onClick={startGame}
-              className="flex items-center gap-2 px-6 py-2.5 bg-purple-500 hover:bg-purple-400 text-white font-bold text-sm rounded-lg shadow-md transition-transform active:scale-95"
-            >
-              <RotateCcw className="w-4 h-4" /> PLAY AGAIN
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="w-full p-3 bg-[#12131d] border-t border-[#242738] rounded-b-xl text-center text-xs text-slate-400">
-        Drag a crystal toward a neighbour to swap — or tap one, then tap the gem next to it.
-      </div>
-    </div>
+    <GameShell
+      title="GEM SURGE"
+      accent="#c084fc"
+      hostRef={hostRef}
+      popupsRef={popups}
+      phase={phase}
+      onStart={startGame}
+      score={hud.score}
+      timeLeft={phase === 'ready' ? ROUND_SECONDS : hud.timeLeft}
+      roundSeconds={ROUND_SECONDS}
+      clutch={hud.clutch}
+      chips={chips}
+      rival={rival}
+      match={match}
+      onExit={onExit}
+      surface={surface}
+      hint="Swipe a gem toward a neighbour to swap"
+      tutorial={[
+        { icon: <Move className="w-6 h-6" />, label: 'Swipe gem to swap' },
+        { icon: <Pointer className="w-6 h-6" />, label: 'Or tap, then tap neighbour' },
+        { icon: <Layers className="w-6 h-6" />, label: 'Chain cascades' },
+      ]}
+      scoring="60 per gem cleared · Each cascade step in one move multiplies (×2, ×3…) · Last 10s ×2. Same board for every player."
+    />
   );
 }

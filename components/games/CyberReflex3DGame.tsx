@@ -3,7 +3,8 @@
 import React, { useCallback, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { create3DAvatar } from '@/lib/avatar-3d-model';
-import { sound, useMuted } from '@/lib/sound';
+import { sound } from '@/lib/sound';
+import { haptic } from '@/lib/haptics';
 import {
   Pool,
   ParticleBursts,
@@ -18,8 +19,8 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
-import RivalBar from './RivalBar';
-import { Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import GameShell, { PopupApi, useSwipe } from './GameShell';
+import { Pointer, Hand, ShieldAlert } from 'lucide-react';
 
 type CyberReflex3DProps = GameProps;
 
@@ -27,6 +28,8 @@ type NodeType = 'target' | 'hazard' | 'bonus';
 const NODE_COLORS: Record<NodeType, number> = { target: 0x00f0ff, hazard: 0xff0055, bonus: 0xffb800 };
 const ROUND_SECONDS = 40;
 const RING_START = 2.4;
+const CLUTCH_SECONDS = 10;
+const TOUCH_SLOP = 46; // px: a near-miss tap still counts on phones
 
 interface NodeObj {
   group: THREE.Group;
@@ -38,26 +41,35 @@ interface NodeObj {
 
 type Phase = 'ready' | 'playing' | 'over';
 
-export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match', seed, rival }: CyberReflex3DProps) {
+export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match, onExit }: CyberReflex3DProps) {
   const seedRef = useLatest(seed);
   const rngRef = useRef(mulberry32(seed ?? randomSeed()));
   const stableAvatar = useStructuralMemo(avatar);
   const onFinishRef = useLatest(onFinish);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS });
-  const isMuted = useMuted();
-  const hitRef = useRef<(x: number, y: number) => void>(() => {});
+  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, clutch: false });
+  const popups = useRef<PopupApi | null>(null);
+  const hitRef = useRef<(x: number, y: number, isTap: boolean) => void>(() => {});
   const resetWorldRef = useRef<() => void>(() => {});
 
-  const sim = useRef({ playing: false, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, spawnTimer: 0 });
+  const fresh = () => ({ playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, spawnTimer: 0, clutchAnnounced: false, hits: 0, perfects: 0, hazards: 0, pHits: 0, pPerfect: 0, pStreak: 0, pClutch: 0, pHazard: 0 });
+  const sim = useRef({ ...fresh(), playing: false });
 
   const startGame = useCallback(() => {
-    Object.assign(sim.current, { playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, spawnTimer: 0 });
+    Object.assign(sim.current, fresh());
     rngRef.current = mulberry32(seedRef.current ?? randomSeed());
     resetWorldRef.current();
-    pushHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS }, true);
+    pushHud({ score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, clutch: false }, true);
     setPhase('playing');
   }, [pushHud, seedRef]);
+
+  // Tap a node, or slash across several in one stroke.
+  const surface = useSwipe({
+    onDrag: (sw, ph) => {
+      if (ph === 'start') hitRef.current(sw.startX, sw.startY, true);
+      else if (ph === 'move') hitRef.current(sw.endX, sw.endY, false);
+    },
+  });
 
   const { hostRef } = useGameEngine(
     {
@@ -66,9 +78,25 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
       camera: { fov: 50, far: 90, position: [0, 3.8, 8.2], lookAt: [0, 1.2, 0] },
       exposure: 1.25,
       bloom: { strength: 0.75, radius: 0.3, threshold: 0.82 },
+      environment: 0.35,
     },
     (engine) => {
       const { scene, camera } = engine;
+
+      // Same node positions for every player (seeded); the camera adapts to the screen instead.
+      const view = { fov: 50, y: 3.8, z: 8.2, lookY: 1.2, lookZ: 0 };
+      engine.onResize((_w, _h, aspect) => {
+        if (aspect < 0.8) {
+          // Narrow screens: steeper overhead view, distance chosen so the whole node ring fits the width.
+          const halfW = 5.1;
+          const fov = 66;
+          const dist = halfW / (aspect * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
+          const elev = THREE.MathUtils.degToRad(58);
+          Object.assign(view, { fov, y: 1.4 + dist * Math.sin(elev), z: -0.4 + dist * Math.cos(elev), lookY: 1.4, lookZ: -0.4 });
+        } else Object.assign(view, { fov: 50, y: 3.8, z: 8.2, lookY: 1.2, lookZ: 0 });
+        camera.fov = view.fov;
+        camera.updateProjectionMatrix();
+      });
 
       addArenaLights(engine, { sky: 0x00f0ff, ground: 0x1a1233, hemi: 1.2, key: 1.8, keyPos: [6, 12, 8], rim: 0x8b5cf6, shadowFrustum: 6 });
 
@@ -117,8 +145,8 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
       const particles = new ParticleBursts(engine);
 
       // Shared node resources: 1 orb geo + 1 ring geo + 3 orb mats + 3 ring mats, regardless of spawns
-      const orbGeo = engine.own(new THREE.DodecahedronGeometry(0.42));
-      const ringGeo = engine.own(new THREE.TorusGeometry(0.55, 0.035, 8, 32));
+      const orbGeo = engine.own(new THREE.DodecahedronGeometry(0.5));
+      const ringGeo = engine.own(new THREE.TorusGeometry(0.62, 0.04, 8, 32));
       const orbMats = {} as Record<NodeType, THREE.Material>;
       const ringMats = {} as Record<NodeType, THREE.Material>;
       (Object.keys(NODE_COLORS) as NodeType[]).forEach((t) => {
@@ -155,46 +183,89 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
         particles.clear();
       };
 
-      hitRef.current = (clientX, clientY) => {
-        const s = sim.current;
-        if (!s.playing) return;
+      const scr = new THREE.Vector3();
+      /** Node under (x, y) in surface px: exact raycast first, then nearest node within the touch slop. */
+      const pickNode = (x: number, y: number) => {
+        const r = engine.renderer.domElement.getBoundingClientRect();
         hitTargets.length = 0;
         nodes.forEach((n) => hitTargets.push(n.group));
-        const hits = engine.raycast(clientX, clientY, hitTargets, true);
-        if (!hits.length) {
-          if (s.combo !== 0) {
+        const hits = engine.raycast(r.left + x, r.top + y, hitTargets, true);
+        if (hits.length) {
+          const idx = nodes.findIndex((n) => n.orb === hits[0].object || n.ring === hits[0].object);
+          if (idx >= 0) return idx;
+        }
+        let best = -1;
+        let bestD = TOUCH_SLOP;
+        nodes.forEach((n, i) => {
+          n.group.getWorldPosition(scr);
+          const p = engine.toScreen(scr);
+          const d = Math.hypot(p.x - x, p.y - y);
+          if (d < bestD) {
+            bestD = d;
+            best = i;
+          }
+        });
+        return best;
+      };
+
+      hitRef.current = (x, y, isTap) => {
+        const s = sim.current;
+        if (!s.playing) return;
+        const idx = pickNode(x, y);
+        if (idx < 0) {
+          // Only a deliberate tap on empty space breaks the streak; slashing between nodes doesn't.
+          if (isTap && s.combo !== 0) {
             s.combo = 0;
             pushHud({ combo: 0 }, true);
           }
           return;
         }
-        const idx = nodes.findIndex((n) => n.orb === hits[0].object || n.ring === hits[0].object);
-        if (idx < 0) return;
         const node = nodes[idx];
         node.group.getWorldPosition(tmp);
+        const sp = engine.toScreen(tmp);
+        const clutch = s.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
 
         if (node.type === 'hazard') {
-          s.score = Math.max(0, s.score - 150);
+          const loss = Math.min(s.score, 150 * clutch);
+          s.score -= loss;
+          s.pHazard -= loss;
+          s.hazards += 1;
+          if (s.combo >= 5) popups.current?.banner('STREAK BROKEN', '#fb7185');
           s.combo = 0;
           sound.playLose();
+          haptic('fail');
           shieldMat.color.setHex(0xff0055);
           shield.scale.setScalar(1.4);
           shake = 0.3;
           particles.emit(tmp, 0xff0055, { count: 30, speed: 6 });
+          popups.current?.pop(`-${loss}`, sp.x, sp.y, { color: '#fb7185', size: 'md' });
         } else {
           const accurate = Math.abs(node.ringScale - 1.0) < 0.25;
-          let pts = accurate ? 250 : 160;
-          if (node.type === 'bonus') pts *= 2;
+          const bonus = node.type === 'bonus' ? 2 : 1;
+          const hitBase = 160 * bonus;
+          const perfectBase = accurate ? 90 * bonus : 0;
           s.combo += 1;
           s.bestCombo = Math.max(s.bestCombo, s.combo);
-          s.score += pts * Math.min(5, 1 + Math.floor(s.combo / 5));
+          const mult = Math.min(5, 1 + Math.floor(s.combo / 5));
+          const pre = hitBase + perfectBase;
+          const pts = pre * mult * clutch;
+          s.pHits += hitBase;
+          s.pPerfect += perfectBase;
+          s.pStreak += pre * (mult - 1);
+          s.pClutch += pre * mult * (clutch - 1);
+          s.score += pts;
+          s.hits += 1;
+          if (accurate) s.perfects += 1;
           sound.playScore(1 + (s.combo % 8) * 0.1);
+          haptic(accurate ? 'score' : 'light');
           shieldMat.color.setHex(0x00f0ff);
           shield.scale.setScalar(1.25);
           engine.flash(accurate ? 0.55 : 0.25);
           particles.emit(tmp, NODE_COLORS[node.type], { count: accurate ? 28 : 16, speed: accurate ? 6 : 4 });
+          popups.current?.pop(`+${pts}`, sp.x, sp.y - 18, { color: accurate ? '#fde047' : '#7df9ff', size: pts >= 1000 ? 'lg' : 'md' });
+          if (accurate) popups.current?.pop('PERFECT', sp.x, sp.y + 16, { color: '#fde047', size: 'sm' });
+          if (s.combo > 0 && s.combo % 5 === 0) popups.current?.banner(`STREAK ×${mult}`, '#7df9ff');
           avatar3D.trigger('shoot', 0.35);
-          // Laser
           beamMat.color.setHex(NODE_COLORS[node.type]).multiplyScalar(2);
           beam.position.copy(avatarChest).lerp(tmp, 0.5);
           beam.scale.set(1, 1, avatarChest.distanceTo(tmp));
@@ -205,6 +276,23 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
         }
         pushHud({ score: s.score, combo: s.combo, bestCombo: s.bestCombo }, true);
         removeNode(idx);
+      };
+
+      const finish = () => {
+        const s = sim.current;
+        s.playing = false;
+        sound.playWin();
+        haptic('big');
+        const breakdown = [
+          { label: `Targets hit (${s.hits})`, points: s.pHits },
+          { label: `Perfect timing (${s.perfects})`, points: s.pPerfect },
+          { label: `Streak multiplier (best ${s.bestCombo})`, points: s.pStreak },
+          { label: 'Clutch time ×2', points: s.pClutch },
+          { label: `Hazards hit (${s.hazards})`, points: s.pHazard },
+        ].filter((b) => b.points !== 0);
+        pushHud({ timeLeft: 0, score: s.score, clutch: false }, true);
+        setPhase('over');
+        onFinishRef.current(s.score, { maxCombo: s.bestCombo, breakdown });
       };
 
       engine.addUpdate((dt, t) => {
@@ -224,15 +312,13 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
 
         if (s.playing) {
           s.timeLeft -= dt;
-          if (s.timeLeft <= 0) {
-            s.playing = false;
-            sound.playWin();
-            pushHud({ timeLeft: 0, score: s.score }, true);
-            setPhase('over');
-            onFinishRef.current(s.score, { maxCombo: s.bestCombo });
-          } else {
-            pushHud({ timeLeft: Math.ceil(s.timeLeft) });
+          if (!s.clutchAnnounced && s.timeLeft <= CLUTCH_SECONDS) {
+            s.clutchAnnounced = true;
+            popups.current?.banner('CLUTCH TIME ×2', '#fbbf24');
+            haptic('big');
           }
+          if (s.timeLeft <= 0) finish();
+          else pushHud({ timeLeft: s.timeLeft, clutch: s.timeLeft <= CLUTCH_SECONDS });
 
           s.spawnTimer += dt;
           if (s.spawnTimer > 0.65 && nodes.length < 5) {
@@ -247,8 +333,8 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
             n.orb.material = orbMats[type];
             n.ring.material = ringMats[type];
             const angle = rng() * Math.PI * 2;
-            const radius = rng() * 2.2 + 3.2;
-            n.group.position.set(Math.cos(angle) * radius, rng() * 2.2 + 0.8, Math.min(Math.sin(angle) * radius, 3.6));
+            const radius = rng() * 1.6 + 2.8;
+            n.group.position.set(Math.cos(angle) * radius, rng() * 2.0 + 0.9, Math.min(Math.sin(angle) * radius, 3.2));
             n.group.scale.setScalar(0.01);
             nodes.push(n);
           }
@@ -276,13 +362,13 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
         avatar3D.group.rotation.y += (faceAngle - avatar3D.group.rotation.y) * (1 - Math.exp(-10 * dt));
         avatar3D.updateAnimation(t, 'idle', dt);
 
-        camera.position.set(0, 3.8, 8.2);
+        camera.position.set(0, view.y, view.z);
         if (shake > 0) {
           shake = Math.max(0, shake - dt);
           camera.position.x += (Math.random() - 0.5) * shake;
           camera.position.y += (Math.random() - 0.5) * shake;
         }
-        camera.lookAt(0, 1.2, 0);
+        camera.lookAt(0, view.lookY, view.lookZ);
       });
 
       return () => {
@@ -293,71 +379,39 @@ export default function CyberReflex3DGame({ avatar, onFinish, modeName = 'Match'
     [stableAvatar],
   );
 
+  const mult = Math.min(5, 1 + Math.floor(hud.combo / 5));
+  const chips = (
+    <>
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${mult > 1 ? 'bg-cyan-400 text-black' : 'bg-black/50 text-cyan-300'}`}>
+        {hud.combo} streak{mult > 1 ? ` · ×${mult}` : ''}
+      </span>
+    </>
+  );
+
   return (
-    <div className="relative flex flex-col items-center w-full max-w-3xl mx-auto select-none">
-      <div className="w-full flex items-center justify-between px-4 py-2.5 bg-[#12131d] border-b border-[#242738] rounded-t-xl text-sm gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="font-extrabold tracking-wider text-cyan-400 text-xs sm:text-sm whitespace-nowrap">CYBER REFLEX 3D</span>
-          <span className="text-xs text-slate-400 hidden sm:inline">· {modeName}</span>
-        </div>
-        <div className="flex items-center gap-2.5 sm:gap-5 font-mono text-xs sm:text-sm">
-          <div className="text-slate-300">
-            <span className="hidden sm:inline">SCORE: </span><span className="text-white font-bold text-sm sm:text-base tabular-nums">{hud.score}</span>
-          </div>
-          <div className="text-cyan-400 font-bold">
-            {hud.combo}x <span className="text-xs font-normal">STREAK</span>
-          </div>
-          <div className="text-amber-400 font-bold tabular-nums">{hud.timeLeft}s</div>
-          <button onClick={() => sound.toggleMute()} className="p-1 hover:text-cyan-400 text-slate-400 transition-colors">
-            {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-cyan-400" />}
-          </button>
-        </div>
-      </div>
-
-      {rival && <RivalBar rival={rival} score={hud.score} progress={phase === 'ready' ? 0 : 1 - hud.timeLeft / ROUND_SECONDS} />}
-
-      <div
-        onPointerDown={(e) => hitRef.current(e.clientX, e.clientY)}
-        onPointerMove={(e) => {
-          if (e.buttons === 1) hitRef.current(e.clientX, e.clientY);
-        }}
-        className="relative w-full aspect-[16/9] bg-[#080911] overflow-hidden border-x border-[#242738] touch-none cursor-crosshair"
-      >
-        <div ref={hostRef} className="absolute inset-0" />
-
-        {phase === 'ready' && (
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex flex-col items-center justify-center p-6 text-center z-10">
-            <h2 className="text-3xl font-black italic tracking-wide text-cyan-400 mb-2">CYBER REFLEX 3D</h2>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-md mb-6">
-              3D Orbital Target Matrix! Tap or slide across orbiting 3D nodes when the shrinking timing ring aligns with the core. Avoid red hazard nodes!
-            </p>
-            <button
-              onClick={startGame}
-              className="flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-extrabold text-sm rounded-xl shadow-lg shadow-cyan-500/30 transition-transform active:scale-95"
-            >
-              <Play className="w-4 h-4 fill-black" /> START 3D DEFENSE
-            </button>
-          </div>
-        )}
-
-        {phase === 'over' && (
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-10">
-            <span className="text-xs font-semibold uppercase tracking-widest text-cyan-400 mb-1">SEQUENCE FINISHED</span>
-            <div className="text-4xl font-black text-white mb-2">{hud.score}</div>
-            <div className="text-xs text-slate-400 mb-6">Max Reflex Streak: {hud.bestCombo}</div>
-            <button
-              onClick={startGame}
-              className="flex items-center gap-2 px-6 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-sm rounded-lg shadow-md transition-transform active:scale-95"
-            >
-              <RotateCcw className="w-4 h-4" /> PLAY AGAIN
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="w-full p-3 bg-[#12131d] border-t border-[#242738] rounded-b-xl text-center text-xs text-slate-400">
-        Tap or slide your finger across nodes in 3D space to trigger shield deflections!
-      </div>
-    </div>
+    <GameShell
+      title="CYBER REFLEX"
+      accent="#38bdf8"
+      hostRef={hostRef}
+      popupsRef={popups}
+      phase={phase}
+      onStart={startGame}
+      score={hud.score}
+      timeLeft={phase === 'ready' ? ROUND_SECONDS : hud.timeLeft}
+      roundSeconds={ROUND_SECONDS}
+      clutch={hud.clutch}
+      chips={chips}
+      rival={rival}
+      match={match}
+      onExit={onExit}
+      surface={surface}
+      hint="Tap or slash nodes as the ring closes"
+      tutorial={[
+        { icon: <Pointer className="w-6 h-6" />, label: 'Tap nodes' },
+        { icon: <Hand className="w-6 h-6" />, label: 'Slash across many' },
+        { icon: <ShieldAlert className="w-6 h-6" />, label: 'Avoid red' },
+      ]}
+      scoring="Hit 160 · Perfect ring timing +90 · Gold ×2 · Every 5 in a row raises the multiplier (max ×5) · Red −150 · Last 10s ×2."
+    />
   );
 }

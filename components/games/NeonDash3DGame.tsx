@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { create3DAvatar } from '@/lib/avatar-3d-model';
-import { sound, useMuted } from '@/lib/sound';
+import { sound } from '@/lib/sound';
+import { haptic } from '@/lib/haptics';
 import {
   Pool,
   ParticleBursts,
@@ -20,8 +21,8 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
-import RivalBar from './RivalBar';
-import { Play, RotateCcw, Volume2, VolumeX, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-react';
+import GameShell, { PopupApi, useSwipe } from './GameShell';
+import { ArrowLeftRight, ArrowUp, ArrowDown } from 'lucide-react';
 
 type NeonDash3DProps = GameProps;
 
@@ -39,19 +40,21 @@ const BASE_SPEED = 22;
 const MAX_SPEED = 36;
 const CITY_SEGMENT = 180;
 const CELL_LENGTH = 4;
+const ROUND_SECONDS = 60;
+const CLUTCH_SECONDS = 10;
+const SURVIVAL_BONUS = 500;
 
 type Phase = 'ready' | 'playing' | 'over';
 
-export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', seed, rival }: NeonDash3DProps) {
+export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, onExit }: NeonDash3DProps) {
   const seedRef = useLatest(seed);
   // Gameplay randomness (lanes, obstacle types) comes from the match seed → identical runs for every player.
   const rngRef = useRef(mulberry32(seed ?? randomSeed()));
   const stableAvatar = useStructuralMemo(avatar);
   const onFinishRef = useLatest(onFinish);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 1, distance: 0 });
-  const isMuted = useMuted();
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false });
+  const popups = useRef<PopupApi | null>(null);
   const resetWorldRef = useRef<() => void>(() => {});
 
   // Simulation state lives in a ref: the render loop reads it every frame without React re-renders.
@@ -73,9 +76,19 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
     action: 'idle' as 'idle' | 'run' | 'jump' | 'slide',
     shake: 0,
     bestCombo: 1,
+    timeLeft: ROUND_SECONDS,
+    clutchAnnounced: false,
+    // score breakdown (base points; clutch extra tracked separately)
+    pDistance: 0,
+    pCrystals: 0,
+    pDodges: 0,
+    pSurvival: 0,
+    pClutch: 0,
+    crystals: 0,
+    dodges: 0,
   });
 
-  const totalScore = () => sim.current.score + Math.floor(sim.current.distance / 4);
+  const totalScore = () => Math.floor(sim.current.score);
 
   const changeLane = useCallback((dir: -1 | 1) => {
     const s = sim.current;
@@ -85,6 +98,7 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
       s.currentLane = next;
       s.targetX = LANES[next];
       sound.playLaser();
+      haptic('tap');
     }
   }, []);
 
@@ -96,6 +110,7 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
     s.isSliding = false;
     s.action = 'jump';
     sound.playJump();
+    haptic('tap');
   }, []);
 
   const slide = useCallback(() => {
@@ -128,11 +143,20 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
       action: 'run',
       shake: 0,
       bestCombo: 1,
+      timeLeft: ROUND_SECONDS,
+      clutchAnnounced: false,
+      pDistance: 0,
+      pCrystals: 0,
+      pDodges: 0,
+      pSurvival: 0,
+      pClutch: 0,
+      crystals: 0,
+      dodges: 0,
       playing: true,
     });
     rngRef.current = mulberry32(seedRef.current ?? randomSeed());
     resetWorldRef.current();
-    pushHud({ score: 0, combo: 1, distance: 0 }, true);
+    pushHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false }, true);
     setPhase('playing');
   }, [pushHud, seedRef]);
 
@@ -147,8 +171,7 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
         changeLane(1);
       } else if (e.code === 'ArrowUp' || e.code === 'Space' || e.code === 'KeyW') {
         e.preventDefault();
-        if (phase === 'ready') startGame();
-        else jump();
+        jump();
       } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
         e.preventDefault();
         slide();
@@ -156,24 +179,18 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [phase, changeLane, jump, slide, startGame]);
+  }, [changeLane, jump, slide]);
 
-  // Swipe (pointer events cover mouse + touch + pen, so no double-firing)
-  const handlePointerDown = (e: React.PointerEvent) => {
-    touchStartRef.current = { x: e.clientX, y: e.clientY };
-  };
-  const handlePointerUp = (e: React.PointerEvent) => {
-    const start = touchStartRef.current;
-    touchStartRef.current = null;
-    if (!start) return;
-    const dx = e.clientX - start.x;
-    const dy = e.clientY - start.y;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      if (dx > 35) changeLane(1);
-      else if (dx < -35) changeLane(-1);
-    } else if (dy < -35) jump();
-    else if (dy > 35) slide();
-  };
+  // Swipes fire the moment the finger has moved ~28px (no need to lift) → instant lane changes.
+  const surface = useSwipe({
+    earlyThreshold: 28,
+    onSwipe: ({ dx, dy }) => {
+      if (Math.abs(dx) > Math.abs(dy)) changeLane(dx > 0 ? 1 : -1);
+      else if (dy < 0) jump();
+      else slide();
+    },
+    onTap: () => jump(),
+  });
 
   // ---------------------------------------------------------------- 3D world (built once per avatar)
   const { hostRef } = useGameEngine(
@@ -183,9 +200,20 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
       camera: { fov: 58, far: 220, position: [0, 3.8, 6.5], lookAt: [0, 1.2, -8] },
       exposure: 1.15,
       bloom: { strength: 0.65, radius: 0.22, threshold: 0.85 },
+      environment: 0.3,
     },
     (engine) => {
       const { scene, camera, quality } = engine;
+
+      // Portrait phones: higher, wider camera so all three lanes and upcoming hazards fit.
+      const view = { fov: 58, y: 3.8, z: 6.5, lookY: 1.2 };
+      engine.onResize((_w, _h, aspect) => {
+        if (aspect < 0.8) Object.assign(view, { fov: 74, y: 5.0, z: 7.6, lookY: 0.6 });
+        else Object.assign(view, { fov: 58, y: 3.8, z: 6.5, lookY: 1.2 });
+        camera.fov = view.fov;
+        camera.position.set(camera.position.x, view.y, view.z);
+        camera.updateProjectionMatrix();
+      });
 
       addArenaLights(engine, { sky: 0x7fdfff, hemi: 0.9, key: 1.8, keyPos: [8, 16, 10], rim: 0xff0055, shadowFrustum: 10 });
 
@@ -210,6 +238,16 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
       scene.add(cityA, cityB);
 
       scene.add(createStarfield(engine, { count: 500, radius: 160, yMin: 18 }));
+
+      // Speed lines: streaks rushing past the edges, stretched by speed (1 draw call)
+      const STREAKS = Math.round(70 * quality.propDensity);
+      const streakPos = new Float32Array(STREAKS * 6);
+      const streakSeed = Array.from({ length: STREAKS }, () => ({ x: (Math.random() < 0.5 ? -1 : 1) * (4.6 + Math.random() * 7), y: 0.4 + Math.random() * 7, z: -90 + Math.random() * 95 }));
+      const streakGeo = new THREE.BufferGeometry();
+      streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3));
+      const streaks = new THREE.LineSegments(streakGeo, new THREE.LineBasicMaterial({ color: new THREE.Color(0x9fefff).multiplyScalar(1.4), transparent: true, opacity: 0.55, toneMapped: false }));
+      streaks.frustumCulled = false;
+      scene.add(streaks);
 
       // Synthwave horizon sun (unlit, unfogged, bright enough to bloom)
       const sunCanvas = document.createElement('canvas');
@@ -287,22 +325,52 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
         particles.clear();
       };
 
-      const endRun = () => {
+      /** Award points with the clutch multiplier and track the breakdown. */
+      const award = (base: number, cat: 'pDistance' | 'pCrystals' | 'pDodges' | 'pSurvival') => {
         const s = sim.current;
-        s.playing = false;
-        s.action = 'idle';
-        s.shake = 0.45;
-        engine.flash(1.2);
-        tmp.set(s.currentX, 1, 0);
-        particles.emit(tmp, 0xff0055, { count: 40, speed: 7, life: 0.9 });
-        sound.playLose();
-        const final = totalScore();
-        pushHud({ score: final, distance: Math.floor(s.distance) }, true);
-        setPhase('over');
-        onFinishRef.current(final, { maxCombo: s.bestCombo, distance: Math.floor(s.distance) });
+        const mult = s.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
+        s[cat] += base;
+        s.pClutch += base * (mult - 1);
+        s.score += base * mult;
+        return base * mult;
       };
 
-      const baseFov = camera.fov;
+      const endRun = (survived: boolean) => {
+        const s = sim.current;
+        s.playing = false;
+        if (survived) {
+          s.action = 'idle';
+          award(SURVIVAL_BONUS, 'pSurvival');
+          popups.current?.banner(`FINISHED! +${SURVIVAL_BONUS}`, '#5fe8ff');
+          sound.playWin();
+          haptic('big');
+          engine.flash(0.6);
+        } else {
+          s.action = 'idle';
+          s.shake = 0.45;
+          engine.flash(1.2);
+          tmp.set(s.currentX, 1, 0);
+          particles.emit(tmp, 0xff0055, { count: 40, speed: 7, life: 0.9 });
+          popups.current?.banner('CRASHED', '#fb7185');
+          sound.playLose();
+          haptic('fail');
+        }
+        const final = totalScore();
+        const breakdown = [
+          { label: `Distance (${Math.floor(s.distance)}m)`, points: Math.floor(s.pDistance) },
+          { label: `Crystals (${s.crystals})`, points: s.pCrystals },
+          { label: `Dodges (${s.dodges})`, points: s.pDodges },
+          { label: 'Full-run bonus', points: s.pSurvival },
+          { label: 'Clutch time ×2', points: Math.floor(s.pClutch) },
+        ].filter((b) => b.points > 0);
+        // Rounding: make the rows add up exactly to the score.
+        const diff = final - breakdown.reduce((a, b) => a + b.points, 0);
+        if (breakdown.length && diff) breakdown[0].points += diff;
+        pushHud({ score: final, distance: Math.floor(s.distance), timeLeft: Math.max(0, s.timeLeft), clutch: false }, true);
+        setPhase('over');
+        onFinishRef.current(final, { maxCombo: s.bestCombo, distance: Math.floor(s.distance), breakdown });
+      };
+
 
       engine.addUpdate((dt, t) => {
         const s = sim.current;
@@ -310,12 +378,34 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
 
         // Scenery always drifts so the menu screen feels alive
         road.texture.offset.y = (road.texture.offset.y + (scroll * dt) / CELL_LENGTH) % 1;
+        const streakLen = 0.6 + scroll * 0.09;
+        for (let i = 0; i < STREAKS; i++) {
+          const st = streakSeed[i];
+          st.z += scroll * 1.6 * dt;
+          if (st.z > 8) st.z -= 98;
+          streakPos.set([st.x, st.y, st.z, st.x, st.y, st.z - streakLen], i * 6);
+        }
+        streakGeo.attributes.position.needsUpdate = true;
         for (const city of [cityA, cityB]) {
           city.position.z += scroll * dt;
           if (city.position.z > CITY_SEGMENT) city.position.z -= CITY_SEGMENT * 2;
         }
 
         if (s.playing) {
+          s.timeLeft -= dt;
+          if (!s.clutchAnnounced && s.timeLeft <= CLUTCH_SECONDS) {
+            s.clutchAnnounced = true;
+            popups.current?.banner('CLUTCH TIME ×2', '#fbbf24');
+            haptic('big');
+          }
+          if (s.timeLeft <= 0) {
+            s.timeLeft = 0;
+            endRun(true);
+          }
+        }
+
+        if (s.playing) {
+          award((s.speed * dt) / 4, 'pDistance');
           s.distance += s.speed * dt;
           s.speed = Math.min(MAX_SPEED, BASE_SPEED + s.distance / 150);
           s.currentX += (s.targetX - s.currentX) * (1 - Math.exp(-14 * dt));
@@ -360,18 +450,24 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
 
             if (z > -1.2 && z < 1.2 && o.lane === s.currentLane) {
               if (o.type === 'spike' && s.playerY < 0.9) {
-                endRun();
+                endRun(false);
                 break;
               }
               if (o.type === 'laser_arch' && !s.isSliding) {
-                endRun();
+                endRun(false);
                 break;
               }
               if (o.type === 'crystal' && !o.collected) {
                 o.collected = true;
                 o.obj.visible = false;
-                s.score += 150 * s.combo;
+                const got = award(150 * s.combo, 'pCrystals');
+                s.crystals += 1;
+                const sp = engine.toScreen(o.obj.position);
+                popups.current?.pop(`+${got}`, sp.x, sp.y - 20, { color: got >= 600 ? '#fde047' : '#7df9ff', size: got >= 600 ? 'lg' : 'md' });
+                haptic('score');
                 s.combo = Math.min(10, s.combo + 1);
+                if (s.combo === 5) popups.current?.banner('COMBO ×5', '#7df9ff');
+                if (s.combo === 10) popups.current?.banner('MAX COMBO ×10', '#fde047');
                 s.bestCombo = Math.max(s.bestCombo, s.combo);
                 sound.playScore(1 + s.combo * 0.1);
                 engine.flash(0.35);
@@ -380,13 +476,16 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
             }
 
             if (z > 8) {
-              if (o.type !== 'crystal') s.score += 50 * s.combo;
+              if (o.type !== 'crystal' && s.playing) {
+                award(50 * s.combo, 'pDodges');
+                s.dodges += 1;
+              }
               pools[o.type].release(o.obj);
               obstacles.splice(i, 1);
             }
           }
 
-          pushHud({ score: totalScore(), combo: s.combo, distance: Math.floor(s.distance) });
+          pushHud({ score: totalScore(), combo: s.combo, distance: Math.floor(s.distance), timeLeft: Math.max(0, s.timeLeft), clutch: s.timeLeft <= CLUTCH_SECONDS });
         }
 
         // Player transform + animation
@@ -400,19 +499,19 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
         // Camera: soft follow, speed FOV kick, impact shake
         const follow = 1 - Math.exp(-5 * dt);
         camera.position.x += (s.currentX * 0.4 - camera.position.x) * follow;
-        camera.position.y += (3.8 + s.playerY * 0.25 - camera.position.y) * follow;
+        camera.position.y += (view.y + s.playerY * 0.25 - camera.position.y) * follow;
         if (s.shake > 0) {
           s.shake = Math.max(0, s.shake - dt);
           const a = s.shake * 0.5;
           camera.position.x += (Math.random() - 0.5) * a;
           camera.position.y += (Math.random() - 0.5) * a;
         }
-        const targetFov = baseFov + (s.playing ? (s.speed - BASE_SPEED) * 0.55 : 0);
+        const targetFov = view.fov + (s.playing ? (s.speed - BASE_SPEED) * 0.55 : 0);
         if (Math.abs(camera.fov - targetFov) > 0.05) {
           camera.fov += (targetFov - camera.fov) * follow;
           camera.updateProjectionMatrix();
         }
-        camera.lookAt(camera.position.x * 0.5, 1.2, -8);
+        camera.lookAt(camera.position.x * 0.5, view.lookY, -8);
       });
 
       return () => {
@@ -422,109 +521,37 @@ export default function NeonDash3DGame({ avatar, onFinish, modeName = 'Match', s
     [stableAvatar],
   );
 
-  const playing = phase === 'playing';
+  const chips = (
+    <>
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${hud.combo >= 5 ? 'bg-amber-400 text-black' : 'bg-black/50 text-amber-300'}`}>×{hud.combo} COMBO</span>
+      <span className="px-2 py-0.5 rounded-full bg-black/50 text-white/80 text-[11px] font-bold tabular-nums">{hud.distance}m</span>
+    </>
+  );
 
   return (
-    <div className="relative flex flex-col items-center w-full max-w-3xl mx-auto select-none">
-      {/* Top HUD */}
-      <div className="w-full flex items-center justify-between px-4 py-2.5 bg-[#12131d] border-b border-[#242738] rounded-t-xl text-sm gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="font-extrabold tracking-wider text-cyan-400 text-xs sm:text-sm whitespace-nowrap">NEON DASH 3D</span>
-          <span className="text-xs text-slate-400 hidden sm:inline">· {modeName}</span>
-        </div>
-        <div className="flex items-center gap-2.5 sm:gap-5 font-mono text-xs sm:text-sm">
-          <div className="text-slate-300">
-            <span className="hidden sm:inline">SCORE: </span><span className="text-white font-bold text-sm sm:text-base tabular-nums">{hud.score}</span>
-          </div>
-          <div className="text-amber-400 font-bold">
-            {hud.combo}x <span className="text-xs text-amber-500 font-normal">COMBO</span>
-          </div>
-          <div className="text-xs text-slate-400 tabular-nums">{hud.distance}m</div>
-          <button onClick={() => sound.toggleMute()} className="p-1 hover:text-cyan-400 text-slate-400 transition-colors">
-            {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-cyan-400" />}
-          </button>
-        </div>
-      </div>
-
-      {rival && <RivalBar rival={rival} score={hud.score} />}
-
-      {/* 3D viewport */}
-      <div
-        onPointerDown={handlePointerDown}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={() => (touchStartRef.current = null)}
-        className="relative w-full aspect-[16/9] bg-[#070810] overflow-hidden border-x border-[#242738] touch-none cursor-grab active:cursor-grabbing"
-      >
-        <div ref={hostRef} className="absolute inset-0" />
-
-        {phase === 'ready' && (
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex flex-col items-center justify-center p-6 text-center z-10">
-            <h2 className="text-3xl font-black italic tracking-wide text-cyan-400 mb-2">NEON DASH 3D</h2>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-md mb-6">
-              Full 3D Cyberpunk Highway! Swipe or drag Left/Right to change lanes, Swipe Up to jump red spikes, and Swipe Down to slide under yellow laser arches.
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-slate-400 mb-6">
-              <span className="flex items-center gap-1.5"><kbd className="bg-slate-800 px-2 py-1 rounded text-cyan-300">Swipe ← / →</kbd> Switch Lane</span>
-              <span className="flex items-center gap-1.5"><kbd className="bg-slate-800 px-2 py-1 rounded text-cyan-300">Swipe ↑</kbd> Jump</span>
-              <span className="flex items-center gap-1.5"><kbd className="bg-slate-800 px-2 py-1 rounded text-cyan-300">Swipe ↓</kbd> Slide</span>
-            </div>
-            <button
-              onClick={startGame}
-              className="flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-extrabold text-sm rounded-xl shadow-lg shadow-cyan-500/30 transition-transform active:scale-95"
-            >
-              <Play className="w-4 h-4 fill-black" /> START 3D RUN
-            </button>
-          </div>
-        )}
-
-        {phase === 'over' && (
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-10">
-            <span className="text-xs font-semibold uppercase tracking-widest text-red-500 mb-1">RUN FINISHED</span>
-            <div className="text-4xl font-black text-white mb-2">{hud.score}</div>
-            <div className="text-xs text-slate-400 mb-6">
-              Distance: {hud.distance}m · Max Combo: {hud.combo}x
-            </div>
-            <button
-              onClick={startGame}
-              className="flex items-center gap-2 px-6 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-sm rounded-lg shadow-md transition-transform active:scale-95"
-            >
-              <RotateCcw className="w-4 h-4" /> PLAY AGAIN
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Touch controls */}
-      <div className="w-full flex items-center justify-between p-3 bg-[#12131d] border-t border-[#242738] rounded-b-xl gap-2">
-        <button
-          onClick={() => changeLane(-1)}
-          disabled={!playing}
-          className="flex-1 flex items-center justify-center gap-1 py-3 bg-[#181a27] hover:bg-[#202334] active:bg-cyan-500 active:text-black text-cyan-400 font-bold rounded-xl border border-[#2f334a] transition-all disabled:opacity-50"
-        >
-          <ArrowLeft className="w-5 h-5" /> LEFT
-        </button>
-        <button
-          onClick={slide}
-          disabled={!playing}
-          className="flex-1 flex items-center justify-center gap-1 py-3 bg-[#181a27] hover:bg-[#202334] active:bg-amber-400 active:text-black text-amber-400 font-bold rounded-xl border border-[#2f334a] transition-all disabled:opacity-50"
-        >
-          <ArrowDown className="w-5 h-5" /> SLIDE
-        </button>
-        <button
-          onClick={jump}
-          disabled={!playing}
-          className="flex-1 flex items-center justify-center gap-1 py-3 bg-cyan-500 hover:bg-cyan-400 active:bg-cyan-300 text-black font-extrabold rounded-xl shadow-md shadow-cyan-500/20 transition-transform active:scale-95 disabled:opacity-50"
-        >
-          <ArrowUp className="w-5 h-5" /> JUMP
-        </button>
-        <button
-          onClick={() => changeLane(1)}
-          disabled={!playing}
-          className="flex-1 flex items-center justify-center gap-1 py-3 bg-[#181a27] hover:bg-[#202334] active:bg-cyan-500 active:text-black text-cyan-400 font-bold rounded-xl border border-[#2f334a] transition-all disabled:opacity-50"
-        >
-          RIGHT <ArrowRight className="w-5 h-5" />
-        </button>
-      </div>
-    </div>
+    <GameShell
+      title="NEON DASH"
+      accent="#22d3ee"
+      hostRef={hostRef}
+      popupsRef={popups}
+      phase={phase}
+      onStart={startGame}
+      score={hud.score}
+      timeLeft={phase === 'ready' ? ROUND_SECONDS : hud.timeLeft}
+      roundSeconds={ROUND_SECONDS}
+      clutch={hud.clutch}
+      chips={chips}
+      rival={rival}
+      match={match}
+      onExit={onExit}
+      surface={surface}
+      hint="Swipe ← → to switch lanes · ↑ jump · ↓ slide"
+      tutorial={[
+        { icon: <ArrowLeftRight className="w-6 h-6" />, label: 'Swipe to change lane' },
+        { icon: <ArrowUp className="w-6 h-6" />, label: 'Swipe up / tap: jump spikes' },
+        { icon: <ArrowDown className="w-6 h-6" />, label: 'Swipe down: slide lasers' },
+      ]}
+      scoring="60-second run on the shared seed. Crystals 150 × combo · Dodges 50 × combo · Finish without crashing +500 · Last 10s ×2."
+    />
   );
 }

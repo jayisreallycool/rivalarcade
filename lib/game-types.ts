@@ -15,6 +15,8 @@ export interface RunStats {
   maxCombo?: number;
   baskets?: number;
   distance?: number;
+  /** How the final score was built, shown on the results screen. Values sum to the score. */
+  breakdown?: { label: string; points: number }[];
 }
 
 export type FinishHandler = (score: number, stats?: RunStats) => void;
@@ -35,6 +37,20 @@ export interface GameProps {
   /** Same seed → same obstacle/board/target sequence. */
   seed?: number;
   rival?: RivalInfo | null;
+  /** Shown on the pre-game VS card. */
+  match?: MatchInfo;
+  /** Leave the match (close button in the full-screen HUD). */
+  onExit?: () => void;
+}
+
+export interface MatchInfo {
+  modeLabel: string;
+  seedCode?: string;
+  rivalName?: string;
+  rivalAvatar?: AvatarConfig;
+  rivalRating?: number;
+  playerName: string;
+  playerRating?: number;
 }
 
 /**
@@ -43,7 +59,7 @@ export interface GameProps {
  */
 export const SCORE_BASELINE: Record<GameId, number> = {
   'neon-dash': 2200,
-  'dunk-rush': 17,
-  'cyber-reflex': 2900,
-  'gem-surge': 4300,
+  'dunk-rush': 2600,
+  'cyber-reflex': 6000,
+  'gem-surge': 5000,
 };

@@ -57,7 +57,8 @@ export function botAvatar(seed: number): AvatarConfig {
  * competitive at every skill level. `spread` is the ± fraction around that reference.
  */
 export function referenceScore(gameId: GameId, recent: number[] | undefined): number {
-  const runs = (recent ?? []).filter((n) => n > 0);
+  // Ignore runs from an older scoring scale (e.g. Dunk Rush before the flick-shot rebuild).
+  const runs = (recent ?? []).filter((n) => n > SCORE_BASELINE[gameId] * 0.05);
   if (runs.length < 2) return SCORE_BASELINE[gameId];
   const sorted = [...runs].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)];

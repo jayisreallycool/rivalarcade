@@ -18,6 +18,7 @@ export interface ResultData {
   xpEarned: number;
   tournament?: { rank: number; total: number; improved: boolean; best: number; title: string };
   note?: string;
+  breakdown?: { label: string; points: number }[];
 }
 
 interface MatchResultsModalProps {
@@ -31,7 +32,7 @@ interface MatchResultsModalProps {
 }
 
 export default function MatchResultsModal({ gameName, mode, userAvatar, userName, data, onRematch, onClose }: MatchResultsModalProps) {
-  const { userScore, opponentScore, opponentName, opponentAvatar, ratingDelta, coinsEarned, xpEarned, tournament, note } = data;
+  const { userScore, opponentScore, opponentName, opponentAvatar, ratingDelta, coinsEarned, xpEarned, tournament, note, breakdown } = data;
   const isPractice = mode === 'practice' || !!note;
   const isTournament = mode === 'tournament' && !!tournament;
   const isWin = mode === 'duel' && userScore > opponentScore;
@@ -118,6 +119,25 @@ export default function MatchResultsModal({ gameName, mode, userAvatar, userName
                   <div className="text-3xl font-black text-slate-300 mt-1 tabular-nums">{opponentScore}</div>
                 </div>
               )}
+            </div>
+          )}
+
+          {breakdown && breakdown.length > 0 && (
+            <div className="w-full mt-3 rounded-xl bg-[#0a0b12] border border-[#1e202f] p-3 text-xs" data-testid="score-breakdown">
+              <div className="text-[10px] font-black tracking-widest text-slate-500 mb-1.5">SCORE BREAKDOWN</div>
+              {breakdown.map((b) => (
+                <div key={b.label} className="flex items-center justify-between py-0.5">
+                  <span className="text-slate-400">{b.label}</span>
+                  <span className={`font-mono font-bold tabular-nums ${b.points < 0 ? 'text-rose-400' : 'text-white'}`}>
+                    {b.points > 0 ? '+' : ''}
+                    {b.points.toLocaleString()}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between pt-1.5 mt-1 border-t border-[#1e202f]">
+                <span className="text-slate-300 font-bold">Total</span>
+                <span className="font-mono font-black text-cyan-300 tabular-nums">{userScore.toLocaleString()}</span>
+              </div>
             </div>
           )}
 

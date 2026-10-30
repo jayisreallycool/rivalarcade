@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { detectQuality, QualityProfile } from './quality';
 
 /**
@@ -35,6 +36,8 @@ export interface EngineOptions {
   };
   exposure?: number;
   bloom?: { strength?: number; radius?: number; threshold?: number };
+  /** Soft studio reflections for PBR materials (medium/high tiers). Number = intensity. */
+  environment?: number;
   /** Frame-time budget the adaptive resolution aims for. Default 60. */
   targetFps?: number;
 }
@@ -89,6 +92,8 @@ export class GameEngine {
   private lastFrameMs = 0;
 
   private statsEl: HTMLDivElement | null = null;
+  private readonly resizeListeners = new Set<(w: number, h: number, aspect: number) => void>();
+  private readonly projected = new THREE.Vector3();
 
   constructor(host: HTMLElement, options: EngineOptions) {
     this.host = host;
@@ -126,6 +131,16 @@ export class GameEngine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // Count draw calls across every composer pass, reset once per frame (see frame()).
     this.renderer.info.autoReset = false;
+
+    // Reflections: a pre-filtered studio environment makes metals/gems/glass read as real.
+    if (options.environment && this.quality.tier !== 'low') {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      const room = new RoomEnvironment();
+      this.scene.environment = this.own(pmrem.fromScene(room, 0.04).texture);
+      this.scene.environmentIntensity = options.environment;
+      room.dispose();
+      pmrem.dispose();
+    }
 
     const canvas = this.renderer.domElement;
     canvas.style.width = '100%';
@@ -297,6 +312,7 @@ export class GameEngine {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
+    this.resizeListeners.forEach((fn) => fn(w, h, w / h));
   }
 
   // ------------------------------------------------------------------ API
@@ -343,6 +359,28 @@ export class GameEngine {
   /** Brief bloom flare for impacts, scores, combos. */
   flash(amount = 0.6) {
     this.bloomKick = Math.min(1.5, this.bloomKick + amount);
+  }
+
+  /**
+   * React to viewport shape (portrait phones vs landscape). Called immediately and on every resize,
+   * after camera.aspect is set — adjust fov/position then call camera.updateProjectionMatrix().
+   */
+  onResize(fn: (w: number, h: number, aspect: number) => void) {
+    this.resizeListeners.add(fn);
+    const w = Math.max(1, this.host.clientWidth);
+    const h = Math.max(1, this.host.clientHeight);
+    fn(w, h, w / h);
+    return () => this.resizeListeners.delete(fn);
+  }
+
+  /** World position → CSS pixels within the game host (for DOM score popups). */
+  toScreen(world: THREE.Vector3): { x: number; y: number; visible: boolean } {
+    const v = this.projected.copy(world).project(this.camera);
+    return {
+      x: (v.x * 0.5 + 0.5) * this.host.clientWidth,
+      y: (-v.y * 0.5 + 0.5) * this.host.clientHeight,
+      visible: v.z > -1 && v.z < 1,
+    };
   }
 
   get elapsed() {

@@ -86,9 +86,9 @@ async function waitResults(page, timeout = 40000) {
   await step('practice run → results → rewards recorded', async () => {
     const before = await state(page);
     await page.locator('button:has-text("FREE PRACTICE")').first().click();
-    await page.locator('[data-testid="game-modal"] button:has-text("START")').waitFor({ timeout: 15000 });
+    await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').waitFor({ timeout: 15000 });
     expect(!(await page.locator('[data-testid="rival-bar"]').count()), 'practice should have no rival bar');
-    await page.locator('[data-testid="game-modal"] button:has-text("START")').click();
+    await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').click();
     await waitResults(page);
     const header = await page.locator('[data-testid="results-header"]').innerText();
     expect(/PRACTICE/.test(header), header);
@@ -100,7 +100,7 @@ async function waitResults(page, timeout = 40000) {
 
   await step('Play Again remounts a fresh game', async () => {
     await page.locator('[data-testid="results-modal"] button:has-text("Play Again")').click();
-    await page.locator('[data-testid="game-modal"] button:has-text("START")').waitFor({ timeout: 8000 });
+    await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').waitFor({ timeout: 8000 });
     expect(!(await page.locator('[data-testid="results-modal"]').count()), 'results still shown');
     await page.locator('button[aria-label="Close match"]').click();
     expect(!(await page.locator('[data-testid="game-modal"]').count()), 'modal did not close');
@@ -109,11 +109,11 @@ async function waitResults(page, timeout = 40000) {
   await step('ranked duel: matchmaking, rival bar, seeded match, Elo applied', async () => {
     const before = await state(page);
     await page.locator('button:has-text("1V1 DUEL")').first().click();
-    await page.getByText('SEARCHING FOR OPPONENT').waitFor();
-    await page.locator('[data-testid="duel-header"]').waitFor({ timeout: 8000 });
+    await page.getByText('FINDING YOUR RIVAL').waitFor();
+    await page.locator('[data-testid="vs-card"]').waitFor({ timeout: 8000 });
     expect(await page.locator('[data-testid="rival-bar"]').isVisible(), 'rival bar missing');
     expect(/SEED [0-9A-F]{4}-[0-9A-F]{4}/.test(await page.locator('[data-testid="game-modal"]').innerText()), 'seed code missing');
-    await page.locator('[data-testid="game-modal"] button:has-text("START")').click();
+    await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').click();
     await waitResults(page);
     const header = await page.locator('[data-testid="results-header"]').innerText();
     const after = await state(page);
@@ -129,8 +129,8 @@ async function waitResults(page, timeout = 40000) {
 
   await step('New Duel finds a new opponent', async () => {
     await page.locator('[data-testid="results-modal"] button:has-text("New Duel")').click();
-    await page.getByText('SEARCHING FOR OPPONENT').waitFor({ timeout: 5000 });
-    await page.locator('[data-testid="duel-header"]').waitFor({ timeout: 8000 });
+    await page.getByText('FINDING YOUR RIVAL').waitFor({ timeout: 5000 });
+    await page.locator('[data-testid="vs-card"]').waitFor({ timeout: 8000 });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
     expect(!(await page.locator('[data-testid="game-modal"]').count()), 'Esc did not close');
@@ -142,9 +142,9 @@ async function waitResults(page, timeout = 40000) {
     const action = page.locator('[data-testid="cup-action"]');
     expect(/ENTER & PLAY · FREE/.test(await action.innerText()), await action.innerText());
     await action.click();
-    await page.locator('[data-testid="game-modal"] button:has-text("START")').waitFor({ timeout: 15000 });
+    await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').waitFor({ timeout: 15000 });
     expect(await page.locator('[data-testid="rival-bar"]').isVisible(), 'tournament rival bar missing');
-    await page.locator('[data-testid="game-modal"] button:has-text("START")').click();
+    await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').click();
     await waitResults(page);
     const header = await page.locator('[data-testid="results-header"]').innerText();
     expect(/RANK #\d+/.test(header), header);
@@ -331,17 +331,20 @@ async function waitResults(page, timeout = 40000) {
   await step('touch practice run works on mobile', async () => {
     await m.locator('nav button', { hasText: 'Games' }).tap();
     await m.locator('button:has-text("FREE PRACTICE")').nth(1).tap(); // Dunk Rush (touch drag shooting)
-    await m.locator('[data-testid="game-modal"] button:has-text("START")').tap({ timeout: 15000 });
-    const vp = m.locator('[data-testid="game-modal"] .aspect-\\[16\\/9\\]').first();
+    await m.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').tap({ timeout: 15000 });
+    await m.waitForTimeout(2800); // 3-2-1 countdown
+    const vp = m.locator('[data-testid="game-surface"]').first();
     const box = await vp.boundingBox();
     for (let i = 0; i < 3; i++) {
-      await m.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await m.mouse.move(box.x + box.width / 2, box.y + box.height * 0.83);
       await m.mouse.down();
-      await m.mouse.move(box.x + box.width / 2 - 10, box.y + box.height / 2 + 90, { steps: 6 });
+      await m.mouse.move(box.x + box.width / 2, box.y + box.height * 0.47, { steps: 6 });
       await m.mouse.up();
       await m.waitForTimeout(1500);
     }
     expect(await m.locator('[data-testid="game-modal"]').isVisible(), 'modal gone');
+    const sc = Number((await m.locator('[data-testid="hud-score"]').innerText()).replace(/\D/g, ''));
+    expect(sc > 0, 'flick shots never scored');
     await m.screenshot({ path: `${S}/m-dunk.png` });
     await m.locator('button[aria-label="Close match"]').tap();
   }, m);

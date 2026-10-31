@@ -88,7 +88,8 @@ export function getInitialState(): UserState {
       trophies: 420,
       xp: 320,
       level: levelFor(320),
-      highScores: { 'neon-dash': 2450, 'dunk-rush': 18, 'cyber-reflex': 3120, 'gem-surge': 4800 },
+      highScores: { 'neon-dash': 2450, 'dunk-rush': 1800, 'cyber-reflex': 3120, 'gem-surge': 4800, 'brick-blitz': 0 },
+      crowns: 8,
     },
     inventory: [...new Set([...unlockedDefaults, 'headwear_snapback'])],
     matchHistory: [
@@ -141,7 +142,19 @@ function migrate(raw: unknown): UserState {
   };
 }
 
+/** A paid-mode settlement worked out by the match flow (prize already includes the stake back). */
+export interface Settlement {
+  entry: number;
+  prize: number;
+  crowns: number;
+  won: boolean;
+  tie?: boolean;
+  /** e.g. "2nd of 5", "2/3 targets". */
+  detail?: string;
+}
+
 export interface MatchOutcome {
+  crownsEarned?: number;
   isWin: boolean;
   isTie: boolean;
   isPractice: boolean;
@@ -309,13 +322,15 @@ class UserStore {
     opponentName: string;
     opponentAvatar: AvatarConfig;
     opponentRating?: number;
+    settlement?: Settlement;
     extra?: Partial<UserState>;
   }): MatchOutcome {
     const { gameId, mode, playerScore, stats: run, opponentScore, opponentName, opponentAvatar } = params;
     const isPractice = mode === 'practice';
     const isTournament = mode === 'tournament';
-    const isWin = !isPractice && playerScore > opponentScore;
-    const isTie = !isPractice && playerScore === opponentScore;
+    const set = params.settlement;
+    const isWin = set ? set.won : !isPractice && playerScore > opponentScore;
+    const isTie = set ? !!set.tie : !isPractice && playerScore === opponentScore;
     const s = { ...this.state.stats, highScores: { ...this.state.stats.highScores } };
 
     let ratingDelta = 0;
@@ -330,7 +345,8 @@ class UserStore {
       ratingDelta = Math.round(32 * (actual - expected));
       if (isWin && ratingDelta < 4) ratingDelta = 4;
       if (!isWin && !isTie && ratingDelta > -4) ratingDelta = -4;
-      coinsEarned = isWin ? 100 + Math.min(s.streak, 5) * 10 : isTie ? 50 : 30;
+      // Paid 1v1: prize is the pot. Ties refund the stake.
+      coinsEarned = set ? set.prize : isWin ? 100 + Math.min(s.streak, 5) * 10 : isTie ? 50 : 30;
       s.totalMatches += 1;
       if (isWin) {
         s.wins += 1;
@@ -344,12 +360,26 @@ class UserStore {
       }
       s.rating = Math.max(500, s.rating + ratingDelta);
       s.tier = tierForRating(s.rating);
+    } else if (set) {
+      // Blitz / Streak / Arena: settlement decides the prize.
+      coinsEarned = set.prize;
+      s.totalMatches += 1;
+      if (set.won) {
+        s.wins += 1;
+        s.streak += 1;
+        s.bestStreak = Math.max(s.bestStreak, s.streak);
+      } else if (mode !== 'blitz') {
+        s.losses += 1;
+        s.streak = 0;
+      }
     } else if (isTournament) {
       coinsEarned = Math.round(10 + 20 * skill);
     } else {
       coinsEarned = Math.round(15 + 35 * skill);
     }
 
+    const crownsEarned = set ? set.crowns : 0;
+    s.crowns = (s.crowns ?? 0) + crownsEarned;
     s.coins += coinsEarned;
     s.xp += xpEarned;
     s.level = levelFor(s.xp);
@@ -370,6 +400,8 @@ class UserStore {
       result: isPractice ? 'practice' : isWin ? 'win' : isTie ? 'tie' : 'loss',
       ratingDelta,
       coinsEarned,
+      entry: set?.entry,
+      detail: set?.detail,
     };
 
     this.ensureDaily(false);
@@ -387,12 +419,27 @@ class UserStore {
       ...params.extra,
     });
 
-    return { isWin, isTie, isPractice, ratingDelta, coinsEarned, xpEarned };
+    return { isWin, isTie, isPractice, ratingDelta, coinsEarned, xpEarned, crownsEarned };
+  }
+
+  /** Take a stake when a paid match starts. Returns false if the player can't cover it. */
+  chargeEntry(entry: number) {
+    if (entry <= 0) return true;
+    if (this.state.stats.coins < entry) return false;
+    this.commit({ stats: { ...this.state.stats, coins: this.state.stats.coins - entry } });
+    return true;
+  }
+
+  /** Give a stake back (match abandoned before it began scoring). */
+  refundEntry(entry: number) {
+    if (entry <= 0) return;
+    this.commit({ stats: { ...this.state.stats, coins: this.state.stats.coins + entry } });
   }
 
   recordMatchResult(params: {
     gameId: GameId;
-    mode: 'practice' | 'duel';
+    mode: Exclude<MatchMode, 'tournament'>;
+    settlement?: Settlement;
     playerScore: number;
     stats?: RunStats;
     opponentScore: number;

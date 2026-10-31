@@ -65,7 +65,7 @@ async function waitResults(page, timeout = 40000) {
     expect(st && st.stats.coins === 850, `coins ${st?.stats.coins}`);
     expect(st.quests.length === 4, `quests ${st.quests.length}`);
     expect(st.tournaments.length === 4, `tournaments ${st.tournaments.length}`);
-    expect(await page.getByText('RIVAL ARCADE', { exact: false }).first().isVisible(), 'hero missing');
+    expect(await page.locator('[data-testid="league-card"]').isVisible() && await page.locator('[data-testid="tile-brick-blitz"]').isVisible(), 'lobby missing');
   }, page);
 
   await step('every tab renders', async () => {
@@ -75,7 +75,7 @@ async function waitResults(page, timeout = 40000) {
       ['Rankings', 'GLOBAL RANKINGS'],
       ['Pass', 'RIVAL PASS PROGRESSION'],
       ['Profile', 'PERSONAL HIGH SCORES'],
-      ['Games', 'SKILL GAMES ARENA'],
+      ['Games', 'LEAGUE'],
     ];
     for (const [tab, text] of checks) {
       await nav(page, tab);
@@ -85,7 +85,8 @@ async function waitResults(page, timeout = 40000) {
 
   await step('practice run → results → rewards recorded', async () => {
     const before = await state(page);
-    await page.locator('button:has-text("FREE PRACTICE")').first().click();
+    await page.locator('[data-testid="tile-neon-dash"]').click();
+    await page.locator('[data-testid="mode-practice"]').click();
     await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').waitFor({ timeout: 15000 });
     expect(!(await page.locator('[data-testid="rival-bar"]').count()), 'practice should have no rival bar');
     await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').click();
@@ -108,7 +109,9 @@ async function waitResults(page, timeout = 40000) {
 
   await step('ranked duel: matchmaking, rival bar, seeded match, Elo applied', async () => {
     const before = await state(page);
-    await page.locator('button:has-text("1V1 DUEL")').first().click();
+    await page.locator('[data-testid="tile-neon-dash"]').click();
+    await page.locator('[data-testid="stake-0"]').click();
+    await page.locator('[data-testid="mode-duel"]').click();
     await page.getByText('FINDING YOUR RIVAL').waitFor();
     await page.locator('[data-testid="vs-card"]').waitFor({ timeout: 8000 });
     expect(await page.locator('[data-testid="rival-bar"]').isVisible(), 'rival bar missing');
@@ -330,7 +333,8 @@ async function waitResults(page, timeout = 40000) {
   }, m);
   await step('touch practice run works on mobile', async () => {
     await m.locator('nav button', { hasText: 'Games' }).tap();
-    await m.locator('button:has-text("FREE PRACTICE")').nth(1).tap(); // Dunk Rush (touch drag shooting)
+    await m.locator('[data-testid="tile-dunk-rush"]').tap(); // Dunk Rush (touch drag shooting)
+    await m.locator('[data-testid="mode-practice"]').tap();
     await m.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').tap({ timeout: 15000 });
     await m.waitForTimeout(2800); // 3-2-1 countdown
     const vp = m.locator('[data-testid="game-surface"]').first();
@@ -359,7 +363,8 @@ async function waitResults(page, timeout = 40000) {
   await np.goto(URL);
   await np.waitForTimeout(800);
   await step('falls back to 2D edition without WebGL', async () => {
-    await np.locator('button:has-text("FREE PRACTICE")').first().click();
+    await np.locator('[data-testid="tile-neon-dash"]').click();
+    await np.locator('[data-testid="mode-practice"]').click();
     await np.getByText(/2D edition/).waitFor({ timeout: 8000 });
     await np.waitForTimeout(1500);
     expect(!(await np.getByText('Application error').count()), 'crashed');

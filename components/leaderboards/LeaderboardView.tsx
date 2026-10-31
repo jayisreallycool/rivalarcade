@@ -321,7 +321,7 @@ export default function LeaderboardView() {
                   <div>
                     <span className="font-bold text-sm text-white block">{m.gameName}</span>
                     <span className="text-slate-400 text-[11px]">
-                      {m.mode === 'practice' ? 'Practice run' : m.mode === 'tournament' ? m.opponentName.replace(/ #\d+$/, '') : `vs ${m.opponentName}`} · {m.at ? timeAgo(m.at) : m.date}
+                      {m.mode === 'practice' ? 'Practice run' : m.detail ? `${m.mode === 'arena' ? 'Live Arena' : m.mode === 'streak' ? 'Streak' : m.mode === 'blitz' ? 'Blitz' : '1v1'} · ${m.detail}` : m.mode === 'tournament' ? m.opponentName.replace(/ #\d+$/, '') : `vs ${m.opponentName}`} · {m.at ? timeAgo(m.at) : m.date}
                     </span>
                   </div>
                 </div>
@@ -342,7 +342,7 @@ export default function LeaderboardView() {
                         m.ratingDelta > 0 ? 'text-emerald-400' : m.ratingDelta < 0 ? 'text-rose-400' : 'text-slate-400'
                       }`}
                     >
-                      {m.mode === 'duel' ? (m.ratingDelta > 0 ? `+${m.ratingDelta} Elo` : m.ratingDelta < 0 ? `${m.ratingDelta} Elo` : '±0 Elo') : m.mode === 'tournament' ? 'Cup run' : 'Practice'}
+                      {m.mode === 'duel' ? (m.ratingDelta > 0 ? `+${m.ratingDelta} Elo` : m.ratingDelta < 0 ? `${m.ratingDelta} Elo` : '±0 Elo') : m.mode === 'tournament' ? 'Cup run' : m.entry ? `${m.coinsEarned - m.entry >= 0 ? '+' : ''}${m.coinsEarned - m.entry} coins` : m.mode === 'practice' ? 'Practice' : `+${m.coinsEarned} coins`}
                     </span>
                   </div>
                   <div className="text-amber-400 font-mono font-bold text-xs">

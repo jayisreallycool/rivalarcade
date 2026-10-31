@@ -1,27 +1,46 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AvatarConfig } from '@/lib/avatar-types';
 import { userStore, useUserStore } from '@/lib/user-store';
 import { getStarterAvatar } from '@/lib/cosmetics-catalog';
-import { GAME_NAMES, GameId, GameProps, MatchMode, RivalInfo, RunStats } from '@/lib/game-types';
+import {
+  ARENA_SIZE,
+  GAME_NAMES,
+  GameId,
+  GameProps,
+  MatchExtras,
+  MatchMode,
+  MODE_LABEL,
+  RivalInfo,
+  RunStats,
+  STREAK_TARGETS,
+  arenaPrizes,
+  blitzPayout,
+  blitzRate,
+  duelPrize,
+  streakPrize,
+} from '@/lib/game-types';
 import { botAvatar, botName, botScore } from '@/lib/bots';
 import { mulberry32, randomSeed, seedCode } from '@/lib/rng';
 import { standings, tournamentStatus } from '@/lib/tournaments-data';
 import { supportsWebGL2 } from '@/lib/engine/quality';
 import MatchResultsModal, { ResultData } from './MatchResultsModal';
+import { MatchExtrasContext } from './GameShell';
 import AvatarView from '@/components/avatar/AvatarView';
-import { X, Swords } from 'lucide-react';
+import { X, Swords, Users } from 'lucide-react';
 
 function GameLoading() {
   return (
     <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-[#070810] text-slate-400">
       <div className="w-10 h-10 rounded-full border-2 border-cyan-500/30 border-t-cyan-400 animate-spin" />
-      <span className="text-[11px] font-bold uppercase tracking-widest">Loading 3D arena…</span>
+      <span className="text-[11px] font-bold uppercase tracking-widest">Loading arena…</span>
     </div>
   );
 }
+
+const BrickBlitz = dynamic(() => import('./BrickBlitzGame'), { ssr: false, loading: GameLoading });
 
 // 3D games (and three.js) are code-split so they only download when a match opens.
 const GAMES_3D: Record<GameId, React.ComponentType<GameProps>> = {
@@ -29,11 +48,12 @@ const GAMES_3D: Record<GameId, React.ComponentType<GameProps>> = {
   'dunk-rush': dynamic(() => import('./DunkRush3DGame'), { ssr: false, loading: GameLoading }),
   'cyber-reflex': dynamic(() => import('./CyberReflex3DGame'), { ssr: false, loading: GameLoading }),
   'gem-surge': dynamic(() => import('./GemSurge3DGame'), { ssr: false, loading: GameLoading }),
+  'brick-blitz': BrickBlitz,
 };
 
 type Game2DProps = { avatar: AvatarConfig; onFinish: (score: number) => void; modeName?: string };
 // Canvas 2D versions for devices without WebGL2.
-const GAMES_2D: Record<GameId, React.ComponentType<Game2DProps>> = {
+const GAMES_2D: Partial<Record<GameId, React.ComponentType<Game2DProps>>> = {
   'neon-dash': dynamic(() => import('./NeonDashGame'), { ssr: false }),
   'dunk-rush': dynamic(() => import('./DunkRushGame'), { ssr: false }),
   'cyber-reflex': dynamic(() => import('./CyberReflexGame'), { ssr: false }),
@@ -43,6 +63,8 @@ const GAMES_2D: Record<GameId, React.ComponentType<Game2DProps>> = {
 interface GameModalProps {
   gameId: GameId;
   mode: MatchMode;
+  /** Coins staked per match (paid modes). */
+  entry?: number;
   tournamentId?: string;
   onClose: () => void;
 }
@@ -62,17 +84,36 @@ function makeOpponent(gameId: GameId, seed: number, rating: number): Opponent {
   return { name: botName(rng), avatar: botAvatar(Math.floor(rng() * 1e9)), rating: oppRating, score: botScore(rng, reference, 0.8, 1.2) };
 }
 
-const MODE_LABEL: Record<MatchMode, string> = { practice: 'Practice', duel: '1v1 Ranked', tournament: 'Tournament' };
+/** Arena field: 4 others on the same seed, spread from a bit weaker to a bit stronger than you. */
+function makeField(gameId: GameId, seed: number): (Opponent & { score: number })[] {
+  const rng = mulberry32(seed ^ 0x51ed27);
+  const ref = userStore.referenceFor(gameId);
+  const taken = new Set<string>();
+  const bands: [number, number][] = [
+    [1.08, 1.3],
+    [0.95, 1.12],
+    [0.82, 1.0],
+    [0.65, 0.88],
+  ];
+  return bands.map(([lo, hi]) => ({ name: botName(rng, taken), avatar: botAvatar(Math.floor(rng() * 1e9)), rating: 0, score: botScore(rng, ref, lo, hi) }));
+}
 
-export default function GameModal({ gameId, mode, tournamentId, onClose }: GameModalProps) {
+const ordinal = (n: number) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`;
+
+export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClose }: GameModalProps) {
   const userState = useUserStore();
   const [runKey, setRunKey] = useState(0);
   const [seed, setSeed] = useState(() => randomSeed());
-  const [matchmaking, setMatchmaking] = useState(mode === 'duel');
+  const [matchmaking, setMatchmaking] = useState(mode === 'duel' || mode === 'arena');
   const [result, setResult] = useState<ResultData | null>(null);
   const [use2D] = useState(() => !supportsWebGL2());
   // Wall-clock time the current run opened (a snapshot, so render stays pure).
   const [runStartedAt, setRunStartedAt] = useState(() => Date.now());
+  // Streak: current round (0-based). The stake is charged once, on round 1.
+  const [round, setRound] = useState(0);
+  const charged = useRef(false);
+  // Reference score frozen for the whole streak / blitz so targets don't move between rounds.
+  const [reference] = useState(() => userStore.referenceFor(gameId));
 
   const tournament = mode === 'tournament' ? userState.tournaments.find((t) => t.id === tournamentId) : undefined;
   const matchSeed = tournament ? tournament.seed : seed;
@@ -83,9 +124,12 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mode, matchmaking, gameId, seed],
   );
+  const field = useMemo(() => (mode === 'arena' && !matchmaking ? makeField(gameId, seed) : null), [mode, matchmaking, gameId, seed]);
+  const streakTarget = mode === 'streak' ? Math.max(1, Math.round(reference * STREAK_TARGETS[round])) : 0;
 
   const rival: RivalInfo | null = useMemo(() => {
     if (opponent) return { name: opponent.name, score: opponent.score };
+    if (mode === 'streak') return { name: `Round ${round + 1}`, score: streakTarget, label: 'TARGET' };
     if (tournament) {
       const leader = standings(tournament, runStartedAt, { name: userState.username, avatar: userState.avatar }).find((r) => !r.isUser);
       return leader ? { name: leader.name, score: leader.score, label: '#1' } : null;
@@ -93,14 +137,23 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
     return null;
     // Leader snapshot taken when the run starts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opponent, tournament?.id, runKey, runStartedAt]);
+  }, [opponent, mode, round, streakTarget, tournament?.id, runKey, runStartedAt]);
 
-  // Simulated matchmaking (~1.5s)
+  // Simulated matchmaking (1v1 ~1.5s, arena fills seat by seat)
+  const [seats, setSeats] = useState(1);
   useEffect(() => {
     if (!matchmaking) return;
+    if (mode === 'arena') {
+      const timers = [1, 2, 3, 4].map((i) => setTimeout(() => setSeats(1 + i), i * 450));
+      const done = setTimeout(() => setMatchmaking(false), 2200);
+      return () => {
+        timers.forEach(clearTimeout);
+        clearTimeout(done);
+      };
+    }
     const timer = setTimeout(() => setMatchmaking(false), 1500);
     return () => clearTimeout(timer);
-  }, [matchmaking]);
+  }, [matchmaking, mode]);
 
   // Esc closes; page behind doesn't scroll while a match is open.
   useEffect(() => {
@@ -114,13 +167,22 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
     };
   }, [onClose, result]);
 
+  const onStarted = useCallback(() => {
+    if (charged.current || entry <= 0) return;
+    if (mode === 'practice' || mode === 'tournament') return;
+    charged.current = userStore.chargeEntry(entry);
+  }, [entry, mode]);
+
   const handleGameFinish = useCallback(
     (finalScore: number, stats: RunStats = {}) => {
+      const breakdown = stats.breakdown;
+      const base = { userScore: finalScore, breakdown, entry: mode === 'practice' || mode === 'tournament' ? 0 : entry };
+
       if (mode === 'tournament' && tournamentId) {
         const out = userStore.submitTournamentRun(tournamentId, finalScore, stats);
         if (out) {
           setResult({
-            userScore: finalScore,
+            ...base,
             opponentScore: out.leader?.score ?? 0,
             opponentName: out.leader?.name ?? 'Field',
             opponentAvatar: getStarterAvatar('neutral'),
@@ -128,46 +190,161 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
             coinsEarned: out.coinsEarned,
             xpEarned: out.xpEarned,
             tournament: { rank: out.rank, total: out.total, improved: out.improved, best: out.best, title: tournament?.title ?? 'Tournament' },
-            breakdown: stats.breakdown,
           });
           return;
         }
         // Cup closed mid-run: keep the rewards of a practice run rather than losing it.
         const fallback = userStore.recordMatchResult({ gameId, mode: 'practice', playerScore: finalScore, stats, opponentScore: 0 });
-        setResult({ userScore: finalScore, opponentScore: 0, opponentName: 'Cup closed', opponentAvatar: getStarterAvatar('neutral'), ...fallback, note: 'This cup ended before your run finished, so it was saved as practice.' });
+        setResult({ ...base, opponentScore: 0, opponentName: 'Cup closed', opponentAvatar: getStarterAvatar('neutral'), ...fallback, note: 'This cup ended before your run finished, so it was saved as practice.' });
         return;
       }
 
-      const out = userStore.recordMatchResult({
-        gameId,
-        mode: mode === 'duel' ? 'duel' : 'practice',
-        playerScore: finalScore,
-        stats,
-        opponentScore: opponent?.score ?? 0,
-        opponentName: opponent?.name,
-        opponentAvatar: opponent?.avatar,
-        opponentRating: opponent?.rating,
-      });
-      setResult({
-        userScore: finalScore,
-        opponentScore: opponent?.score ?? 0,
-        opponentName: opponent?.name ?? 'Target Practice',
-        opponentAvatar: opponent?.avatar ?? getStarterAvatar('neutral'),
-        breakdown: stats.breakdown,
-        ...out,
-      });
+      if (mode === 'duel' && opponent) {
+        const won = finalScore > opponent.score;
+        const tie = finalScore === opponent.score;
+        const prize = won ? duelPrize(entry) : tie ? entry : 0;
+        const out = userStore.recordMatchResult({
+          gameId,
+          mode: 'duel',
+          playerScore: finalScore,
+          stats,
+          opponentScore: opponent.score,
+          opponentName: opponent.name,
+          opponentAvatar: opponent.avatar,
+          opponentRating: opponent.rating,
+          settlement: { entry, prize, crowns: won ? 1 : 0, won, tie },
+        });
+        setResult({ ...base, opponentScore: opponent.score, opponentName: opponent.name, opponentAvatar: opponent.avatar, ...out });
+        return;
+      }
+
+      if (mode === 'arena' && field) {
+        const table = [...field.map((f) => ({ name: f.name, score: f.score, you: false })), { name: userState.username, score: finalScore, you: true }].sort((a, b) => b.score - a.score);
+        const place = table.findIndex((r) => r.you) + 1;
+        const prize = arenaPrizes(entry)[place - 1] ?? 0;
+        const crowns = place === 1 ? 2 : place === 2 ? 1 : 0;
+        const winner = table[0];
+        const out = userStore.recordMatchResult({
+          gameId,
+          mode: 'arena',
+          playerScore: finalScore,
+          stats,
+          opponentScore: winner.you ? table[1].score : winner.score,
+          opponentName: winner.you ? table[1].name : winner.name,
+          opponentAvatar: getStarterAvatar('neutral'),
+          settlement: { entry, prize, crowns, won: place <= 3, detail: `${ordinal(place)} of ${ARENA_SIZE}` },
+        });
+        setResult({
+          ...base,
+          opponentScore: winner.score,
+          opponentName: winner.name,
+          opponentAvatar: getStarterAvatar('neutral'),
+          ...out,
+          headline: place === 1 ? { text: '👑 1ST PLACE', tone: 'win' } : place <= 3 ? { text: `${ordinal(place).toUpperCase()} PLACE · IN THE MONEY`, tone: 'win' } : { text: `${ordinal(place).toUpperCase()} PLACE`, tone: 'loss' },
+          arena: { rows: table, place, prizes: arenaPrizes(entry) },
+        });
+        return;
+      }
+
+      if (mode === 'streak') {
+        const cleared = finalScore >= streakTarget;
+        const last = round === STREAK_TARGETS.length - 1;
+        if (cleared && !last) {
+          // Mid-streak: no settlement yet; just show the round result.
+          setResult({
+            ...base,
+            opponentScore: streakTarget,
+            opponentName: 'Target',
+            opponentAvatar: getStarterAvatar('neutral'),
+            ratingDelta: 0,
+            coinsEarned: 0,
+            xpEarned: 0,
+            headline: { text: `ROUND ${round + 1} CLEARED`, tone: 'win' },
+            streak: { round, total: STREAK_TARGETS.length, target: streakTarget, cleared: true, prize: streakPrize(entry) },
+            rematchLabel: `ROUND ${round + 2} →`,
+            pending: true,
+          });
+          return;
+        }
+        const roundsCleared = round + (cleared ? 1 : 0);
+        const complete = cleared && last;
+        // Two of three gives the stake back.
+        const prize = complete ? streakPrize(entry) : roundsCleared === 2 ? entry : 0;
+        const out = userStore.recordMatchResult({
+          gameId,
+          mode: 'streak',
+          playerScore: finalScore,
+          stats,
+          opponentScore: streakTarget,
+          opponentName: `Target ${round + 1}`,
+          opponentAvatar: getStarterAvatar('neutral'),
+          settlement: { entry, prize, crowns: complete ? 3 : 0, won: complete, detail: `${roundsCleared}/${STREAK_TARGETS.length} targets` },
+        });
+        setResult({
+          ...base,
+          opponentScore: streakTarget,
+          opponentName: 'Target',
+          opponentAvatar: getStarterAvatar('neutral'),
+          ...out,
+          headline: complete ? { text: '🔥 STREAK COMPLETE', tone: 'win' } : { text: `STREAK ENDED · ${roundsCleared}/${STREAK_TARGETS.length}`, tone: 'loss' },
+          streak: { round, total: STREAK_TARGETS.length, target: streakTarget, cleared, prize: streakPrize(entry) },
+          rematchLabel: 'NEW STREAK',
+        });
+        return;
+      }
+
+      if (mode === 'blitz') {
+        const prize = blitzPayout(finalScore, entry, reference);
+        const out = userStore.recordMatchResult({
+          gameId,
+          mode: 'blitz',
+          playerScore: finalScore,
+          stats,
+          opponentScore: 0,
+          opponentName: 'Blitz',
+          settlement: { entry, prize, crowns: 0, won: prize > entry, detail: `${prize} coins` },
+        });
+        setResult({
+          ...base,
+          opponentScore: 0,
+          opponentName: 'Blitz',
+          opponentAvatar: getStarterAvatar('neutral'),
+          ...out,
+          headline: prize > entry ? { text: `⚡ +${prize - entry} PROFIT`, tone: 'win' } : { text: `BLITZ · ${prize} COINS`, tone: 'neutral' },
+        });
+        return;
+      }
+
+      const out = userStore.recordMatchResult({ gameId, mode: 'practice', playerScore: finalScore, stats, opponentScore: 0 });
+      setResult({ ...base, opponentScore: 0, opponentName: 'Target Practice', opponentAvatar: getStarterAvatar('neutral'), ...out });
     },
-    [mode, tournamentId, gameId, opponent, tournament?.title],
+    [mode, entry, tournamentId, gameId, opponent, field, streakTarget, round, reference, userState.username, tournament?.title],
   );
 
   const handleRematch = () => {
+    const advancing = mode === 'streak' && result?.pending;
     setResult(null);
     setRunKey((k) => k + 1); // remount the game → fresh ready screen
     setRunStartedAt(Date.now());
-    if (mode === 'duel') {
+    if (advancing) {
+      setRound((r) => r + 1);
       setSeed(randomSeed());
+      return;
+    }
+    // A new paid match needs a new stake.
+    if (entry > 0 && mode !== 'practice' && mode !== 'tournament') {
+      if (userStore.getState().stats.coins < entry) {
+        onClose();
+        return;
+      }
+      charged.current = false;
+    }
+    if (mode === 'streak') setRound(0);
+    if (mode === 'duel' || mode === 'arena') {
+      setSeed(randomSeed());
+      setSeats(1);
       setMatchmaking(true);
-    } else if (mode === 'practice') {
+    } else if (mode !== 'tournament') {
       setSeed(randomSeed());
     }
   };
@@ -175,10 +352,32 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
   const tournamentClosed = tournament && tournamentStatus(tournament, runStartedAt) !== 'live';
   const Game3D = GAMES_3D[gameId];
   const Game2D = GAMES_2D[gameId];
+  const modeLabel = mode === 'duel' ? (entry ? `1v1 · ${entry} entry` : '1v1 Ranked') : MODE_LABEL[mode];
+
+  const extras: MatchExtras = useMemo(() => {
+    const e: MatchExtras = { mode, entry, onStarted };
+    if (mode === 'duel') e.stakeLine = entry ? `Entry ${entry} · Winner takes ${duelPrize(entry)}` : `Free entry · Win ${duelPrize(0)} coins`;
+    if (mode === 'arena') {
+      const p = arenaPrizes(entry);
+      e.stakeLine = `${entry ? `Entry ${entry} · ` : ''}1st ${p[0]} · 2nd ${p[1]} · 3rd ${p[2]}`;
+      if (field) e.field = field.map((f) => ({ name: f.name, score: f.score }));
+    }
+    if (mode === 'streak') {
+      e.round = { index: round, total: STREAK_TARGETS.length };
+      e.stakeLine = round === 0 ? `${entry ? `Entry ${entry} · ` : ''}Beat 3 targets → ${streakPrize(entry)}` : `Round ${round + 1} · Prize ${streakPrize(entry)}`;
+    }
+    if (mode === 'blitz') {
+      e.coinRate = blitzRate(entry, reference);
+      const cap = entry === 0 ? 120 : entry * 8;
+      e.coinCap = cap;
+      e.stakeLine = `${entry ? `Entry ${entry} · ` : ''}Every point pays · up to ${cap}`;
+    }
+    return e;
+  }, [mode, entry, onStarted, field, round, reference]);
 
   const matchInfo = {
-    modeLabel: MODE_LABEL[mode],
-    seedCode: mode === 'practice' ? undefined : seedCode(matchSeed),
+    modeLabel,
+    seedCode: mode === 'practice' || mode === 'blitz' ? undefined : seedCode(matchSeed),
     playerName: userState.username,
     playerRating: mode === 'duel' ? userState.stats.rating : undefined,
     rivalName: opponent?.name ?? rival?.name,
@@ -201,13 +400,25 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
             <div className="absolute inset-0 rounded-full border-2 border-cyan-500/40 animate-ping" />
             <div className="absolute inset-2 rounded-full border border-cyan-500/20" />
             <div className="w-20 h-20 rounded-full bg-[#161826] flex items-center justify-center border border-cyan-500/60 shadow-lg shadow-cyan-500/20">
-              <Swords className="w-8 h-8 text-cyan-400 animate-pulse" />
+              {mode === 'arena' ? <Users className="w-8 h-8 text-pink-400 animate-pulse" /> : <Swords className="w-8 h-8 text-cyan-400 animate-pulse" />}
             </div>
           </div>
-          <h3 className="text-xl font-black text-white mb-1">FINDING YOUR RIVAL</h3>
+          <h3 className="text-xl font-black text-white mb-1">{mode === 'arena' ? 'FILLING THE ARENA' : 'FINDING YOUR RIVAL'}</h3>
           <p className="text-xs text-slate-400 max-w-xs mb-4">
-            Matching by skill ({userState.stats.rating} Elo) on certified seed <span className="font-mono text-slate-300">{seedCode(seed)}</span>
+            {mode === 'arena' ? (
+              <>
+                <span className="text-pink-300 font-black text-base tabular-nums">
+                  {seats}/{ARENA_SIZE}
+                </span>{' '}
+                players on seed <span className="font-mono text-slate-300">{seedCode(seed)}</span>
+              </>
+            ) : (
+              <>
+                Matching by skill ({userState.stats.rating} Elo) on certified seed <span className="font-mono text-slate-300">{seedCode(seed)}</span>
+              </>
+            )}
           </p>
+          {entry > 0 && <p className="text-xs font-black text-amber-300 mb-3">{entry} coin entry</p>}
           <div className="flex items-center gap-3">
             <AvatarView avatar={userState.avatar} size={50} />
             <span className="text-sm font-bold text-cyan-400">{userState.username}</span>
@@ -220,18 +431,28 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
           <p className="text-xs text-slate-400 mb-6">Runs can be submitted only while the tournament is live.</p>
           <button onClick={onClose} className="px-5 py-2.5 bg-cyan-500 text-black font-bold text-sm rounded-lg">Back to Arena</button>
         </div>
-      ) : use2D ? (
+      ) : use2D && Game2D ? (
         <div className="relative h-full flex flex-col items-center justify-center p-2 overflow-y-auto">
           {closeBtn}
           <div className="w-full max-w-2xl">
             <div className="px-4 py-1.5 text-[11px] text-amber-300 bg-amber-950/30 border border-amber-700/30 rounded-t-xl">
               3D isn’t available on this device, so you’re playing the 2D edition.
             </div>
-            <Game2D key={runKey} avatar={userState.avatar} onFinish={(s) => handleGameFinish(s)} modeName={MODE_LABEL[mode]} />
+            <Game2D
+              key={runKey}
+              avatar={userState.avatar}
+              onFinish={(s) => {
+                onStarted();
+                handleGameFinish(s);
+              }}
+              modeName={modeLabel}
+            />
           </div>
         </div>
       ) : (
-        <Game3D key={runKey} avatar={userState.avatar} onFinish={handleGameFinish} modeName={MODE_LABEL[mode]} seed={matchSeed} rival={rival} match={matchInfo} onExit={onClose} />
+        <MatchExtrasContext.Provider value={extras}>
+          <Game3D key={runKey} avatar={userState.avatar} onFinish={handleGameFinish} modeName={modeLabel} seed={matchSeed} rival={rival} match={matchInfo} onExit={onClose} />
+        </MatchExtrasContext.Provider>
       )}
 
       {result && (
@@ -243,6 +464,18 @@ export default function GameModal({ gameId, mode, tournamentId, onClose }: GameM
           data={result}
           onRematch={handleRematch}
           onClose={() => {
+            // Leaving mid-streak banks the rounds already cleared (2/3 refunds the stake).
+            if (mode === 'streak' && result.pending) {
+              const cleared = round + 1;
+              userStore.recordMatchResult({
+                gameId,
+                mode: 'streak',
+                playerScore: result.userScore,
+                opponentScore: streakTarget,
+                opponentName: `Target ${round + 1}`,
+                settlement: { entry, prize: cleared === 2 ? entry : 0, crowns: 0, won: false, detail: `${cleared}/${STREAK_TARGETS.length} targets (left)` },
+              });
+            }
             setResult(null);
             onClose();
           }}

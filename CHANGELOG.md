@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-30 — Triumph-style modes, leagues and Brick Blitz
+
+- **New game: Brick Blitz** — aim-and-launch brick breaker (drag to aim with bounce preview, release to fire a volley, grab +1 balls, seeded walls). Canvas 2D, so it runs on every phone.
+- **Lobby rebuilt** like a skill-gaming app: league card, featured game, big game tiles, and a mode sheet per game with entry tiers (Free / 25 / 50 / 100 / 250 virtual coins).
+- **Modes**: 1v1 (winner takes the pot), Live Arena (5 players, live leaderboard, top 3 paid), Streak (beat 3 rising targets for 5×), Blitz (every point pays coins), Practice.
+- **Leagues**: crowns from 1v1 wins, arena podiums and completed streaks move you from Bronze to Champion.
+- Entry is charged at GO, not on open; results show net coins, crowns, arena table and streak progress. Match history labels every mode.
+- Tests: `tests/e2e-modes.cjs` covers stakes, arena/blitz/streak HUDs and payouts; unit checks for payouts and leagues.
+
 ## 2026-10-30: Full-screen, swipe-first, Triumph-style competition
 
 ### Games are now full screen and built for phones

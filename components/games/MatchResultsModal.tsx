@@ -6,7 +6,7 @@ import { AvatarConfig } from '@/lib/avatar-types';
 import type { MatchMode } from '@/lib/game-types';
 import AvatarView from '@/components/avatar/AvatarView';
 import { sound } from '@/lib/sound';
-import { Trophy, Coins, Zap, RotateCcw, ArrowRight, Medal } from 'lucide-react';
+import { Trophy, Coins, Zap, RotateCcw, ArrowRight, Medal, Crown } from 'lucide-react';
 
 export interface ResultData {
   userScore: number;
@@ -19,6 +19,15 @@ export interface ResultData {
   tournament?: { rank: number; total: number; improved: boolean; best: number; title: string };
   note?: string;
   breakdown?: { label: string; points: number }[];
+  /** Coins staked (paid modes) — shown as net result. */
+  entry?: number;
+  crownsEarned?: number;
+  headline?: { text: string; tone: 'win' | 'loss' | 'neutral' };
+  arena?: { rows: { name: string; score: number; you: boolean }[]; place: number; prizes: number[] };
+  streak?: { round: number; total: number; target: number; cleared: boolean; prize: number };
+  rematchLabel?: string;
+  /** Mid-streak round result: nothing settled yet. */
+  pending?: boolean;
 }
 
 interface MatchResultsModalProps {
@@ -32,14 +41,16 @@ interface MatchResultsModalProps {
 }
 
 export default function MatchResultsModal({ gameName, mode, userAvatar, userName, data, onRematch, onClose }: MatchResultsModalProps) {
-  const { userScore, opponentScore, opponentName, opponentAvatar, ratingDelta, coinsEarned, xpEarned, tournament, note, breakdown } = data;
+  const { userScore, opponentScore, opponentName, opponentAvatar, ratingDelta, coinsEarned, xpEarned, tournament, note, breakdown, headline, arena, streak, entry = 0, crownsEarned = 0, pending } = data;
   const isPractice = mode === 'practice' || !!note;
   const isTournament = mode === 'tournament' && !!tournament;
   const isWin = mode === 'duel' && userScore > opponentScore;
   const isTie = mode === 'duel' && userScore === opponentScore;
   const isLoss = mode === 'duel' && !isWin && !isTie;
   const podium = isTournament && tournament.rank <= 3;
-  const celebrate = isWin || podium || (isTournament && tournament.improved);
+  const celebrate = isWin || podium || (isTournament && tournament.improved) || headline?.tone === 'win';
+  const showVs = mode === 'duel' || mode === 'practice' || mode === 'tournament' || !!note;
+  const net = coinsEarned - entry;
 
   useEffect(() => {
     if (!celebrate) return;
@@ -51,7 +62,9 @@ export default function MatchResultsModal({ gameName, mode, userAvatar, userName
     }
   }, [celebrate]);
 
-  const header = isPractice
+  const header = headline
+    ? { text: headline.text, cls: headline.tone === 'win' ? 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-black' : headline.tone === 'loss' ? 'bg-gradient-to-r from-red-600 to-rose-700 text-white' : 'bg-slate-700 text-white' }
+    : isPractice
     ? { text: 'PRACTICE SESSION COMPLETE', cls: 'bg-slate-800 text-slate-300' }
     : isTournament
     ? { text: tournament.improved ? `NEW BEST · RANK #${tournament.rank}` : `RUN SUBMITTED · RANK #${tournament.rank}`, cls: 'bg-gradient-to-r from-amber-400 to-orange-500 text-black' }
@@ -61,7 +74,8 @@ export default function MatchResultsModal({ gameName, mode, userAvatar, userName
     ? { text: 'MATCH TIED', cls: 'bg-slate-700 text-white' }
     : { text: 'DEFEAT', cls: 'bg-gradient-to-r from-red-600 to-rose-700 text-white' };
 
-  const subtitle = isPractice ? 'Solo Practice' : isTournament ? tournament.title : '1v1 Ranked Duel';
+  const subtitle =
+    mode === 'arena' ? 'Live Arena' : mode === 'streak' ? 'Streak' : mode === 'blitz' ? 'Blitz' : isPractice ? 'Solo Practice' : isTournament ? tournament.title : '1v1 Ranked Duel';
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200" data-testid="results-modal">
@@ -77,7 +91,51 @@ export default function MatchResultsModal({ gameName, mode, userAvatar, userName
 
           {note && <p className="text-xs text-amber-300 bg-amber-950/30 border border-amber-700/40 rounded-lg px-3 py-2 mb-3 text-center">{note}</p>}
 
-          {isTournament ? (
+          {arena && (
+            <div className="w-full rounded-xl bg-[#0a0b12] border border-[#1e202f] p-2 my-2" data-testid="arena-results">
+              {arena.rows.map((r, i) => (
+                <div key={r.name + i} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm ${r.you ? 'bg-cyan-500/15 text-cyan-200 font-black' : 'text-slate-300'}`}>
+                  <span className={`w-6 text-center font-black ${i < 3 ? 'text-amber-400' : 'text-slate-600'}`}>{i + 1}</span>
+                  <span className="flex-1 truncate">{r.you ? `${r.name} (you)` : r.name}</span>
+                  <span className="font-mono tabular-nums">{r.score.toLocaleString()}</span>
+                  <span className="w-14 text-right text-xs font-black text-amber-400">{arena.prizes[i] ? `+${arena.prizes[i]}` : ''}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {streak && (
+            <div className="w-full rounded-xl bg-[#0a0b12] border border-[#1e202f] p-4 my-2 text-center" data-testid="streak-results">
+              <div className="flex items-center justify-center gap-2 mb-3">
+                {Array.from({ length: streak.total }, (_, i) => {
+                  const done = i < streak.round || (i === streak.round && streak.cleared);
+                  const failed = i === streak.round && !streak.cleared;
+                  return (
+                    <span key={i} className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-black border-2 ${done ? 'bg-emerald-400 border-emerald-300 text-black' : failed ? 'bg-rose-600 border-rose-400 text-white' : 'bg-white/5 border-white/15 text-white/40'}`}>
+                      {done ? '✓' : failed ? '✕' : i + 1}
+                    </span>
+                  );
+                })}
+              </div>
+              <div className="text-3xl font-black text-white tabular-nums">{userScore.toLocaleString()}</div>
+              <div className="text-xs text-slate-400">
+                target <span className="text-amber-300 font-bold">{streak.target.toLocaleString()}</span>
+                {pending && <> · keep going for <span className="text-amber-300 font-bold">{streak.prize}</span> coins</>}
+              </div>
+            </div>
+          )}
+
+          {mode === 'blitz' && (
+            <div className="w-full rounded-xl bg-[#0a0b12] border border-[#1e202f] p-4 my-2 text-center" data-testid="blitz-results">
+              <div className="text-3xl font-black text-white tabular-nums">{userScore.toLocaleString()}</div>
+              <div className="text-xs text-slate-400 mb-2">points</div>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400 text-black text-sm font-black">
+                <Coins className="w-4 h-4" /> {coinsEarned} coins
+              </div>
+            </div>
+          )}
+
+          {!showVs ? null : isTournament ? (
             <div className="w-full grid grid-cols-3 items-center my-2 py-4 bg-[#0a0b12] rounded-xl border border-[#1e202f] text-center">
               <div>
                 <span className="text-[10px] uppercase text-slate-400 block">This run</span>
@@ -143,16 +201,28 @@ export default function MatchResultsModal({ gameName, mode, userAvatar, userName
 
           <div className="w-full grid grid-cols-3 gap-2 my-4">
             <div className="flex flex-col items-center p-3 bg-[#181a27] rounded-lg border border-[#242738]">
-              <Trophy className="w-4 h-4 text-amber-400 mb-1" />
-              <span className="text-[10px] uppercase text-slate-400">Skill Rating</span>
-              <span className={`text-sm font-black ${ratingDelta > 0 ? 'text-emerald-400' : ratingDelta < 0 ? 'text-rose-400' : 'text-slate-300'}`} data-testid="rating-delta">
-                {mode === 'duel' ? (ratingDelta > 0 ? `+${ratingDelta}` : ratingDelta) : '—'}
-              </span>
+              {mode === 'duel' || mode === 'practice' || mode === 'tournament' ? (
+                <>
+                  <Trophy className="w-4 h-4 text-amber-400 mb-1" />
+                  <span className="text-[10px] uppercase text-slate-400">Skill Rating</span>
+                  <span className={`text-sm font-black ${ratingDelta > 0 ? 'text-emerald-400' : ratingDelta < 0 ? 'text-rose-400' : 'text-slate-300'}`} data-testid="rating-delta">
+                    {mode === 'duel' ? (ratingDelta > 0 ? `+${ratingDelta}` : ratingDelta) : '—'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Crown className="w-4 h-4 text-amber-400 mb-1" />
+                  <span className="text-[10px] uppercase text-slate-400">Crowns</span>
+                  <span className={`text-sm font-black ${crownsEarned > 0 ? 'text-emerald-400' : 'text-slate-300'}`}>{pending ? '…' : `+${crownsEarned}`}</span>
+                </>
+              )}
             </div>
             <div className="flex flex-col items-center p-3 bg-[#181a27] rounded-lg border border-[#242738]">
               <Coins className="w-4 h-4 text-amber-400 mb-1" />
-              <span className="text-[10px] uppercase text-slate-400">Rival Coins</span>
-              <span className="text-sm font-black text-amber-400">+{coinsEarned}</span>
+              <span className="text-[10px] uppercase text-slate-400">{entry > 0 ? 'Net Coins' : 'Rival Coins'}</span>
+              <span className={`text-sm font-black ${entry > 0 && net < 0 ? 'text-rose-400' : 'text-amber-400'}`} data-testid="coins-delta">
+                {pending ? '…' : entry > 0 ? (net >= 0 ? `+${net}` : net) : `+${coinsEarned}`}
+              </span>
             </div>
             <div className="flex flex-col items-center p-3 bg-[#181a27] rounded-lg border border-[#242738]">
               <Zap className="w-4 h-4 text-cyan-400 mb-1" />
@@ -166,13 +236,13 @@ export default function MatchResultsModal({ gameName, mode, userAvatar, userName
               onClick={onRematch}
               className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#1e202f] hover:bg-[#282b3f] text-slate-200 font-bold text-sm rounded-xl border border-[#32364e] transition-colors active:scale-95"
             >
-              <RotateCcw className="w-4 h-4 text-amber-400" /> {mode === 'duel' ? 'New Duel' : mode === 'tournament' ? 'Run Again' : 'Play Again'}
+              <RotateCcw className="w-4 h-4 text-amber-400" /> {data.rematchLabel ?? (mode === 'duel' ? 'New Duel' : mode === 'tournament' ? 'Run Again' : mode === 'arena' ? 'New Arena' : 'Play Again')}
             </button>
             <button
               onClick={onClose}
               className="flex-1 flex items-center justify-center gap-2 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-extrabold text-sm rounded-xl shadow-lg shadow-cyan-500/20 transition-transform active:scale-95"
             >
-              Continue <ArrowRight className="w-4 h-4" />
+              {pending ? 'Leave streak' : 'Continue'} <ArrowRight className="w-4 h-4" />
             </button>
           </div>
         </div>

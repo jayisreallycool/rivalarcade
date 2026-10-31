@@ -1,4 +1,5 @@
 // Avatar System Data Definitions
+import type { GameId, MatchMode } from './game-types';
 
 export type GenderType = 'male' | 'female' | 'neutral';
 
@@ -80,19 +81,16 @@ export interface PlayerStats {
   trophies: number;
   xp: number;
   level: number;
-  highScores: {
-    'neon-dash': number;
-    'dunk-rush': number;
-    'cyber-reflex': number;
-    'gem-surge': number;
-  };
+  highScores: Record<GameId, number>;
+  /** League ladder currency: earned by winning 1v1s, placing in arenas, finishing streaks. */
+  crowns: number;
 }
 
 export interface MatchHistoryItem {
   id: string;
-  gameId: 'neon-dash' | 'dunk-rush' | 'cyber-reflex' | 'gem-surge';
+  gameId: GameId;
   gameName: string;
-  mode: 'practice' | 'duel' | 'tournament';
+  mode: MatchMode;
   /** Legacy display string; prefer `at`. */
   date: string;
   /** Epoch ms when the match finished. */
@@ -104,4 +102,8 @@ export interface MatchHistoryItem {
   result: 'win' | 'loss' | 'tie' | 'practice';
   ratingDelta: number;
   coinsEarned: number;
+  /** Coins staked to enter (paid modes). */
+  entry?: number;
+  /** Arena placement / streak rounds cleared, for the history label. */
+  detail?: string;
 }

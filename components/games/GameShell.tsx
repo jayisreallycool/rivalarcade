@@ -1,12 +1,17 @@
 'use client';
 
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import type { MatchInfo, RivalInfo } from '@/lib/game-types';
+import React, { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import type { MatchExtras, MatchInfo, RivalInfo } from '@/lib/game-types';
 import { sound, useMuted } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
 import { useLatest } from '@/lib/engine/react';
 import AvatarView from '@/components/avatar/AvatarView';
-import { X, Volume2, VolumeX, Play, Zap } from 'lucide-react';
+import { X, Volume2, VolumeX, Play, Zap, Coins, Crown } from 'lucide-react';
+
+/** Mode extras (stakes, blitz rate, arena field, streak round) provided by the match flow. */
+export const MatchExtrasContext = createContext<MatchExtras | null>(null);
+
+const ordinal = (n: number) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`;
 
 /* ------------------------------------------------------------------ score popups */
 
@@ -154,6 +159,8 @@ export default function GameShell(props: GameShellProps) {
   const [count, setCount] = useState<number | 'GO' | null>(null);
   const [showHint, setShowHint] = useState(false);
   const muted = useMuted();
+  const extras = useContext(MatchExtrasContext);
+  const extrasRef = useLatest(extras);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
@@ -188,6 +195,7 @@ export default function GameShell(props: GameShellProps) {
             sound.playPowerup();
             haptic('go');
             onStart();
+            extrasRef.current?.onStarted?.();
             setShowHint(true);
             timers.current.push(setTimeout(() => setCount(null), 550));
             timers.current.push(setTimeout(() => setShowHint(false), 4500));
@@ -198,10 +206,16 @@ export default function GameShell(props: GameShellProps) {
         }, i * 650),
       );
     });
-  }, [onStart]);
+  }, [onStart, extrasRef]);
 
   const rivalNow = rival && roundSeconds && timeLeft !== undefined && phase !== 'ready' ? Math.round(rival.score * Math.min(1, 1 - timeLeft / roundSeconds)) : rival?.score ?? 0;
   const lowTime = timeLeft !== undefined && timeLeft <= 10 && phase === 'playing';
+  const progress = roundSeconds && timeLeft !== undefined && phase !== 'ready' ? Math.min(1, 1 - timeLeft / roundSeconds) : 0;
+  const blitzCoins = extras?.coinRate ? Math.min(extras.coinCap ?? Infinity, Math.floor(score * extras.coinRate)) : null;
+  const field = extras?.field
+    ? [...extras.field.map((f) => ({ name: f.name, score: Math.round(f.score * progress), you: false })), { name: 'YOU', score, you: true }].sort((a, b) => b.score - a.score)
+    : null;
+  const myPlace = field ? field.findIndex((f) => f.you) + 1 : 0;
 
   return (
     <div
@@ -236,6 +250,19 @@ export default function GameShell(props: GameShellProps) {
               {score.toLocaleString()}
             </span>
             {chips && <div className="flex items-center gap-1.5 mt-1">{chips}</div>}
+            {blitzCoins !== null && (
+              <span className="mt-1 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-400 text-black text-xs font-black tabular-nums" data-testid="blitz-coins">
+                <Coins className="w-3.5 h-3.5" /> +{blitzCoins}
+              </span>
+            )}
+            {extras?.round && (
+              <span className="mt-1 flex items-center gap-1" data-testid="streak-round">
+                {Array.from({ length: extras.round.total }, (_, i) => (
+                  <span key={i} className={`w-2.5 h-2.5 rounded-full border ${i < extras.round!.index ? 'bg-emerald-400 border-emerald-300' : i === extras.round!.index ? 'bg-amber-400 border-amber-200 animate-pulse' : 'bg-white/10 border-white/30'}`} />
+                ))}
+                <span className="text-[10px] font-black text-white/70 ml-1">ROUND {extras.round.index + 1}/{extras.round.total}</span>
+              </span>
+            )}
           </div>
 
           <div className="flex flex-col items-end gap-1 min-w-[84px]">
@@ -256,6 +283,23 @@ export default function GameShell(props: GameShellProps) {
             )}
           </div>
         </div>
+
+        {field && phase !== 'ready' && (
+          <div className="mt-2 mx-auto max-w-md flex items-center gap-2 px-2 py-1 rounded-full bg-black/45 backdrop-blur border border-white/10 text-[11px] font-bold" data-testid="arena-board">
+            <span className={`px-2 py-0.5 rounded-full font-black ${myPlace <= 3 ? 'bg-emerald-400 text-black' : 'bg-rose-500 text-white'}`}>{ordinal(myPlace).toUpperCase()}/{field.length}</span>
+            <div className="flex-1 flex items-center gap-1 min-w-0 overflow-hidden">
+              <span className="shrink-0 px-1.5 py-0.5 rounded-md tabular-nums bg-cyan-400/25 text-cyan-200">YOU {score.toLocaleString()}</span>
+              {field
+                .map((f, i) => ({ ...f, place: i + 1 }))
+                .filter((f) => !f.you && (f.place === 1 || f.place === 3 || f.place === myPlace - 1))
+                .map((f) => (
+                  <span key={f.name} className={`shrink-0 px-1.5 py-0.5 rounded-md tabular-nums ${f.place <= 3 ? 'text-white/80' : 'text-white/45'}`}>
+                    <span className="text-amber-300">{ordinal(f.place)}</span> {f.name.slice(0, 7)} {f.score.toLocaleString()}
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
 
         {rival && (
           <div className="mt-2 mx-auto max-w-md flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/45 backdrop-blur border border-white/10 text-[11px] font-bold" data-testid="rival-bar">
@@ -300,7 +344,24 @@ export default function GameShell(props: GameShellProps) {
                 {title}
               </h2>
               {match?.seedCode && <div className="text-[10px] font-mono text-white/40 mt-0.5">SEED {match.seedCode} · same for every player</div>}
+              {extras?.stakeLine && (
+                <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-300 text-xs font-black" data-testid="stake-line">
+                  {extras.mode === 'streak' || extras.mode === 'arena' ? <Crown className="w-3.5 h-3.5" /> : <Coins className="w-3.5 h-3.5" />} {extras.stakeLine}
+                </div>
+              )}
             </div>
+
+            {extras?.field && (
+              <div className="rounded-2xl bg-black/40 border border-white/10 px-3 py-2.5 mb-4" data-testid="arena-lobby">
+                <div className="text-[10px] font-black tracking-widest text-white/50 mb-1.5">{extras.field.length + 1} PLAYERS · SAME SEED · TOP 3 PAID</div>
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="px-2 py-0.5 rounded-full bg-cyan-400/20 text-cyan-200 text-[11px] font-bold">{match?.playerName ?? 'You'}</span>
+                  {extras.field.map((f) => (
+                    <span key={f.name} className="px-2 py-0.5 rounded-full bg-white/10 text-white/70 text-[11px] font-bold">{f.name}</span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {rival && (
               <div className="flex items-center justify-between rounded-2xl bg-black/40 border border-white/10 px-3 py-2.5 mb-4" data-testid="vs-card">

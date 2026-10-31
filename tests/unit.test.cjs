@@ -88,4 +88,31 @@ ok('bot avatars deterministic and valid', () => {
   assert.deepStrictEqual(botAvatar(5), botAvatar(5));
   const a = botAvatar(99); ['hairStyleId','shirtId','pantsId','shoesId'].forEach((k) => assert(a[k] && a[k] !== 'none'));
 });
+const G = require('../.test-build/game-types');
+ok('stakes & payouts: house edge, caps, free tiers', () => {
+  for (const e of G.STAKES) {
+    if (e === 0) continue;
+    assert(G.duelPrize(e) < 2 * e && G.duelPrize(e) > e, 'duel prize between stake and pot');
+    const p = G.arenaPrizes(e);
+    assert(p[0] > p[1] && p[1] > p[2]);
+    assert(p.reduce((a, b) => a + b, 0) <= G.ARENA_SIZE * e, 'arena pays out at most the pot');
+    assert.strictEqual(G.streakPrize(e), e * 5);
+    assert(G.blitzPayout(1e9, e, 2000) === e * 8, 'blitz capped at 8x');
+    // A typical score roughly returns the stake
+    const typical = G.blitzPayout(2000, e, 2000);
+    assert(typical >= e && typical <= e * 1.2, `blitz typical ${typical} for ${e}`);
+  }
+  assert(G.duelPrize(0) > 0 && G.arenaPrizes(0)[0] > 0 && G.blitzPayout(5000, 0, 2000) <= 120);
+  assert.deepStrictEqual(G.STREAK_TARGETS.slice().sort((a, b) => a - b), G.STREAK_TARGETS, 'streak targets rise');
+});
+ok('leagues by crowns', () => {
+  assert.strictEqual(G.leagueFor(0).name, 'Bronze');
+  assert.strictEqual(G.leagueFor(9).name, 'Bronze');
+  assert.strictEqual(G.leagueFor(10).name, 'Silver');
+  assert.strictEqual(G.leagueFor(500).name, 'Champion');
+  assert.strictEqual(G.leagueFor(500).next, null);
+  const s = G.leagueFor(17); assert(s.progress > 0 && s.progress < 1);
+  assert(G.GAME_IDS.length === Object.keys(G.GAME_NAMES).length && G.GAME_IDS.every((id) => G.SCORE_BASELINE[id] > 0));
+});
+
 console.log(`\n${n} unit checks passed`);

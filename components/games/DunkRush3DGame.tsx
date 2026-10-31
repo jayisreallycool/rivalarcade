@@ -55,13 +55,18 @@ interface Ball {
   bounces: number;
 }
 
-/** Level → hoop sway amplitude (m) and speed (rad/s); unlocks as you score. */
+/**
+ * Difficulty ladder, unlocked by baskets made. Early levels are deliberately easy: a still hoop,
+ * a strong aim assist (pull = how far a shot is nudged toward the rim, range = how wrong it may be)
+ * and compressed power (comp = how much of your power error survives). Later levels move the hoop,
+ * shift your shot spot and hand more of the shot back to your own skill.
+ */
 const LEVELS = [
-  { makes: 0, amp: 0, speed: 0 },
-  { makes: 3, amp: 0.9, speed: 0.7 },
-  { makes: 7, amp: 1.4, speed: 1.0 },
-  { makes: 12, amp: 1.8, speed: 1.35 },
-  { makes: 18, amp: 2.1, speed: 1.7 },
+  { makes: 0, amp: 0, speed: 0, pull: 0.85, range: 2.6, comp: 0.3, perfect: 0.16, shift: 0 },
+  { makes: 4, amp: 0.5, speed: 0.55, pull: 0.78, range: 2.2, comp: 0.36, perfect: 0.13, shift: 0 },
+  { makes: 9, amp: 1.0, speed: 0.85, pull: 0.68, range: 1.9, comp: 0.42, perfect: 0.11, shift: 1.6 },
+  { makes: 15, amp: 1.5, speed: 1.15, pull: 0.58, range: 1.6, comp: 0.48, perfect: 0.095, shift: 2.2 },
+  { makes: 22, amp: 1.9, speed: 1.5, pull: 0.5, range: 1.3, comp: 0.52, perfect: 0.085, shift: 2.6 },
 ];
 
 function makeCourtTexture() {
@@ -89,6 +94,37 @@ function makeCourtTexture() {
   ctx.arc(256, 40, 330, 0.08 * Math.PI, 0.92 * Math.PI);
   ctx.stroke();
   ctx.strokeRect(8, 0, 496, 1016);
+  return c;
+}
+
+/** Grey-scale pebble grain + recessed seams, used as the ball's bump map. */
+function makeBallBump() {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 256;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, 512, 256);
+  for (let i = 0; i < 16000; i++) {
+    const v = 110 + Math.floor(Math.random() * 60);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.beginPath();
+    ctx.arc(Math.random() * 512, Math.random() * 256, 1.2 + Math.random() * 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = '#202020';
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  ctx.moveTo(0, 128);
+  ctx.lineTo(512, 128);
+  ctx.moveTo(128, 0);
+  ctx.lineTo(128, 256);
+  ctx.moveTo(384, 0);
+  ctx.lineTo(384, 256);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(256, 128, 84, 128, 0, 0, Math.PI * 2);
+  ctx.stroke();
   return c;
 }
 
@@ -197,9 +233,11 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       background: 0x07080f,
       fog: { density: 0.022 },
       camera: { fov: 60, far: 120, position: [0, 2.0, 7.6], lookAt: [0, 2.55, -2.2] },
-      exposure: 1.15,
-      bloom: { strength: 0.55, radius: 0.3, threshold: 0.86 },
-      environment: 0.35,
+      exposure: 1.1,
+      bloom: { strength: 0.5, radius: 0.32, threshold: 0.88 },
+      environment: 0.55,
+      studio: { top: 0x3a2c22, bottom: 0x120c08, left: 0x3fd8ff, right: 0xff7a2a, back: 0xffc58a, key: 1.4 },
+      grade: { contrast: 1.1, saturation: 1.1, vignette: 0.38 },
     },
     (engine) => {
       const { scene, camera, quality } = engine;
@@ -215,7 +253,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       });
 
       // ---------------- lighting: arena key + rim lights + soft fill
-      scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x1a1420, 0.65));
+      scene.add(new THREE.HemisphereLight(0xffe6c8, 0x2a1a10, 0.9));
       const key = new THREE.SpotLight(0xfff1dc, 320, 40, Math.PI / 5.5, 0.5, 2);
       key.position.set(-3, 11, 6);
       key.target.position.set(0, 1.5, -1);
@@ -231,7 +269,8 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       courtTex.anisotropy = Math.min(8, engine.renderer.capabilities.getMaxAnisotropy());
       const court = new THREE.Mesh(
         new THREE.PlaneGeometry(14, 28),
-        new THREE.MeshStandardMaterial({ map: courtTex, roughness: 0.32, metalness: 0.05 }),
+        // Varnished hardwood: a clear-coat layer reflects the arena lights over the wood grain.
+        new THREE.MeshPhysicalMaterial({ map: courtTex, roughness: 0.55, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.12, bumpMap: courtTex, bumpScale: 0.6 }),
       );
       court.rotation.x = -Math.PI / 2;
       court.position.set(0, 0, -1);
@@ -239,13 +278,13 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       scene.add(court);
 
       // Crowd stands: rows of instanced "fans" with phone-light sparkles (1 draw call)
-      const fanGeo = new THREE.BoxGeometry(0.35, 0.55, 0.3);
-      const fanMat = new THREE.MeshStandardMaterial({ color: 0x1a1d2c, roughness: 0.9 });
+      const fanGeo = new THREE.CapsuleGeometry(0.17, 0.26, 3, 8);
+      const fanMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 });
       const fanCount = Math.round(260 * quality.propDensity);
       const fans = new THREE.InstancedMesh(fanGeo, fanMat, fanCount);
       const m4 = new THREE.Matrix4();
       const col = new THREE.Color();
-      const palette = [0x22263a, 0x2b2036, 0x1d2a33, 0x332626, 0x2a2a2a];
+      const palette = [0x3b4466, 0x5a3550, 0x2f4d5c, 0x6a3a2c, 0x4a4a52, 0x2d5a44];
       for (let i = 0; i < fanCount; i++) {
         const row = i % 7;
         const side = Math.random();
@@ -256,6 +295,52 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         fans.setColorAt(i, col.setHex(palette[i % palette.length]));
       }
       scene.add(fans);
+
+      // Arena back wall: LED ribbon board + team banners, emissive so it lights the far court.
+      const wallCanvas = document.createElement('canvas');
+      wallCanvas.width = 1024;
+      wallCanvas.height = 256;
+      {
+        const g = wallCanvas.getContext('2d')!;
+        const bg = g.createLinearGradient(0, 0, 0, 256);
+        bg.addColorStop(0, '#07070c');
+        bg.addColorStop(1, '#15100c');
+        g.fillStyle = bg;
+        g.fillRect(0, 0, 1024, 256);
+        // LED ribbon
+        const rib = g.createLinearGradient(0, 0, 1024, 0);
+        rib.addColorStop(0, '#ff6a00');
+        rib.addColorStop(0.5, '#ffb15c');
+        rib.addColorStop(1, '#ff6a00');
+        g.fillStyle = rib;
+        g.fillRect(0, 150, 1024, 34);
+        g.fillStyle = '#120800';
+        g.font = '900 30px system-ui, sans-serif';
+        g.textAlign = 'center';
+        for (let x = 128; x < 1024; x += 256) g.fillText('RIVAL ARCADE', x, 178);
+        // banners
+        ['#00c2ff', '#ff2d7a', '#ffd23f', '#22d3a6', '#a78bfa'].forEach((c, i) => {
+          g.fillStyle = c;
+          g.globalAlpha = 0.85;
+          g.fillRect(70 + i * 200, 18, 70, 110);
+          g.globalAlpha = 1;
+          g.fillStyle = '#0b0b10';
+          g.fillRect(84 + i * 200, 30, 42, 6);
+        });
+        // tiny LED dots
+        for (let i = 0; i < 700; i++) {
+          g.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.5)' : 'rgba(255,170,90,0.4)';
+          g.fillRect(Math.random() * 1024, 196 + Math.random() * 60, 2, 2);
+        }
+      }
+      const wallTex = engine.own(new THREE.CanvasTexture(wallCanvas));
+      wallTex.colorSpace = THREE.SRGBColorSpace;
+      const wall = new THREE.Mesh(
+        new THREE.PlaneGeometry(30, 7.5),
+        new THREE.MeshStandardMaterial({ color: 0x0c0c12, emissive: 0xffffff, emissiveMap: wallTex, emissiveIntensity: 0.9, roughness: 0.6 }),
+      );
+      wall.position.set(0, 8.4, -19); // ribbon sits above the backboard, not behind the rim
+      scene.add(wall);
       scene.add(createStarfield(engine, { count: 300, radius: 30, color: '#ffffff', size: 0.12, yMin: 1 }));
 
       // Light cones
@@ -277,7 +362,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       // ---------------- hoop assembly (moves as one group)
       const hoop = new THREE.Group();
       scene.add(hoop);
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, RIM_Y + 1.1, 16), new THREE.MeshStandardMaterial({ color: 0x2a2e40, metalness: 0.7, roughness: 0.35 }));
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, RIM_Y + 1.1, 16), new THREE.MeshPhysicalMaterial({ color: 0x2a2e40, metalness: 0.9, roughness: 0.3, clearcoat: 0.5 }));
       pole.position.set(0, (RIM_Y + 1.1) / 2, HOOP_Z - BOARD_OFFSET - 0.9);
       pole.castShadow = quality.shadows;
       const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.9), pole.material);
@@ -285,7 +370,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const boardGeo = new THREE.BoxGeometry(1.8, 1.15, 0.05);
       const board = new THREE.Mesh(
         boardGeo,
-        new THREE.MeshPhysicalMaterial({ color: 0xbfd8ff, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.28, depthWrite: false, clearcoat: 1 }),
+        new THREE.MeshPhysicalMaterial({ color: 0xd8e8ff, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.22, depthWrite: false, clearcoat: 1, clearcoatRoughness: 0.02, specularIntensity: 1, envMapIntensity: 2.2 }),
       );
       board.position.set(0, RIM_Y + 0.45, HOOP_Z - BOARD_OFFSET);
       const boardEdge = new THREE.LineSegments(new THREE.EdgesGeometry(boardGeo), new THREE.LineBasicMaterial({ color: new THREE.Color(0xffffff).multiplyScalar(1.3), toneMapped: false }));
@@ -295,7 +380,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         new THREE.LineBasicMaterial({ color: new THREE.Color(0xff5a1f).multiplyScalar(2.4), toneMapped: false }),
       );
       square.position.set(0, RIM_Y + 0.2, HOOP_Z - BOARD_OFFSET + 0.03);
-      const rimMat = new THREE.MeshStandardMaterial({ color: 0xff5500, emissive: 0xff3a00, emissiveIntensity: 0.5, metalness: 0.7, roughness: 0.25 });
+      const rimMat = new THREE.MeshPhysicalMaterial({ color: 0xff5500, emissive: 0xff3a00, emissiveIntensity: 0.35, metalness: 0.85, roughness: 0.22, clearcoat: 0.6 });
       const rim = new THREE.Mesh(new THREE.TorusGeometry(RIM_R, RIM_TUBE, 12, 48), rimMat);
       rim.rotation.x = Math.PI / 2;
       rim.position.set(0, RIM_Y, HOOP_Z);
@@ -322,7 +407,11 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const ballTex = engine.own(new THREE.CanvasTexture(makeBallTexture()));
       ballTex.colorSpace = THREE.SRGBColorSpace;
       const ballGeo = engine.own(new THREE.SphereGeometry(BALL_R, 32, 20));
-      const ballMat = engine.own(new THREE.MeshStandardMaterial({ map: ballTex, roughness: 0.6, metalness: 0.02, emissive: 0xff4400, emissiveIntensity: 0 }));
+      const ballBump = engine.own(new THREE.CanvasTexture(makeBallBump()));
+      // Pebbled leather: bump grain + soft sheen, rough enough to catch the arena lights gently.
+      const ballMat = engine.own(
+        new THREE.MeshPhysicalMaterial({ map: ballTex, bumpMap: ballBump, bumpScale: 1.2, roughness: 0.68, metalness: 0, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xffa060), emissive: 0xff4400, emissiveIntensity: 0 }),
+      );
       const balls: Ball[] = Array.from({ length: MAX_BALLS }, () => {
         const mesh = new THREE.Mesh(ballGeo, ballMat);
         mesh.castShadow = quality.shadows;
@@ -393,12 +482,14 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         const lean = THREE.MathUtils.clamp(s.dx / up, -1.2, 1.2);
         const dz = spawn.z - HOOP_Z;
         let aimX = spawn.x + lean * dz * 0.42;
-        // Aim assist: pull lateral aim and power halfway toward perfect when roughly right
+        // Aim assist (strong at first, easing off as levels rise): pull lateral aim toward the rim
+        // and compress power error, so a roughly-right flick goes in.
+        const L = LEVELS[sim.current.level];
         const err = hoopX - aimX;
-        if (Math.abs(err) < 1.3) aimX += err * 0.5;
-        let power = 1 + (rawPower - 1) * 0.5;
-        power = THREE.MathUtils.clamp(power, 0.55, 1.6);
-        const perfect = Math.abs(hoopX - aimX) < 0.085 && Math.abs(power - 1) < 0.04;
+        if (Math.abs(err) < L.range) aimX += err * L.pull;
+        let power = 1 + (rawPower - 1) * L.comp;
+        power = THREE.MathUtils.clamp(power, 0.6, 1.5);
+        const perfect = Math.abs(hoopX - aimX) < L.perfect && Math.abs(power - 1) < L.perfect * 0.5;
         if (perfect) {
           aimX = hoopX;
           power = 1;
@@ -410,7 +501,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         // Power error moves the landing point short/long (linear, forgiving) rather than scaling
         // the whole launch: ±~15% power still swishes, ±25% rattles, big overshoots can bank in.
         const depth = HOOP_Z + 0.05 - (power - 1) * 1.2;
-        const target = tmp2.set(aimX + (perfect ? lead : lead * 0.6), RIM_Y + 0.05, depth);
+        const target = tmp2.set(aimX + (perfect ? lead : lead * (0.4 + 0.6 * L.pull)), RIM_Y + 0.05, depth);
         solve(spawn, target, flight, out);
         void w;
         return { perfect };
@@ -509,9 +600,10 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           st.level = nextLevel;
           popups.current?.banner(`LEVEL ${nextLevel + 1}`, '#5fe8ff');
         }
-        if (st.level >= 1) {
-          spawn.x = (rng.next() - 0.5) * 2.6;
-          spawn.z = SPAWN.z + (rng.next() - 0.5) * 0.8;
+        const shift = LEVELS[st.level].shift;
+        if (shift > 0) {
+          spawn.x = (rng.next() - 0.5) * shift;
+          spawn.z = SPAWN.z + (rng.next() - 0.5) * 0.3 * shift;
           placeShooter();
         }
         pushHud({ score: st.score, streak: st.streak, level: st.level }, true);
@@ -706,7 +798,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Lean to aim' },
         { icon: <Flame className="w-6 h-6" />, label: '3 in a row = ×2' },
       ]}
-      scoring="Basket 100 · Swish +50 · Bank +25 · Streaks ×2/×3 · Last 10s ×2. The hoop starts moving as you score."
+      scoring="Starts easy: still hoop and strong aim help. Every few baskets the hoop moves faster and the help eases off. Basket 100 · Swish +50 · Bank +25 · Streaks ×2/×3 · Last 10s ×2."
     />
   );
 }

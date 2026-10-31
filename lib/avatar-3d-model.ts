@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { AvatarConfig } from './avatar-types';
 import { SKIN_TONES, HAIR_COLORS, COSMETICS_CATALOG } from './cosmetics-catalog';
 
@@ -37,22 +38,35 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   const back = COSMETICS_CATALOG.find((c) => c.id === avatar.backId);
 
   // Materials
-  const skinMat = new THREE.MeshStandardMaterial({
+  // Physical skin: soft sheen fakes the light-scatter of real skin without a subsurface pass.
+  const skinMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(skin.color),
-    roughness: 0.55,
-    metalness: 0.05,
+    roughness: 0.48,
+    metalness: 0,
+    sheen: 0.6,
+    sheenRoughness: 0.5,
+    sheenColor: new THREE.Color(skin.color).lerp(new THREE.Color(0xff9a7a), 0.5),
+    clearcoat: 0.08,
+    clearcoatRoughness: 0.6,
   });
 
-  const hairMat = new THREE.MeshStandardMaterial({
+  const hairMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(hairColor.color),
-    roughness: 0.65,
-    metalness: 0.15,
+    roughness: 0.42,
+    metalness: 0.05,
+    sheen: 1,
+    sheenRoughness: 0.3,
+    sheenColor: new THREE.Color(hairColor.color).offsetHSL(0, 0, 0.25),
   });
 
-  const shirtMat = new THREE.MeshStandardMaterial({
+  // Fabric: sheen gives cloth its soft rim instead of a plastic highlight.
+  const shirtMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(shirt?.color || '#1e293b'),
-    roughness: 0.6,
-    metalness: 0.1,
+    roughness: 0.72,
+    metalness: 0,
+    sheen: 0.8,
+    sheenRoughness: 0.6,
+    sheenColor: new THREE.Color(shirt?.color || '#1e293b').offsetHSL(0, 0, 0.3),
   });
 
   const shirtAccentMat = new THREE.MeshStandardMaterial({
@@ -63,16 +77,21 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
     emissiveIntensity: 0.35,
   });
 
-  const pantsMat = new THREE.MeshStandardMaterial({
+  const pantsMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(pants?.color || '#0f172a'),
-    roughness: 0.7,
-    metalness: 0.1,
+    roughness: 0.8,
+    metalness: 0,
+    sheen: 0.7,
+    sheenRoughness: 0.7,
+    sheenColor: new THREE.Color(pants?.color || '#0f172a').offsetHSL(0, 0, 0.25),
   });
 
-  const shoesMat = new THREE.MeshStandardMaterial({
+  const shoesMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(shoes?.color || '#ffffff'),
-    roughness: 0.4,
-    metalness: 0.2,
+    roughness: 0.35,
+    metalness: 0,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.25,
   });
 
   const shoesAccentMat = new THREE.MeshStandardMaterial({
@@ -118,7 +137,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
       : { shoulder: 0.32, waist: 0.26, arm: 0.36, hip: 0 };
 
   // 1. Torso
-  const torsoGeo = new THREE.CylinderGeometry(frame.shoulder, frame.waist, 0.72, 10);
+  const torsoGeo = new THREE.CylinderGeometry(frame.shoulder, frame.waist, 0.72, 28, 3);
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.position.y = 1.05;
   torso.castShadow = true;
@@ -126,7 +145,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   disposables.push(torsoGeo);
 
   if (frame.hip) {
-    const hips = mesh(new THREE.CylinderGeometry(frame.waist + 0.01, frame.hip, 0.22, 10), pantsMat);
+    const hips = mesh(new THREE.CylinderGeometry(frame.waist + 0.01, frame.hip, 0.22, 28), pantsMat);
     hips.position.y = -0.42;
     torso.add(hips);
   }
@@ -143,7 +162,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   torso.add(head);
 
   // Head sphere
-  const headGeo = new THREE.SphereGeometry(0.24, 16, 16);
+  const headGeo = new THREE.SphereGeometry(0.24, 40, 28);
   const headMesh = new THREE.Mesh(headGeo, skinMat);
   headMesh.castShadow = true;
   head.add(headMesh);
@@ -323,7 +342,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   }
 
   // 3. Arms (Pivot at shoulders)
-  const armGeo = new THREE.CylinderGeometry(0.08, 0.07, 0.55, 6);
+  const armGeo = new THREE.CapsuleGeometry(0.075, 0.42, 6, 16); // rounded limbs, not hex prisms
   disposables.push(armGeo);
 
   // Left Arm
@@ -344,9 +363,19 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   rightArm.add(rightArmMesh);
   torso.add(rightArm);
 
+  // Hands
+  const handGeo = track(new THREE.SphereGeometry(0.068, 16, 12));
+  [leftArm, rightArm].forEach((arm) => {
+    const hand = new THREE.Mesh(handGeo, skinMat);
+    hand.position.y = -0.56;
+    hand.scale.set(1, 1.15, 0.9);
+    hand.castShadow = true;
+    arm.add(hand);
+  });
+
   // 4. Legs (Pivot at hips)
-  const legGeo = new THREE.CylinderGeometry(0.09, 0.08, 0.65, 6);
-  const shoeGeo = new THREE.BoxGeometry(0.16, 0.12, 0.24);
+  const legGeo = new THREE.CapsuleGeometry(0.085, 0.5, 6, 16);
+  const shoeGeo = new RoundedBoxGeometry(0.16, 0.12, 0.25, 3, 0.045);
   disposables.push(legGeo, shoeGeo);
 
   // Left Leg
@@ -374,7 +403,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   root.add(rightLeg);
 
   // Shoe soles in the accent colour, and a side stripe on trims with an accent.
-  const soleGeo = track(new THREE.BoxGeometry(0.17, 0.03, 0.25));
+  const soleGeo = track(new RoundedBoxGeometry(0.17, 0.035, 0.26, 2, 0.015));
   const stripeLegGeo = track(new THREE.BoxGeometry(0.02, 0.5, 0.05));
   const pantsAccent = pants?.accentColor ? glow(pants.accentColor, 0.5) : null;
   [leftLeg, rightLeg].forEach((leg, i) => {

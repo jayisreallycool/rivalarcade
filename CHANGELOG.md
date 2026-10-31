@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-10-31 — Real-3D rendering upgrade + easy-to-hard difficulty
+
+**Engine**
+- Image-based lighting from a procedural neon studio (PMREM, built once) on every quality tier — PBR metals, glossy floors and gems now reflect real light.
+- New post chain: GTAO ambient occlusion (high tier, opt-in per game) → bloom → ACES → FXAA (medium) → cinematic grade (contrast, saturation, vignette, soft fringing). Low tier gets a free CSS vignette.
+- Soft PCF shadows sized per tier (PCFSoft was removed in three r18x).
+- Avatars: rounded capsule limbs, hands, smoother head/torso, physical skin/fabric/hair sheen, clear-coated shoes.
+- Dunk Rush: varnished clear-coat court, pebbled ball, metal rim, glass backboard, lit crowd and LED ribbon wall. Gem Surge: a distinct cut per colour with iridescent faceted gems. Reflex/Neon Dash: glossy floors, iridescent orbs and crystals.
+
+**Difficulty — every game now starts easy and ramps up**
+- Neon Dash: starts at about 40% of top speed with wide gaps and only spikes/crystals; arches join at ~10s, double-lane walls late. 3 shields instead of one-hit death.
+- Dunk Rush: 5-level ladder — strong aim assist and a still hoop at first; the hoop moves and the help eases off as you score.
+- Cyber Reflex: 1–2 slow nodes and no hazards at first, ramping to 5 fast nodes with hazards; perfect window tightens.
+- Gem Surge: 4 gem types for the first 20s, then 5; idle hint pulses a valid swap; dead boards reshuffle.
+- Brick Blitz: 5 starting balls, soft sparse rows early, full-strength walls from row ~14, one shield save.
+- Tests: `tests/playtest.cjs` (novice bots incl. a reactive runner via `?debug`), `tests/shots.cjs` (per-tier screenshots).
+
 ## 2026-10-30 — Triumph-style modes, leagues and Brick Blitz
 
 - **New game: Brick Blitz** — aim-and-launch brick breaker (drag to aim with bounce preview, release to fire a volley, grab +1 balls, seeded walls). Canvas 2D, so it runs on every phone.

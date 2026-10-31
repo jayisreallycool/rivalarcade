@@ -28,6 +28,17 @@ type NodeType = 'target' | 'hazard' | 'bonus';
 const NODE_COLORS: Record<NodeType, number> = { target: 0x00f0ff, hazard: 0xff0055, bonus: 0xffb800 };
 const ROUND_SECONDS = 40;
 const RING_START = 2.4;
+/**
+ * Difficulty by time into the round (same for every player): k goes 0 → 1 over RAMP_SECONDS.
+ * Early: one or two slow targets at a time, no hazards, a wide "perfect" window.
+ * Late: up to five fast nodes, red hazards mixed in, a tight perfect window.
+ */
+const RAMP_SECONDS = 32;
+const rampK = (elapsed: number) => {
+  const x = Math.min(1, Math.max(0, elapsed / RAMP_SECONDS));
+  return x * x * (3 - 2 * x);
+};
+const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 const CLUTCH_SECONDS = 10;
 const TOUCH_SLOP = 46; // px: a near-miss tap still counts on phones
 
@@ -78,7 +89,9 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
       camera: { fov: 50, far: 90, position: [0, 3.8, 8.2], lookAt: [0, 1.2, 0] },
       exposure: 1.25,
       bloom: { strength: 0.75, radius: 0.3, threshold: 0.82 },
-      environment: 0.35,
+      environment: 0.65,
+      ao: true,
+      studio: { top: 0x1a1640, left: 0x00f0ff, right: 0x8b5cf6 },
     },
     (engine) => {
       const { scene, camera } = engine;
@@ -100,12 +113,12 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
 
       addArenaLights(engine, { sky: 0x00f0ff, ground: 0x1a1233, hemi: 1.2, key: 1.8, keyPos: [6, 12, 8], rim: 0x8b5cf6, shadowFrustum: 6 });
 
-      const floor = createNeonGridFloor(engine, { width: 60, length: 60, cells: [30, 30], color: '#8b5cf6', lineWidth: 2, glow: 0.45 });
+      const floor = createNeonGridFloor(engine, { width: 60, length: 60, cells: [30, 30], color: '#8b5cf6', lineWidth: 2, glow: 0.45, gloss: 0.9 });
       scene.add(floor.mesh);
       scene.add(createStarfield(engine, { count: 600, radius: 50, yMin: 3 }));
 
       // Command platform
-      const platform = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.6, 0.4, 48), new THREE.MeshStandardMaterial({ color: 0x121424, roughness: 0.3, metalness: 0.7 }));
+      const platform = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.6, 0.4, 48), new THREE.MeshPhysicalMaterial({ color: 0x121424, roughness: 0.25, metalness: 0.85, clearcoat: 1, clearcoatRoughness: 0.06 }));
       platform.position.y = 0.2;
       platform.receiveShadow = engine.quality.shadows;
       const pRing = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.04, 8, 96), neonMaterial(0x00f0ff, 1.6));
@@ -150,7 +163,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
       const orbMats = {} as Record<NodeType, THREE.Material>;
       const ringMats = {} as Record<NodeType, THREE.Material>;
       (Object.keys(NODE_COLORS) as NodeType[]).forEach((t) => {
-        orbMats[t] = engine.own(new THREE.MeshStandardMaterial({ color: NODE_COLORS[t], emissive: NODE_COLORS[t], emissiveIntensity: 0.8, roughness: 0.2, metalness: 0.3 }));
+        orbMats[t] = engine.own(new THREE.MeshPhysicalMaterial({ color: NODE_COLORS[t], emissive: NODE_COLORS[t], emissiveIntensity: 0.55, roughness: 0.12, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.05, iridescence: 0.4, envMapIntensity: 1.6 }));
         ringMats[t] = engine.own(neonMaterial(NODE_COLORS[t], 1.4));
       });
 
@@ -240,7 +253,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
           particles.emit(tmp, 0xff0055, { count: 30, speed: 6 });
           popups.current?.pop(`-${loss}`, sp.x, sp.y, { color: '#fb7185', size: 'md' });
         } else {
-          const accurate = Math.abs(node.ringScale - 1.0) < 0.25;
+          const accurate = Math.abs(node.ringScale - 1.0) < lerp(0.42, 0.22, rampK(ROUND_SECONDS - s.timeLeft));
           const bonus = node.type === 'bonus' ? 2 : 1;
           const hitBase = 160 * bonus;
           const perfectBase = accurate ? 90 * bonus : 0;
@@ -321,10 +334,13 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
           else pushHud({ timeLeft: s.timeLeft, clutch: s.timeLeft <= CLUTCH_SECONDS });
 
           s.spawnTimer += dt;
-          if (s.spawnTimer > 0.65 && nodes.length < 5) {
+          const k = rampK(ROUND_SECONDS - s.timeLeft);
+          const maxNodes = Math.round(lerp(2, 5, k));
+          if (s.spawnTimer > lerp(1.05, 0.5, k) && nodes.length < maxNodes) {
             s.spawnTimer = 0;
             const rng = rngRef.current;
-            const isHazard = rng() < 0.22;
+            const hz = rng();
+            const isHazard = ROUND_SECONDS - s.timeLeft > 7 && hz < lerp(0.08, 0.24, k);
             const isBonus = !isHazard && rng() < 0.25;
             const type: NodeType = isHazard ? 'hazard' : isBonus ? 'bonus' : 'target';
             const n = pool.acquire();
@@ -343,7 +359,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
         for (let i = nodes.length - 1; i >= 0; i--) {
           const n = nodes[i];
           if (n.group.scale.x < 1) n.group.scale.setScalar(Math.min(1, n.group.scale.x + dt * 6)); // pop-in
-          if (s.playing) n.ringScale -= 1.1 * dt;
+          if (s.playing) n.ringScale -= lerp(0.62, 1.25, rampK(ROUND_SECONDS - s.timeLeft)) * dt;
           n.ring.scale.setScalar(n.ringScale);
           n.orb.rotation.y += 2 * dt;
           n.orb.rotation.x += 1.3 * dt;
@@ -411,7 +427,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
         { icon: <Hand className="w-6 h-6" />, label: 'Slash across many' },
         { icon: <ShieldAlert className="w-6 h-6" />, label: 'Avoid red' },
       ]}
-      scoring="Hit 160 · Perfect ring timing +90 · Gold ×2 · Every 5 in a row raises the multiplier (max ×5) · Red −150 · Last 10s ×2."
+      scoring="Starts slow with no red nodes; speeds up as the clock runs. Hit 160 · Perfect ring timing +90 · Gold ×2 · Every 5 in a row raises the multiplier (max ×5) · Red −150 · Last 10s ×2."
     />
   );
 }

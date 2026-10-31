@@ -22,18 +22,19 @@ function canvasTexture(engine: GameEngine, w: number, h: number, draw: (ctx: Can
  * the glow texture becomes the colour map, which reads almost identically in a dark neon
  * scene and skips all per-pixel lighting.
  */
-function surfaceMaterial(engine: GameEngine, params: THREE.MeshStandardMaterialParameters): THREE.Material {
+function surfaceMaterial(engine: GameEngine, params: THREE.MeshPhysicalMaterialParameters): THREE.Material {
   if (engine.quality.tier === 'low' && params.emissiveMap) {
     const k = typeof params.emissiveIntensity === 'number' ? params.emissiveIntensity : 1;
     return new THREE.MeshBasicMaterial({ map: params.emissiveMap, color: new THREE.Color(k, k, k) });
   }
-  return new THREE.MeshStandardMaterial(params);
+  // Glossy surfaces get a clear-coat layer: neon and light strips reflect in them like wet asphalt.
+  return params.clearcoat ? new THREE.MeshPhysicalMaterial(params) : new THREE.MeshStandardMaterial(params);
 }
 
 /** Glowing grid floor. Scroll `texture.offset.y` to fake forward motion for free. */
 export function createNeonGridFloor(
   engine: GameEngine,
-  opts: { width: number; length: number; color?: string; base?: string; cells?: [number, number]; lineWidth?: number; glow?: number },
+  opts: { width: number; length: number; color?: string; base?: string; cells?: [number, number]; lineWidth?: number; glow?: number; /** 0–1 wet/polished clear coat. */ gloss?: number },
 ) {
   const color = opts.color ?? '#00f0ff';
   const base = opts.base ?? '#0b0d16';
@@ -60,6 +61,7 @@ export function createNeonGridFloor(
     emissive: new THREE.Color(1, 1, 1),
     emissiveMap: emissive,
     emissiveIntensity: opts.glow ?? 0.6,
+    ...(opts.gloss ? { clearcoat: opts.gloss, clearcoatRoughness: 0.08, roughness: 0.4 } : {}),
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(opts.width, opts.length), material);
   mesh.rotation.x = -Math.PI / 2;

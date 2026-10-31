@@ -77,9 +77,11 @@ ok('settlement payouts', () => {
   assert.strictEqual(r.rank, t.bots.length + 1); assert.strictEqual(r.coins, 15);
 });
 ok('rival reference adapts to player form', () => {
-  assert.strictEqual(referenceScore('neon-dash', []), 2200);
-  const strong = referenceScore('neon-dash', [9000, 9500, 10000, 9800, 9200]);
-  assert(strong > 8000, strong);
+  assert.strictEqual(referenceScore('neon-dash', []), 9000);
+  const strong = referenceScore('neon-dash', [20000, 21000, 22000, 20500, 21500]);
+  assert(strong > 18000, strong);
+  const weak = referenceScore('neon-dash', [3000, 3200, 2800, 3100, 2900]);
+  assert(weak < 4000, weak);
   const r = mulberry32(1); const scores = Array.from({ length: 500 }, () => botScore(r, 1000, 0.8, 1.2));
   assert(Math.min(...scores) >= 800 && Math.max(...scores) <= 1200);
   const avg = scores.reduce((a, b) => a + b) / scores.length; assert(avg > 960 && avg < 1040, avg);

@@ -3,8 +3,11 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FXAAPass } from 'three/addons/postprocessing/FXAAPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { detectQuality, QualityProfile } from './quality';
+import { createStudioScene, GradeShader } from './studio';
 
 /**
  * RivalArcade 3D engine.
@@ -13,7 +16,12 @@ import { detectQuality, QualityProfile } from './quality';
  * frame loop and every GPU resource, so games only describe their world and their rules.
  *
  *  - Quality tiers (lib/engine/quality.ts) decide pixel ratio, shadows, bloom, particle caps.
- *  - Neon bloom via EffectComposer (RenderPass → UnrealBloomPass → OutputPass).
+ *  - Image-based lighting from a procedural neon studio (PMREM, built once) on every tier,
+ *    so PBR metals, glossy floors and glassy gems reflect real light.
+ *  - Post chain: RenderPass → GTAO ambient occlusion (high) → UnrealBloom → OutputPass (ACES)
+ *    → FXAA (medium) → cinematic grade (contrast, saturation, vignette, soft fringing).
+ *    Low tier skips post entirely and gets a free CSS vignette instead.
+ *  - Soft PCF shadows sized per tier.
  *  - Adaptive resolution: pixel ratio drops when frames run long, recovers when they are fast.
  *  - The loop pauses when the tab is hidden, the canvas is scrolled off-screen,
  *    or the WebGL context is lost, and resumes cleanly (no giant delta spike).
@@ -36,8 +44,14 @@ export interface EngineOptions {
   };
   exposure?: number;
   bloom?: { strength?: number; radius?: number; threshold?: number };
-  /** Soft studio reflections for PBR materials (medium/high tiers). Number = intensity. */
+  /** Image-based lighting strength from the neon studio (all tiers). Default 0.6. */
   environment?: number;
+  /** Tint the studio's light strips / dome to match the arena. */
+  studio?: Parameters<typeof createStudioScene>[0];
+  /** Screen-space ambient occlusion (high tier only). Off by default: opt in for mostly-opaque scenes. */
+  ao?: boolean;
+  /** Final grade overrides. */
+  grade?: { contrast?: number; saturation?: number; vignette?: number };
   /** Frame-time budget the adaptive resolution aims for. Default 60. */
   targetFps?: number;
 }
@@ -92,6 +106,7 @@ export class GameEngine {
   private lastFrameMs = 0;
 
   private statsEl: HTMLDivElement | null = null;
+  private vignetteEl: HTMLDivElement | null = null;
   private readonly resizeListeners = new Set<(w: number, h: number, aspect: number) => void>();
   private readonly projected = new THREE.Vector3();
 
@@ -128,17 +143,18 @@ export class GameEngine {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = options.exposure ?? 1.2;
     this.renderer.shadowMap.enabled = this.quality.shadows;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap; // filtered + radius-softened (PCFSoft was removed in r18x)
     // Count draw calls across every composer pass, reset once per frame (see frame()).
     this.renderer.info.autoReset = false;
 
-    // Reflections: a pre-filtered studio environment makes metals/gems/glass read as real.
-    if (options.environment && this.quality.tier !== 'low') {
+    // Image-based lighting: a pre-filtered neon studio makes metals, gems, glass and glossy floors
+    // read as real. Generated once (a few ms), then free every frame — so every tier gets it.
+    {
       const pmrem = new THREE.PMREMGenerator(this.renderer);
-      const room = new RoomEnvironment();
-      this.scene.environment = this.own(pmrem.fromScene(room, 0.04).texture);
-      this.scene.environmentIntensity = options.environment;
-      room.dispose();
+      const studio = createStudioScene(options.studio);
+      this.scene.environment = this.own(pmrem.fromScene(studio.scene, 0.035).texture);
+      this.scene.environmentIntensity = options.environment ?? 0.6;
+      studio.dispose();
       pmrem.dispose();
     }
 
@@ -160,6 +176,16 @@ export class GameEngine {
       composer.setSize(width, height);
       composer.addPass(new RenderPass(this.scene, this.camera));
 
+      // Contact darkening where objects meet floors and walls — the biggest single "real 3D" cue.
+      if (this.quality.tier === 'high' && options.ao) {
+        const ao = new GTAOPass(this.scene, this.camera, width, height);
+        ao.output = GTAOPass.OUTPUT.Default;
+        ao.blendIntensity = 0.85;
+        ao.updateGtaoMaterial({ radius: 0.5, distanceExponent: 1.4, thickness: 1, scale: 1, samples: 12 });
+        ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 12 });
+        composer.addPass(ao);
+      }
+
       const b = options.bloom ?? {};
       this.baseBloomStrength = b.strength ?? 0.7;
       const bloom = new UnrealBloomPass(new THREE.Vector2(width, height), this.baseBloomStrength, b.radius ?? 0.25, b.threshold ?? 0.85);
@@ -169,10 +195,25 @@ export class GameEngine {
       bloom.setSize = (w: number, h: number) => baseSetSize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
+      // Medium has no MSAA in the composer: FXAA cleans the edges for ~0.3 ms.
+      if (!this.quality.antialias) composer.addPass(new FXAAPass());
+      const grade = new ShaderPass(GradeShader);
+      const g = options.grade ?? {};
+      if (g.contrast !== undefined) grade.uniforms.contrast.value = g.contrast;
+      if (g.saturation !== undefined) grade.uniforms.saturation.value = g.saturation;
+      if (g.vignette !== undefined) grade.uniforms.vignette.value = g.vignette;
+      composer.addPass(grade);
       composer.setSize(width, height);
 
       this.composer = composer;
       this.bloomPass = bloom;
+    }
+
+    // Low tier: no post chain, so fake the vignette with a free CSS overlay.
+    if (!this.composer) {
+      this.vignetteEl = document.createElement('div');
+      this.vignetteEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.45) 100%)';
+      host.appendChild(this.vignetteEl);
     }
 
     this.bindLifecycle(canvas);
@@ -334,8 +375,10 @@ export class GameEngine {
     light.castShadow = this.quality.shadows;
     if (!this.quality.shadows) return;
     light.shadow.mapSize.set(this.quality.shadowMapSize, this.quality.shadowMapSize);
-    light.shadow.bias = -0.0005;
-    light.shadow.normalBias = 0.02;
+    light.shadow.bias = -0.0004;
+    light.shadow.normalBias = 0.025;
+    light.shadow.radius = this.quality.tier === 'high' ? 5 : 3; // soft penumbra
+    light.shadow.intensity = 0.85;
     if (light instanceof THREE.DirectionalLight) {
       const cam = light.shadow.camera;
       cam.left = -frustum;
@@ -412,6 +455,7 @@ export class GameEngine {
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     this.statsEl?.remove();
+    this.vignetteEl?.remove();
 
     disposeObjectTree(this.scene);
     this.owned.forEach((r) => r.dispose());

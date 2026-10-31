@@ -7,3 +7,4 @@ export { ParticleBursts } from './effects';
 export type { BurstOptions } from './effects';
 export { createNeonGridFloor, createCityscape, createStarfield, createBlobShadow, neonMaterial, addArenaLights } from './environment';
 export { useGameEngine, useLatest, useStructuralMemo, useThrottledHud } from './react';
+export { createStudioScene, GradeShader } from './studio';

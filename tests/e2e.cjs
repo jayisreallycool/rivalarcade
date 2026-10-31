@@ -36,7 +36,7 @@ const watch = (page, label) => {
   });
 };
 const nav = (page, label) => page.locator('nav button', { hasText: label }).click();
-async function waitResults(page, timeout = 40000) {
+async function waitResults(page, timeout = 150000) {
   // Steer randomly so runner games end naturally; timed games just run out.
   const keys = ['ArrowLeft', 'ArrowRight'];
   const t0 = Date.now();
@@ -54,6 +54,12 @@ async function waitResults(page, timeout = 40000) {
   // ------------------------------------------------------------ desktop main flow
   console.log('\nDESKTOP 1280×900');
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  // Software-rendered CI browsers are slow; the low tier keeps game time close to real time.
+  await ctx.addInitScript(() => {
+    try {
+      if (!localStorage.getItem('ra.quality')) localStorage.setItem('ra.quality', 'low');
+    } catch {}
+  });
   const page = await ctx.newPage();
   watch(page, 'desktop');
   await page.clock.install({ time: new Date() });

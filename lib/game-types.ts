@@ -138,9 +138,9 @@ export interface MatchInfo {
  * Tuned against the 3D games' actual scoring.
  */
 export const SCORE_BASELINE: Record<GameId, number> = {
-  'neon-dash': 2200,
+  'neon-dash': 9000,
   'dunk-rush': 2600,
   'cyber-reflex': 6000,
   'gem-surge': 5000,
-  'brick-blitz': 8000,
+  'brick-blitz': 10000,
 };

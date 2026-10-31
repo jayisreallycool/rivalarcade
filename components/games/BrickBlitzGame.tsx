@@ -20,7 +20,9 @@ const COLS = 7;
 const ROWS = 10; // row ROWS-1 is the danger line
 const ROUND_SECONDS = 90;
 const CLUTCH_SECONDS = 10;
-const START_BALLS = 3;
+const START_BALLS = 5;
+/** One free save: the first time the wall reaches the line, the bottom rows are blasted away. */
+const SAVES = 1;
 const FIRE_GAP = 0.065; // s between balls in a volley
 const MIN_ANGLE = (10 * Math.PI) / 180;
 const HIT_POINTS = 10;
@@ -59,7 +61,7 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
   const popups = useRef<PopupApi | null>(null);
   const onFinishRef = useLatest(onFinish);
   const [phase, setPhase] = useState<'ready' | 'playing' | 'over'>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, balls: START_BALLS, turn: 1, timeLeft: ROUND_SECONDS, clutch: false, combo: 0 });
+  const [hud, pushHud] = useThrottledHud({ score: 0, balls: START_BALLS, turn: 1, timeLeft: ROUND_SECONDS, clutch: false, combo: 0, saves: SAVES });
   const api = useRef<{ start: () => void; drag: (s: Swipe, p: 'start' | 'move' | 'end') => void; tap: () => void }>({ start: () => {}, drag: () => {}, tap: () => {} });
 
   useEffect(() => {
@@ -119,6 +121,7 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
     let dropAnim = 0;
     let pendingBalls = 0;
     let shake = 0;
+    let saves = SAVES;
     const s = { score: 0, timeLeft: ROUND_SECONDS, clutchAnnounced: false, playing: false, pHits: 0, pBreaks: 0, pClears: 0, pStars: 0, pClutch: 0, pCombo: 0, broken: 0, bestVolley: 0 };
 
     const award = (base: number, cat: 'pHits' | 'pBreaks' | 'pClears' | 'pStars', mult = 1) => {
@@ -134,12 +137,14 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
 
     const spawnRow = () => {
       const row: (Cell | null)[] = new Array(COLS).fill(null);
-      const tough = turn >= 6 && rng() < 0.3;
-      let count = 2 + Math.floor(rng() * (turn < 8 ? 3 : 4)); // 2..4 early, 2..5 later
-      if (turn > 12) count = Math.min(6, count + 1);
+      // Difficulty curve: soft bricks and sparse rows early, full-strength walls from row ~14.
+      const tough = turn >= 8 && rng() < 0.3;
+      let count = turn < 5 ? 1 + Math.floor(rng() * 3) : turn < 10 ? 2 + Math.floor(rng() * 3) : 2 + Math.floor(rng() * 4);
+      if (turn > 14) count = Math.min(6, count + 1);
+      const base = Math.max(1, Math.round(turn * Math.min(1, 0.45 + turn * 0.04)));
       const cols = [...Array(COLS).keys()].sort(() => rng() - 0.5);
       for (let i = 0; i < count; i++) {
-        const hp = tough && rng() < 0.4 ? turn * 2 : turn;
+        const hp = tough && rng() < 0.4 ? base * 2 : base;
         row[cols[i]] = { kind: 'brick', hp, max: hp, flash: 0 };
       }
       row[cols[count]] = { kind: 'ball' };
@@ -155,6 +160,7 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
       turn = 2;
       grid[0] = spawnRow();
       ballCount = START_BALLS;
+      saves = SAVES;
       launchX = COLS / 2;
       balls = [];
       sparks = [];
@@ -204,7 +210,7 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
       reset();
       s.playing = true;
       state = 'idle';
-      pushHud({ score: 0, balls: ballCount, turn: 1, timeLeft: ROUND_SECONDS, clutch: false, combo: 0 }, true);
+      pushHud({ score: 0, balls: ballCount, turn: 1, timeLeft: ROUND_SECONDS, clutch: false, combo: 0, saves: SAVES }, true);
       setPhase('playing');
     };
 
@@ -375,8 +381,28 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
       // anything on the danger row → game over
       const last = grid[ROWS - 1];
       if (last.some((c) => c?.kind === 'brick')) {
-        finish('wall');
-        return;
+        if (saves > 0) {
+          saves -= 1;
+          // Blast the three lowest rows clear.
+          for (let r = ROWS - 3; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++) {
+              const cell = grid[r][c];
+              if (cell?.kind === 'brick')
+                for (let i = 0; i < 6; i++) {
+                  const a = rng() * Math.PI * 2;
+                  sparks.push({ x: c + 0.5, y: r + 0.5, vx: Math.cos(a) * 5, vy: Math.sin(a) * 5, life: 0.6, color: '#fb7185' });
+                }
+              grid[r][c] = null;
+            }
+          shake = 1;
+          popups.current?.banner('SHIELD SAVE!', '#fb7185');
+          sound.playPowerup();
+          haptic('big');
+          pushHud({ saves });
+        } else {
+          finish('wall');
+          return;
+        }
       }
       // pickups that reach the floor are collected automatically
       last.forEach((c, i) => {
@@ -722,6 +748,9 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
     <>
       <span className="px-2 py-0.5 rounded-full bg-white/90 text-black text-[11px] font-black">●×{hud.balls}</span>
       <span className="px-2 py-0.5 rounded-full bg-white/10 text-white/80 text-[11px] font-black">ROW {hud.turn}</span>
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${hud.saves > 0 ? 'bg-rose-500 text-white' : 'bg-white/10 text-white/30'}`} title="Shield save">
+        ◆ {hud.saves}
+      </span>
       {hud.combo >= 12 && <span className="px-2 py-0.5 rounded-full bg-cyan-400 text-black text-[11px] font-black">{hud.combo} HITS</span>}
     </>
   );
@@ -748,7 +777,7 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
         { icon: <Hand className="w-6 h-6" />, label: 'Release to fire' },
         { icon: <CirclePlus className="w-6 h-6" />, label: 'Grab +1 balls' },
       ]}
-      scoring="10 per hit · Break bonus grows with brick toughness · Long volleys multiply · Clear the board +1000 · Last 10s ×2. Tap during a volley to fast-forward. Don't let the wall reach the red line. Same wall for every player."
+      scoring="10 per hit · Break bonus grows with brick toughness · Long volleys multiply · Clear the board +1000 · Last 10s ×2. Starts with soft bricks; the wall toughens each row. One shield save if the wall hits the red line. Tap during a volley to fast-forward. Same wall for every player."
     />
   );
 }

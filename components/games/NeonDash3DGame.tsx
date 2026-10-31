@@ -36,8 +36,24 @@ interface Obstacle {
 }
 
 const LANES = [-2.5, 0, 2.5];
-const BASE_SPEED = 22;
-const MAX_SPEED = 36;
+/**
+ * Difficulty curve (by time into the run, identical for every player on a seed):
+ *   0–12s  slow road, wide gaps, only spikes + crystals  → learn lane swipes and jumping
+ *   12–30s speed builds, laser arches (slide) join the mix
+ *   30s+   top speed, tight gaps, some double-lane walls
+ * Three shields: a hit costs one (and your combo) instead of ending the run.
+ */
+const BASE_SPEED = 12;
+const MAX_SPEED = 31;
+const RAMP_SECONDS = 48;
+const GAP_EASY = 38;
+const GAP_HARD = 17;
+const SHIELDS = 3;
+const INVULN = 1.4;
+const ramp = (elapsed: number) => {
+  const x = Math.min(1, Math.max(0, elapsed / RAMP_SECONDS));
+  return x * x * (3 - 2 * x); // smoothstep: gentle start, gentle top-out
+};
 const CITY_SEGMENT = 180;
 const CELL_LENGTH = 4;
 const ROUND_SECONDS = 60;
@@ -53,7 +69,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
   const stableAvatar = useStructuralMemo(avatar);
   const onFinishRef = useLatest(onFinish);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false });
+  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false, shields: SHIELDS });
   const popups = useRef<PopupApi | null>(null);
   const resetWorldRef = useRef<() => void>(() => {});
 
@@ -86,6 +102,9 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
     pClutch: 0,
     crystals: 0,
     dodges: 0,
+    shields: SHIELDS,
+    invuln: 0,
+    hits: 0,
   });
 
   const totalScore = () => Math.floor(sim.current.score);
@@ -139,7 +158,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       score: 0,
       combo: 1,
       distance: 0,
-      nextSpawnZ: -30,
+      nextSpawnZ: -18, // first hazard ~3.5s after GO
       action: 'run',
       shake: 0,
       bestCombo: 1,
@@ -152,11 +171,14 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       pClutch: 0,
       crystals: 0,
       dodges: 0,
+      shields: SHIELDS,
+      invuln: 0,
+      hits: 0,
       playing: true,
     });
     rngRef.current = mulberry32(seedRef.current ?? randomSeed());
     resetWorldRef.current();
-    pushHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false }, true);
+    pushHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false, shields: SHIELDS }, true);
     setPhase('playing');
   }, [pushHud, seedRef]);
 
@@ -200,7 +222,8 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       camera: { fov: 58, far: 220, position: [0, 3.8, 6.5], lookAt: [0, 1.2, -8] },
       exposure: 1.15,
       bloom: { strength: 0.65, radius: 0.22, threshold: 0.85 },
-      environment: 0.3,
+      environment: 0.6,
+      studio: { top: 0x2a1640, left: 0x00f0ff, right: 0xff2d7a },
     },
     (engine) => {
       const { scene, camera, quality } = engine;
@@ -218,7 +241,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       addArenaLights(engine, { sky: 0x7fdfff, hemi: 0.9, key: 1.8, keyPos: [8, 16, 10], rim: 0xff0055, shadowFrustum: 10 });
 
       // Road: scrolling neon grid (lane lines are the grid columns)
-      const road = createNeonGridFloor(engine, { width: 7.5, length: 240, cells: [3, 240 / CELL_LENGTH], color: '#00f0ff', lineWidth: 3 });
+      const road = createNeonGridFloor(engine, { width: 7.5, length: 240, cells: [3, 240 / CELL_LENGTH], color: '#00f0ff', lineWidth: 3, gloss: 1 });
       road.mesh.position.z = -100;
       scene.add(road.mesh);
 
@@ -284,13 +307,13 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
 
       // Shared obstacle resources (owned → disposed even while pooled out of the scene)
       const spikeGeo = engine.own(new THREE.ConeGeometry(0.7, 1.4, 6));
-      const spikeMat = engine.own(new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0055, emissiveIntensity: 1.2, roughness: 0.3 }));
+      const spikeMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0xff0055, emissive: 0xff0055, emissiveIntensity: 0.9, roughness: 0.18, metalness: 0.3, clearcoat: 1 }));
       const beamGeo = engine.own(new THREE.BoxGeometry(2.3, 0.3, 0.3));
       const beamMat = engine.own(neonMaterial(0xffb800, 2.4));
       const postGeo = engine.own(new THREE.CylinderGeometry(0.1, 0.1, 2.0, 8));
-      const postMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x1a1d2e, metalness: 0.6, roughness: 0.4 }));
+      const postMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0x1a1d2e, metalness: 0.9, roughness: 0.28, clearcoat: 0.6 }));
       const crystalGeo = engine.own(new THREE.OctahedronGeometry(0.5, 0));
-      const crystalMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x00f0ff, emissive: 0x00f0ff, emissiveIntensity: 1.6, roughness: 0.1, metalness: 0.8 }));
+      const crystalMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0x00f0ff, emissive: 0x00f0ff, emissiveIntensity: 1.1, roughness: 0.05, metalness: 0.2, clearcoat: 1, iridescence: 0.8, envMapIntensity: 2, flatShading: true }));
 
       const show = (o: THREE.Object3D) => scene.add(o);
       const hide = (o: THREE.Object3D) => scene.remove(o);
@@ -316,6 +339,10 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       Object.values(pools).forEach((p) => p.warm(6));
 
       const obstacles: Obstacle[] = [];
+      // Test hook (?debug): lets automated play-tests see the road like a player does.
+      if (new URLSearchParams(window.location.search).has('debug')) {
+        (window as unknown as { __dash?: unknown }).__dash = { sim: sim.current, obstacles: () => obstacles.map((o) => ({ lane: o.lane, z: o.obj.position.z, type: o.type, collected: o.collected })) };
+      }
       const tmp = new THREE.Vector3();
       const drift = new THREE.Vector3();
 
@@ -407,7 +434,9 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
         if (s.playing) {
           award((s.speed * dt) / 4, 'pDistance');
           s.distance += s.speed * dt;
-          s.speed = Math.min(MAX_SPEED, BASE_SPEED + s.distance / 150);
+          const k = ramp(ROUND_SECONDS - s.timeLeft);
+          s.speed = BASE_SPEED + (MAX_SPEED - BASE_SPEED) * k;
+          s.invuln = Math.max(0, s.invuln - dt);
           s.currentX += (s.targetX - s.currentX) * (1 - Math.exp(-14 * dt));
 
           if (s.isJumping) {
@@ -430,14 +459,26 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
 
           // Spawn ahead
           if (s.nextSpawnZ > -130) {
-            s.nextSpawnZ -= 20;
-            const lane = Math.floor(rngRef.current() * 3);
-            const roll = rngRef.current();
-            const type: ObstacleType = roll < 0.45 ? 'spike' : roll < 0.8 ? 'laser_arch' : 'crystal';
-            const obj = pools[type].acquire();
-            obj.position.set(LANES[lane], type === 'spike' ? 0.7 : type === 'crystal' ? 1.2 : 0, s.nextSpawnZ);
-            obj.visible = true;
-            obstacles.push({ obj, lane, type, collected: false });
+            const k = ramp(ROUND_SECONDS - s.timeLeft);
+            s.nextSpawnZ -= GAP_EASY + (GAP_HARD - GAP_EASY) * k;
+            const rng = rngRef.current;
+            const lane = Math.floor(rng() * 3);
+            const roll = rng();
+            const crystalP = 0.45 - 0.25 * k;
+            const archP = k < 0.2 ? 0 : 0.4 * k; // slides join once you're warmed up
+            const type: ObstacleType = roll < crystalP ? 'crystal' : roll < crystalP + archP ? 'laser_arch' : 'spike';
+            const place = (t: ObstacleType, ln: number) => {
+              const obj = pools[t].acquire();
+              obj.position.set(LANES[ln], t === 'spike' ? 0.7 : t === 'crystal' ? 1.2 : 0, s.nextSpawnZ);
+              obj.visible = true;
+              obstacles.push({ obj, lane: ln, type: t, collected: false });
+            };
+            place(type, lane);
+            // Late game: a second hazard in another lane, always leaving one lane open.
+            const dbl = rng();
+            if (type !== 'crystal' && k > 0.6 && dbl < 0.35 * k) place(rng() < 0.5 ? 'spike' : 'laser_arch', (lane + 1 + Math.floor(rng() * 2)) % 3);
+            // Crystal trails early on reward lane changes.
+            if (type !== 'crystal' && k < 0.5 && dbl > 0.7) place('crystal', (lane + 1) % 3);
           }
           s.nextSpawnZ += s.speed * dt;
 
@@ -449,13 +490,25 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
             if (o.type === 'crystal') o.obj.rotation.y += 2.5 * dt;
 
             if (z > -1.2 && z < 1.2 && o.lane === s.currentLane) {
-              if (o.type === 'spike' && s.playerY < 0.9) {
-                endRun(false);
-                break;
-              }
-              if (o.type === 'laser_arch' && !s.isSliding) {
-                endRun(false);
-                break;
+              const hit = (o.type === 'spike' && s.playerY < 0.9) || (o.type === 'laser_arch' && !s.isSliding);
+              if (hit && !o.collected && s.invuln <= 0) {
+                o.collected = true; // never hits twice
+                s.shields -= 1;
+                s.hits += 1;
+                s.combo = 1;
+                if (s.shields <= 0) {
+                  endRun(false);
+                  break;
+                }
+                s.invuln = INVULN;
+                s.shake = 0.3;
+                engine.flash(0.8);
+                particles.emit(o.obj.position, 0xff0055, { count: 26, speed: 6, life: 0.7 });
+                o.obj.visible = false;
+                popups.current?.banner(s.shields === 1 ? 'LAST SHIELD!' : 'SHIELD HIT', '#fb7185');
+                sound.playLose();
+                haptic('fail');
+                pushHud({ shields: s.shields, combo: 1 }, true);
               }
               if (o.type === 'crystal' && !o.collected) {
                 o.collected = true;
@@ -476,7 +529,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
             }
 
             if (z > 8) {
-              if (o.type !== 'crystal' && s.playing) {
+              if (o.type !== 'crystal' && s.playing && !o.collected) {
                 award(50 * s.combo, 'pDodges');
                 s.dodges += 1;
               }
@@ -490,6 +543,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
 
         // Player transform + animation
         avatar3D.group.position.set(s.currentX, s.playerY, 0);
+        avatar3D.group.visible = s.invuln <= 0 || Math.floor(t * 14) % 2 === 0;
         avatar3D.updateAnimation(t, s.playing ? s.action : 'idle', dt);
         blob.position.x = s.currentX;
         const lift = Math.min(1, s.playerY / 3);
@@ -524,6 +578,13 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
   const chips = (
     <>
       <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${hud.combo >= 5 ? 'bg-amber-400 text-black' : 'bg-black/50 text-amber-300'}`}>×{hud.combo} COMBO</span>
+      <span className="px-2 py-0.5 rounded-full bg-black/50 text-[11px] font-black tracking-tight" data-testid="shields" aria-label={`${hud.shields} shields left`}>
+        {Array.from({ length: SHIELDS }, (_, i) => (
+          <span key={i} className={i < hud.shields ? 'text-cyan-300' : 'text-white/20'}>
+            ◆
+          </span>
+        ))}
+      </span>
       <span className="px-2 py-0.5 rounded-full bg-black/50 text-white/80 text-[11px] font-bold tabular-nums">{hud.distance}m</span>
     </>
   );
@@ -551,7 +612,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Swipe up / tap: jump spikes' },
         { icon: <ArrowDown className="w-6 h-6" />, label: 'Swipe down: slide lasers' },
       ]}
-      scoring="60-second run on the shared seed. Crystals 150 × combo · Dodges 50 × combo · Finish without crashing +500 · Last 10s ×2."
+      scoring="60-second run that starts slow and speeds up. 3 shields — a hit costs one and your combo. Crystals 150 × combo · Dodges 50 × combo · Finish the run +500 · Last 10s ×2. Same road for every player."
     />
   );
 }

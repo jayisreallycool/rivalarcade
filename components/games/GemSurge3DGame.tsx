@@ -2,6 +2,7 @@
 
 import React, { useCallback, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { sound } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
@@ -83,7 +84,9 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
       camera: { fov: 48, far: 90, position: [1.5, 2.5, 9.2], lookAt: [1.5, 2.2, 0] },
       exposure: 1.2,
       bloom: { strength: 0.65, radius: 0.3, threshold: 0.85 },
-      environment: 0.5,
+      environment: 0.75,
+      ao: true,
+      studio: { top: 0x261a3c, left: 0x7dd3fc, right: 0xf472b6, key: 1.3 },
     },
     (engine) => {
       const { scene, camera } = engine;
@@ -92,7 +95,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
 
       // Board frame with neon edge
       const frameGeo = new THREE.BoxGeometry(6.4, 6.4, 0.2);
-      const frame = new THREE.Mesh(frameGeo, new THREE.MeshStandardMaterial({ color: 0x121422, roughness: 0.5, metalness: 0.5 }));
+      const frame = new THREE.Mesh(frameGeo, new THREE.MeshPhysicalMaterial({ color: 0x0e1020, roughness: 0.35, metalness: 0.6, clearcoat: 0.8, clearcoatRoughness: 0.1 }));
       frame.position.set(2.55, 2.0, -0.25);
       frame.receiveShadow = engine.quality.shadows;
       const frameEdge = new THREE.LineSegments(new THREE.EdgesGeometry(frameGeo), new THREE.LineBasicMaterial({ color: new THREE.Color(0xa855f7).multiplyScalar(2.2), toneMapped: false }));
@@ -105,7 +108,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
       scene.add(cursor);
 
       // Podium + avatar
-      const stage = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.6, 0.4, 32), new THREE.MeshStandardMaterial({ color: 0x181a28, roughness: 0.4, metalness: 0.5 }));
+      const stage = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.6, 0.4, 32), new THREE.MeshPhysicalMaterial({ color: 0x181a28, roughness: 0.3, metalness: 0.8, clearcoat: 1, clearcoatRoughness: 0.08 }));
       stage.position.set(-2.4, 0.2, 0);
       const stageRing = new THREE.Mesh(new THREE.TorusGeometry(1.42, 0.03, 6, 64), neonMaterial(0xa855f7, 1.6));
       stageRing.rotation.x = Math.PI / 2;
@@ -145,14 +148,40 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         camera.updateProjectionMatrix();
       });
 
-      // One geometry + five materials for every gem that will ever exist
-      const gemGeo = engine.own(new THREE.OctahedronGeometry(0.38, 0));
+      // Every colour has its own cut (brilliant, emerald, trillion…) so gems read at a glance —
+      // and stay distinguishable for colour-blind players. Faceted physical material: crisp
+      // specular, clear coat and a thin-film shimmer that reflects the studio lights.
+      const lathe = (pts: [number, number][], seg: number) => new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), seg);
+      const gemGeos = [
+        engine.own(lathe([[0, -0.36], [0.36, 0.04], [0.27, 0.17], [0, 0.19]], 8)), // brilliant
+        engine.own(new RoundedBoxGeometry(0.5, 0.5, 0.3, 1, 0.08)), // emerald cut
+        engine.own(new THREE.OctahedronGeometry(0.38, 0)), // diamond
+        engine.own(new THREE.CylinderGeometry(0.33, 0.33, 0.3, 6, 1)), // hex
+        engine.own(new THREE.DodecahedronGeometry(0.33, 0)), // round
+      ];
+      gemGeos[3].rotateX(Math.PI / 2);
       const gemMats = GEM_COLORS.map((c) =>
-        engine.own(new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.55, roughness: 0.15, metalness: 0.6, flatShading: true })),
+        engine.own(
+          new THREE.MeshPhysicalMaterial({
+            color: c,
+            emissive: c,
+            emissiveIntensity: 0.28,
+            roughness: 0.08,
+            metalness: 0.15,
+            clearcoat: 1,
+            clearcoatRoughness: 0.04,
+            iridescence: 0.6,
+            iridescenceIOR: 1.6,
+            specularIntensity: 1,
+            envMapIntensity: 1.8,
+            flatShading: true,
+          }),
+        ),
       );
       const spareMeshes: THREE.Mesh[] = [];
       const takeMesh = (colorIdx: number) => {
-        const m = spareMeshes.pop() ?? new THREE.Mesh(gemGeo);
+        const m = spareMeshes.pop() ?? new THREE.Mesh(gemGeos[0]);
+        m.geometry = gemGeos[colorIdx];
         m.material = gemMats[colorIdx];
         m.scale.setScalar(1);
         m.castShadow = engine.quality.shadows;
@@ -170,15 +199,18 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
       const tasks: { at: number; fn: () => void }[] = [];
       const later = (delay: number, fn: () => void) => tasks.push({ at: engine.elapsed + delay, fn });
 
+      // Difficulty: four gem types for the first 20s (lots of easy matches), then all five.
+      const colorCount = () => (ROUND_SECONDS - sim.current.timeLeft < 20 || !sim.current.playing ? 4 : GEM_COLORS.length);
+
       const pickColor = (r: number, c: number) => {
         // Avoid creating ready-made matches on a fresh board
         for (let tries = 0; tries < 10; tries++) {
-          const k = Math.floor(rngRef.current() * GEM_COLORS.length);
+          const k = Math.floor(rngRef.current() * colorCount());
           const left = c >= 2 && board[r][c - 1]?.colorIdx === k && board[r][c - 2]?.colorIdx === k;
           const up = r >= 2 && board[r - 1][c]?.colorIdx === k && board[r - 2][c]?.colorIdx === k;
           if (!left && !up) return k;
         }
-        return Math.floor(rngRef.current() * GEM_COLORS.length);
+        return Math.floor(rngRef.current() * colorCount());
       };
 
       const buildBoard = () => {
@@ -210,6 +242,33 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         return hit;
       };
 
+      /** First swap that makes a match, or null. Used for hints and dead-board reshuffles. */
+      const findMove = (): [Gem, Gem] | null => {
+        const trySwap = (a: Gem, b: Gem) => {
+          const ar = a.r, ac = a.c, br = b.r, bc = b.c;
+          board[ar][ac] = b;
+          board[br][bc] = a;
+          [a.r, a.c, b.r, b.c] = [br, bc, ar, ac];
+          const ok = findMatches().size > 0;
+          board[ar][ac] = a;
+          board[br][bc] = b;
+          [a.r, a.c, b.r, b.c] = [ar, ac, br, bc];
+          return ok;
+        };
+        for (let r = 0; r < ROWS; r++)
+          for (let c = 0; c < COLS; c++) {
+            const g = board[r][c];
+            if (!g) continue;
+            const right = c + 1 < COLS ? board[r][c + 1] : null;
+            const down = r + 1 < ROWS ? board[r + 1][c] : null;
+            if (right && trySwap(g, right)) return [g, right];
+            if (down && trySwap(g, down)) return [g, down];
+          }
+        return null;
+      };
+      let idle = 0;
+      let hint: [Gem, Gem] | null = null;
+
       const collapse = () => {
         for (let c = 0; c < COLS; c++) {
           let empty = ROWS - 1;
@@ -225,7 +284,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
             empty--;
           }
           for (let r = empty; r >= 0; r--) {
-            const colorIdx = Math.floor(rngRef.current() * GEM_COLORS.length);
+            const colorIdx = Math.floor(rngRef.current() * colorCount());
             const mesh = takeMesh(colorIdx);
             const target = cellPos(r, c);
             mesh.position.copy(target);
@@ -241,6 +300,14 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         const matched = findMatches();
         if (!matched.size || !s.playing) {
           busy = false;
+          idle = 0;
+          hint = null;
+          if (s.playing && !findMove()) {
+            popups.current?.banner('NO MOVES · SHUFFLE', '#c4b5fd');
+            buildBoard();
+            busy = true;
+            later(0.5, resolve);
+          }
           return;
         }
         const centre = new THREE.Vector3();
@@ -277,6 +344,8 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
 
       const swap = (a: Gem, b: Gem) => {
         busy = true;
+        idle = 0;
+        hint = null;
         sim.current.moves += 1;
         haptic('tap');
         sim.current.combo = 0; // each move starts a fresh cascade chain
@@ -412,9 +481,17 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
             g.mesh.rotation.y += 1.2 * dt;
             g.mesh.rotation.x = Math.sin(t * 2 + r + c) * 0.15;
             const sel = g === selected;
-            const sc = sel ? 1.2 + Math.sin(t * 10) * 0.06 : 1;
+            const hinted = !!hint && (g === hint[0] || g === hint[1]);
+            const sc = sel ? 1.2 + Math.sin(t * 10) * 0.06 : hinted ? 1.08 + Math.sin(t * 8) * 0.1 : 1;
             g.mesh.scale.setScalar(g.mesh.scale.x + (sc - g.mesh.scale.x) * follow);
           }
+
+        // Hint: after a few idle seconds (longer later in the round), the gems of a valid swap pulse.
+        if (sim.current.playing && !busy) {
+          idle += dt;
+          const wait = ROUND_SECONDS - sim.current.timeLeft < 25 ? 3 : 6;
+          if (!hint && idle > wait) hint = findMove();
+        }
 
         cursor.visible = !!selected;
         if (selected) {
@@ -459,7 +536,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <Pointer className="w-6 h-6" />, label: 'Or tap, then tap neighbour' },
         { icon: <Layers className="w-6 h-6" />, label: 'Chain cascades' },
       ]}
-      scoring="60 per gem cleared · Each cascade step in one move multiplies (×2, ×3…) · Last 10s ×2. Same board for every player."
+      scoring="Four gem types for the first 20s, then five. Stuck? A valid swap starts to pulse. 60 per gem cleared · Each cascade step in one move multiplies (×2, ×3…) · Last 10s ×2. Same board for every player."
     />
   );
 }

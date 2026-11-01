@@ -2,11 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import { useUserStore } from '@/lib/user-store';
-import AvatarView from '@/components/avatar/AvatarView';
+import GameArt from './GameArt';
+import { tournamentStatus } from '@/lib/tournaments-data';
 import GameModal from './GameModal';
 import { sound } from '@/lib/sound';
-import { ARENA_SIZE, GAME_IDS, GameId, MatchMode, STAKES, arenaPrizes, duelPrize, leagueFor, streakPrize } from '@/lib/game-types';
-import { Swords, Crown, Coins, Zap, Flame, Users, Target, Play, X, ChevronRight, Lock } from 'lucide-react';
+import { ARENA_SIZE, GameId, MatchMode, STAKES, arenaPrizes, duelPrize, streakPrize } from '@/lib/game-types';
+import { Swords, Coins, Zap, Flame, Users, Target, X, ChevronRight, Lock, Sparkles } from 'lucide-react';
 
 interface GameTile {
   id: GameId;
@@ -15,17 +16,28 @@ interface GameTile {
   blurb: string;
   from: string;
   to: string;
-  glyph: string;
-  isNew?: boolean;
+  tags: Category[];
 }
 
-const TILES: Record<GameId, GameTile> = {
-  'brick-blitz': { id: 'brick-blitz', title: 'Brick Blitz', genre: 'Aim & Launch', blurb: 'Drag, aim, release a volley. Break the wall before it lands.', from: '#0ea5e9', to: '#6d28d9', glyph: '▦', isNew: true },
-  'dunk-rush': { id: 'dunk-rush', title: 'Dunk Rush', genre: 'Flick Basketball', blurb: 'Flick to shoot. Swishes, banks and streak multipliers.', from: '#f97316', to: '#be123c', glyph: '🏀' },
-  'neon-dash': { id: 'neon-dash', title: 'Neon Dash', genre: 'Swipe Runner', blurb: 'Swipe lanes, jump and slide through a neon highway.', from: '#06b6d4', to: '#1d4ed8', glyph: '⚡' },
-  'cyber-reflex': { id: 'cyber-reflex', title: 'Cyber Reflex', genre: 'Tap & Slash', blurb: 'Hit targets dead-centre, chain perfects, dodge hazards.', from: '#10b981', to: '#0f766e', glyph: '◎' },
-  'gem-surge': { id: 'gem-surge', title: 'Gem Surge', genre: 'Match-3', blurb: 'Swipe to swap. Cascades multiply every clear.', from: '#c084fc', to: '#7e22ce', glyph: '◆' },
+type Category = 'action' | 'puzzle' | 'sports' | 'new' | 'popular';
+const CHIPS: { id: 'all' | 'live' | Category; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'live', label: 'Live' },
+  { id: 'action', label: 'Action' },
+  { id: 'puzzle', label: 'Puzzle' },
+  { id: 'sports', label: 'Sports' },
+  { id: 'new', label: 'New' },
+  { id: 'popular', label: 'Popular' },
+];
+
+export const TILES: Record<GameId, GameTile> = {
+  'dunk-rush': { id: 'dunk-rush', title: 'Dunk Rush', genre: 'Flick Basketball', blurb: 'Flick to shoot. Swishes, banks and streak multipliers.', from: '#f97316', to: '#7c2d12', tags: ['sports', 'popular'] },
+  'brick-blitz': { id: 'brick-blitz', title: 'Brick Blitz', genre: 'Aim & Launch', blurb: 'Drag, aim, release a volley. Break the wall before it lands.', from: '#38bdf8', to: '#4338ca', tags: ['puzzle', 'new', 'popular'] },
+  'neon-dash': { id: 'neon-dash', title: 'Neon Dash', genre: 'Swipe Runner', blurb: 'Swipe lanes, jump and slide down a neon highway.', from: '#ec4899', to: '#1e0b4b', tags: ['action', 'popular'] },
+  'gem-surge': { id: 'gem-surge', title: 'Gem Surge', genre: 'Match-3', blurb: 'Swipe to swap. Cascades multiply every clear.', from: '#c084fc', to: '#2e1065', tags: ['puzzle'] },
+  'cyber-reflex': { id: 'cyber-reflex', title: 'Cyber Reflex', genre: 'Tap & Slash', blurb: 'Hit targets dead-centre, chain perfects, dodge hazards.', from: '#14b8a6', to: '#042f2e', tags: ['action', 'new'] },
 };
+const ORDER: GameId[] = ['dunk-rush', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
 
 interface ModeCard {
   mode: Exclude<MatchMode, 'tournament'>;
@@ -45,13 +57,17 @@ const MODES: ModeCard[] = [
   { mode: 'practice', title: 'Practice', icon: <Target className="w-5 h-5" />, color: '#94a3b8', desc: 'Free warm-up on a random seed. No stakes.', prize: () => 'Free · small XP', paid: false },
 ];
 
-export default function GameLibraryView({ onNavigateWardrobe }: { onNavigateWardrobe: () => void }) {
+export default function GameLibraryView() {
   const userState = useUserStore();
   const [sheet, setSheet] = useState<GameId | null>(null);
   const [entry, setEntry] = useState<number>(25);
+  const [chip, setChip] = useState<(typeof CHIPS)[number]['id']>('all');
   const [activeGame, setActiveGame] = useState<{ gameId: GameId; mode: MatchMode; entry: number } | null>(null);
-  const league = leagueFor(userState.stats.crowns ?? 0);
+  const [now] = useState(() => Date.now());
   const coins = userState.stats.coins;
+
+  // Games with a cup running right now get a LIVE badge (and the Live filter).
+  const liveGames = new Set(userState.tournaments.filter((t) => tournamentStatus(t, now) === 'live').map((t) => t.gameId));
 
   useEffect(() => {
     if (!sheet) return;
@@ -66,101 +82,105 @@ export default function GameLibraryView({ onNavigateWardrobe }: { onNavigateWard
     setActiveGame({ gameId, mode, entry: mode === 'practice' ? 0 : stake });
   };
 
+  const visible = ORDER.filter((id) => chip === 'all' || (chip === 'live' ? liveGames.has(id) : TILES[id].tags.includes(chip)));
   const tile = sheet ? TILES[sheet] : null;
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-4 pb-6 space-y-5">
-      {/* League card */}
-      <div className="w-full text-left relative overflow-hidden rounded-3xl border border-white/10 p-4 bg-[radial-gradient(120%_120%_at_0%_0%,#1e1b4b_0%,#0b0c16_60%)]" data-testid="league-card">
-        <div className="flex items-center gap-4">
-          <div className="relative w-16 h-16 shrink-0 rounded-2xl bg-black/40 border border-white/10 flex items-center justify-center">
-            <AvatarView avatar={userState.avatar} size={70} animate={false} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-white/50 font-bold truncate">{userState.username}</div>
-            <div className="flex items-center gap-1.5">
-              <Crown className="w-5 h-5" style={{ color: league.color }} />
-              <span className="text-xl font-black italic" style={{ color: league.color }} data-testid="league-name">
-                {league.name.toUpperCase()} LEAGUE
-              </span>
-            </div>
-            <div className="mt-1.5 h-2 rounded-full bg-white/10 overflow-hidden">
-              <div className="h-full rounded-full" style={{ width: `${Math.round(league.progress * 100)}%`, background: league.color }} />
-            </div>
-            <div className="mt-1 text-[11px] text-white/50 font-bold" suppressHydrationWarning>
-              {userState.stats.crowns ?? 0} crowns{league.next ? ` · ${league.next.crowns - (userState.stats.crowns ?? 0)} to ${league.next.name}` : ' · top league'}
-            </div>
-          </div>
-          <button onClick={onNavigateWardrobe} className="shrink-0 self-start px-2.5 py-1 rounded-full bg-white/10 text-[10px] font-black text-white/70">
-            STYLE
-          </button>
-        </div>
-      </div>
-
-      {/* Featured */}
-      <button
-        onClick={() => setSheet('brick-blitz')}
-        className="w-full relative overflow-hidden rounded-3xl p-5 text-left shadow-xl active:scale-[0.99] transition-transform"
-        style={{ background: `linear-gradient(135deg, ${TILES['brick-blitz'].from}, ${TILES['brick-blitz'].to})` }}
-        data-testid="featured-game"
-      >
-        <div className="absolute -right-6 -bottom-8 text-[140px] leading-none opacity-25 select-none">▦</div>
-        <span className="inline-block px-2 py-0.5 rounded-full bg-black/30 text-white text-[10px] font-black tracking-widest">FEATURED · NEW</span>
-        <h2 className="mt-2 text-3xl font-black italic text-white drop-shadow">BRICK BLITZ</h2>
-        <p className="text-sm text-white/85 max-w-xs">Aim, launch and smash the wall. Same bricks for every player — pure skill.</p>
-        <span className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white text-black text-sm font-black">
-          <Play className="w-4 h-4 fill-black" /> PLAY NOW
-        </span>
-      </button>
-
-      {/* Game grid */}
-      <div>
-        <div className="flex items-end justify-between mb-2.5">
-          <h2 className="text-base font-black text-white tracking-wider">GAMES</h2>
-          <span className="text-[11px] text-white/40 font-bold">Same seed for both players · skill decides</span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {GAME_IDS.map((id) => {
-            const g = TILES[id];
-            const best = userState.stats.highScores[id] || 0;
+    <div className="w-full max-w-5xl mx-auto pb-6" data-testid="lobby">
+      {/* Category chips */}
+      <div className="sticky top-16 z-30 -mt-1 pb-3 pt-1 bg-gradient-to-b from-[#0b0b10]/0 via-[#0b0b10]/0 to-transparent">
+        <div className="flex gap-2 overflow-x-auto px-4 py-1 no-scrollbar" role="tablist" aria-label="Game categories">
+          {CHIPS.map((c) => {
+            const on = chip === c.id;
             return (
               <button
-                key={id}
+                key={c.id}
+                role="tab"
+                aria-selected={on}
                 onClick={() => {
                   sound.playTap();
-                  setSheet(id);
+                  setChip(c.id);
                 }}
-                className="relative aspect-[4/5] overflow-hidden rounded-3xl p-3 text-left flex flex-col justify-end shadow-lg active:scale-[0.97] transition-transform"
-                style={{ background: `linear-gradient(160deg, ${g.from}, ${g.to})` }}
-                data-testid={`tile-${id}`}
+                className={`shrink-0 h-10 px-5 rounded-full text-[15px] font-bold transition-colors flex items-center gap-1.5 ${
+                  on ? 'bg-[#141420] text-white ring-2 ring-white/85' : 'bg-white/[0.07] text-white/60'
+                }`}
+                data-testid={`chip-${c.id}`}
               >
-                <span className="absolute top-2 right-3 text-6xl opacity-30 select-none">{g.glyph}</span>
-                {g.isNew && <span className="absolute top-3 left-3 px-2 py-0.5 rounded-full bg-white text-black text-[9px] font-black">NEW</span>}
-                <span className="text-[10px] font-black tracking-widest text-white/70 uppercase">{g.genre}</span>
-                <span className="text-lg font-black italic text-white leading-tight">{g.title}</span>
-                <span className="text-[10px] font-bold text-white/70 mt-0.5" suppressHydrationWarning>
-                  BEST {best.toLocaleString()}
-                </span>
+                {c.id === 'live' && <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />}
+                {c.label}
               </button>
             );
           })}
         </div>
       </div>
 
+      {/* Game grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 px-4">
+        {visible.map((id) => {
+          const g = TILES[id];
+          return (
+            <button
+              key={id}
+              onClick={() => {
+                sound.playTap();
+                setSheet(id);
+              }}
+              className="group relative aspect-[300/430] overflow-hidden rounded-[22px] text-left shadow-[0_10px_30px_-12px_rgba(0,0,0,0.8)] ring-1 ring-white/10 active:scale-[0.97] transition-transform"
+              style={{ background: `linear-gradient(160deg, ${g.from}, ${g.to})` }}
+              data-testid={`tile-${id}`}
+              aria-label={`${g.title} — ${g.genre}`}
+            >
+              <GameArt id={id} />
+              <div className="absolute top-2.5 right-2.5 flex flex-col items-end gap-1">
+                {liveGames.has(id) && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/55 backdrop-blur text-[10px] font-black text-emerald-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> LIVE
+                  </span>
+                )}
+                {g.tags.includes('new') && <span className="px-2 py-0.5 rounded-full bg-white text-black text-[10px] font-black">NEW</span>}
+              </div>
+            </button>
+          );
+        })}
+        {chip === 'all' && (
+          <div className="relative aspect-[300/430] rounded-[22px] overflow-hidden bg-gradient-to-b from-[#1b1d2a] to-[#0d0e15] ring-1 ring-white/5 flex flex-col items-center justify-center text-center p-4" aria-hidden>
+            <Sparkles className="w-8 h-8 text-white/25 mb-2" />
+            <span className="text-white/45 font-black text-lg" style={{ fontFamily: "'Lilita One', system-ui" }}>
+              MORE GAMES
+            </span>
+            <span className="text-white/30 text-xs font-bold">coming soon</span>
+          </div>
+        )}
+        {visible.length === 0 && (
+          <div className="col-span-2 py-16 text-center text-white/40 text-sm font-bold">No live cups right now — check back soon.</div>
+        )}
+      </div>
+
       {/* Mode sheet */}
       {tile && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setSheet(null)} data-testid="mode-sheet">
+        <div className="fixed inset-0 z-[55] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setSheet(null)} data-testid="mode-sheet">
           <div
-            className="w-full sm:max-w-md max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-[#0e1018] border border-white/10 pb-[max(env(safe-area-inset-bottom),16px)]"
+            className="w-full sm:max-w-md max-h-[92dvh] overflow-y-auto rounded-t-[28px] sm:rounded-[28px] bg-[#101018] border border-white/10 pb-[max(env(safe-area-inset-bottom),16px)] animate-in slide-in-from-bottom duration-200"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="relative p-5 pb-4" style={{ background: `linear-gradient(160deg, ${tile.from}, ${tile.to})` }}>
-              <button onClick={() => setSheet(null)} aria-label="Close" className="absolute top-3 right-3 w-9 h-9 rounded-full bg-black/30 flex items-center justify-center text-white">
+            <div className="relative h-44 overflow-hidden">
+              <div className="absolute inset-0 [&>svg]:w-full [&>svg]:h-[260%] [&>svg]:-translate-y-[22%]">
+                <GameArt id={tile.id} />
+              </div>
+              <div className="absolute inset-0 bg-gradient-to-t from-[#101018] via-[#101018]/30 to-transparent" />
+              <button onClick={() => setSheet(null)} aria-label="Close" className="absolute top-3 right-3 w-9 h-9 rounded-full bg-black/40 backdrop-blur flex items-center justify-center text-white">
                 <X className="w-5 h-5" />
               </button>
-              <span className="text-[10px] font-black tracking-widest text-white/70 uppercase">{tile.genre}</span>
-              <h3 className="text-3xl font-black italic text-white">{tile.title}</h3>
-              <p className="text-xs text-white/85 mt-0.5 max-w-[85%]">{tile.blurb}</p>
+              <div className="absolute bottom-2 left-4 right-4">
+                <span className="text-[10px] font-black tracking-widest text-white/70 uppercase">{tile.genre}</span>
+                <h3 className="text-3xl text-white leading-none drop-shadow" style={{ fontFamily: "'Lilita One', system-ui" }}>
+                  {tile.title}
+                </h3>
+                <p className="text-xs text-white/75 mt-1">
+                  {tile.blurb}
+                  {(userState.stats.highScores[tile.id] || 0) > 0 && <span className="ml-1 font-black text-amber-300">Best {userState.stats.highScores[tile.id].toLocaleString()}</span>}
+                </p>
+              </div>
             </div>
 
             <div className="p-4">
@@ -204,7 +224,7 @@ export default function GameLibraryView({ onNavigateWardrobe }: { onNavigateWard
                       key={m.mode}
                       disabled={locked}
                       onClick={() => launch(tile.id, m.mode, stake)}
-                      className="w-full flex items-center gap-3 p-3 rounded-2xl bg-white/[0.04] border border-white/10 text-left active:scale-[0.98] transition-transform disabled:opacity-40"
+                      className="w-full flex items-center gap-3 p-3 rounded-2xl bg-white/[0.05] border border-white/10 text-left active:scale-[0.98] transition-transform disabled:opacity-40"
                       data-testid={`mode-${m.mode}`}
                     >
                       <span className="w-11 h-11 shrink-0 rounded-xl flex items-center justify-center text-black" style={{ background: m.color }}>
@@ -213,9 +233,7 @@ export default function GameLibraryView({ onNavigateWardrobe }: { onNavigateWard
                       <span className="flex-1 min-w-0">
                         <span className="flex items-center gap-2">
                           <span className="text-base font-black text-white">{m.title}</span>
-                          {m.paid && (
-                            <span className="px-1.5 py-0.5 rounded bg-black/40 text-[10px] font-black text-amber-300">{stake === 0 ? 'FREE' : `${stake} ENTRY`}</span>
-                          )}
+                          {m.paid && <span className="px-1.5 py-0.5 rounded bg-black/40 text-[10px] font-black text-amber-300">{stake === 0 ? 'FREE' : `${stake} ENTRY`}</span>}
                         </span>
                         <span className="block text-[11px] text-white/55 leading-snug">{m.desc}</span>
                         <span className="block text-[11px] font-bold mt-0.5" style={{ color: m.color }}>

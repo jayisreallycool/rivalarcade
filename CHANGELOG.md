@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-31 — Skill-app style shell
+
+- New app shell: crown progress + crowns on the left, Rival Coins balance pill with "+" on the right, category chips (All / Live / Action / Puzzle / Sports / New / Popular), and a two-column grid of tall illustrated game cards.
+- Original SVG cover art and mascots for every game (Bounce, Zip, Bolt, Pix, Glint) with chunky outlined titles; Lilita One + Nunito fonts self-hosted via @fontsource.
+- Bottom bar: Results · Leagues · Play · Rewards · Profile. Results is a new match feed with cover thumbnails and net coins; Leagues holds the league ladder, Cups and Rankings; Profile holds Wardrobe. Red badges for claimable cups, pass tiers and quests.
+- Mode sheet uses the cover art as its header and now sits above the tab bar.
+
 ## 2026-10-31 — Real-3D rendering upgrade + easy-to-hard difficulty
 
 **Engine**

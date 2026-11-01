@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: "Nunito Variable", ui-rounded, system-ui, -apple-system, sans-serif;
+  --font-display: "Lilita One", "Arial Black", system-ui, sans-serif;
+}
+
+/* Horizontal chip rows scroll without a visible bar. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 @layer base {
   :root {
     --bg-primary: #0a0b10;
@@ -15,7 +28,7 @@
 }
 
 body {
-  background-color: #0a0b10;
+  background-color: #0b0b10;
   color: #f1f5f9;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   user-select: none;

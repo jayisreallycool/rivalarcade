@@ -1,4 +1,6 @@
 import type {Metadata, Viewport} from 'next';
+import '@fontsource/lilita-one/400.css';
+import '@fontsource-variable/nunito';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -21,13 +23,13 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#0a0b10',
+  themeColor: '#0b0b10',
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en" className="dark bg-[#0a0b10] text-slate-100 antialiased selection:bg-cyan-500 selection:text-black">
-      <body suppressHydrationWarning className="min-h-screen bg-[#0a0b10] overflow-x-hidden font-sans">
+      <body suppressHydrationWarning className="min-h-screen bg-[#0b0b10] overflow-x-hidden font-sans">
         {children}
       </body>
     </html>

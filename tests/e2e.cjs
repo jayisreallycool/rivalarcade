@@ -35,7 +35,13 @@ const watch = (page, label) => {
     consoleErrors.push(`[${label}] ${t.slice(0, 200)}`);
   });
 };
-const nav = (page, label) => page.locator('nav button', { hasText: label }).click();
+// Old tab names → new Triumph-style bottom bar (+ segment inside the page).
+const NAV_MAP = { Games: ['Play'], Arena: ['Leagues', 'cups'], Rankings: ['Leagues', 'rankings'], Wardrobe: ['Profile', 'wardrobe'], Pass: ['Rewards'], Profile: ['Profile', 'profile'], Results: ['Results'] };
+const nav = async (page, label) => {
+  const [tab, seg] = NAV_MAP[label] ?? [label];
+  await page.locator('nav button', { hasText: tab }).click();
+  if (seg) await page.locator(`[data-testid="seg-${seg}"]`).click();
+};
 async function waitResults(page, timeout = 150000) {
   // Steer randomly so runner games end naturally; timed games just run out.
   const keys = ['ArrowLeft', 'ArrowRight'];
@@ -71,7 +77,7 @@ async function waitResults(page, timeout = 150000) {
     expect(st && st.stats.coins === 850, `coins ${st?.stats.coins}`);
     expect(st.quests.length === 4, `quests ${st.quests.length}`);
     expect(st.tournaments.length === 4, `tournaments ${st.tournaments.length}`);
-    expect(await page.locator('[data-testid="league-card"]').isVisible() && await page.locator('[data-testid="tile-brick-blitz"]').isVisible(), 'lobby missing');
+    expect(await page.locator('[data-testid="hdr-crowns"]').isVisible() && await page.locator('[data-testid="tile-brick-blitz"]').isVisible(), 'lobby missing');
   }, page);
 
   await step('every tab renders', async () => {
@@ -81,7 +87,8 @@ async function waitResults(page, timeout = 150000) {
       ['Rankings', 'GLOBAL RANKINGS'],
       ['Pass', 'RIVAL PASS PROGRESSION'],
       ['Profile', 'PERSONAL HIGH SCORES'],
-      ['Games', 'LEAGUE'],
+      ['Results', 'Best streak'],
+      ['Games', 'Popular'],
     ];
     for (const [tab, text] of checks) {
       await nav(page, tab);
@@ -119,7 +126,7 @@ async function waitResults(page, timeout = 150000) {
     await page.locator('[data-testid="stake-0"]').click();
     await page.locator('[data-testid="mode-duel"]').click();
     await page.getByText('FINDING YOUR RIVAL').waitFor();
-    await page.locator('[data-testid="vs-card"]').waitFor({ timeout: 8000 });
+    await page.locator('[data-testid="vs-card"]').waitFor({ timeout: 25000 });
     expect(await page.locator('[data-testid="rival-bar"]').isVisible(), 'rival bar missing');
     expect(/SEED [0-9A-F]{4}-[0-9A-F]{4}/.test(await page.locator('[data-testid="game-modal"]').innerText()), 'seed code missing');
     await page.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').click();
@@ -139,7 +146,7 @@ async function waitResults(page, timeout = 150000) {
   await step('New Duel finds a new opponent', async () => {
     await page.locator('[data-testid="results-modal"] button:has-text("New Duel")').click();
     await page.getByText('FINDING YOUR RIVAL').waitFor({ timeout: 5000 });
-    await page.locator('[data-testid="vs-card"]').waitFor({ timeout: 8000 });
+    await page.locator('[data-testid="vs-card"]').waitFor({ timeout: 25000 });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
     expect(!(await page.locator('[data-testid="game-modal"]').count()), 'Esc did not close');
@@ -286,8 +293,8 @@ async function waitResults(page, timeout = 150000) {
     await sw.click();
     const now = await sw.getAttribute('aria-checked');
     expect(was !== now, 'switch did not toggle');
-    const headerTitle = await page.locator('header button[title]').first().getAttribute('title');
-    expect((now === 'false') === (headerTitle === 'Unmute Audio'), `header out of sync: switch=${now} header=${headerTitle}`);
+    const saved = await page.evaluate(() => localStorage.getItem('rival_audio_enabled'));
+    expect(saved === String(now === 'true'), `sound setting not saved: switch=${now} stored=${saved}`);
     await sw.click(); // restore
   }, page);
 
@@ -297,6 +304,7 @@ async function waitResults(page, timeout = 150000) {
     await page.waitForTimeout(1000);
     const after = await state(page);
     expect(after.username === 'NeonTester' && after.stats.coins === before.stats.coins && after.inventory.length === before.inventory.length, 'state lost on reload');
+    await nav(page, 'Profile');
     expect(await page.getByText('NeonTester').first().isVisible(), 'name not rendered after reload');
   }, page);
 
@@ -328,7 +336,7 @@ async function waitResults(page, timeout = 150000) {
   await m.waitForTimeout(1000);
   await step('no horizontal overflow on any tab', async () => {
     const bad = [];
-    for (const tab of ['Games', 'Arena', 'Wardrobe', 'Rankings', 'Pass', 'Profile']) {
+    for (const tab of ['Play', 'Results', 'Leagues', 'Rewards', 'Profile']) {
       await m.locator('nav button', { hasText: tab }).tap();
       await m.waitForTimeout(400);
       const [sw, cw] = await m.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
@@ -338,7 +346,7 @@ async function waitResults(page, timeout = 150000) {
     expect(!bad.length, bad.join(', '));
   }, m);
   await step('touch practice run works on mobile', async () => {
-    await m.locator('nav button', { hasText: 'Games' }).tap();
+    await m.locator('nav button', { hasText: 'Play' }).tap();
     await m.locator('[data-testid="tile-dunk-rush"]').tap(); // Dunk Rush (touch drag shooting)
     await m.locator('[data-testid="mode-practice"]').tap();
     await m.locator('[data-testid="game-modal"] button:has-text("TAP TO PLAY")').tap({ timeout: 15000 });

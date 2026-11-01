@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-31 — 3D compatibility on every phone
+
+- Engine checks what the GPU can really do on the live renderer: half-float render targets (bloom, reflections) and shader limits.
+- Physical materials (clear coat, sheen, iridescence) are swapped for standard ones on medium/low tiers and weaker GPUs, so heavy shaders never compile on phones that can't run them. Animated glow and fades stay in sync.
+- No float render targets → no post chain and no PMREM; an ambient fill light keeps scenes lit.
+- Failure handling: WebGL create errors, scene setup errors, shader compile errors, repeated frame errors and a GPU context lost for more than 2.5s all report a failure. The match retries once in compatibility mode (low tier, no post, no reflections, default power preference), then falls back to the lite 2D edition. Any stake taken for the failed run is refunded.
+- An error boundary around games catches crashes and stale code chunks after a deploy, offering Try again / Lite edition / Reload instead of a blank page.
+- Audio context creation/resume and Brick Blitz resizing are hardened for iOS and older browsers.
+- New `tests/e2e-compat.cjs`: all games on low/medium/high/safe, GPU loss → safe → lite fallback with refund, and no-WebGL devices.
+
 ## 2026-10-31 — Skill-app style shell
 
 - New app shell: crown progress + crowns on the left, Rival Coins balance pill with "+" on the right, category chips (All / Live / Action / Puzzle / Sports / New / Popular), and a two-column grid of tall illustrated game cards.

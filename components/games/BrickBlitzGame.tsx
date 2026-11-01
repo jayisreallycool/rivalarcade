@@ -99,8 +99,10 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
       r = Math.max(4, cell * 0.13);
     };
     resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(host);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null;
+    ro?.observe(host);
+    window.addEventListener('resize', resize);
+    window.addEventListener('orientationchange', resize);
 
     // ---------------------------------------------------------- game state (board units: 1 = one cell)
     let rng = mulberry32(seed ?? randomSeed());
@@ -729,7 +731,9 @@ export default function BrickBlitzGame({ onFinish, seed, rival, match, onExit }:
 
     return () => {
       cancelAnimationFrame(raf);
-      ro.disconnect();
+      ro?.disconnect();
+      window.removeEventListener('resize', resize);
+      window.removeEventListener('orientationchange', resize);
       document.removeEventListener('visibilitychange', onVis);
       canvas.remove();
       api.current = { start: () => {}, drag: () => {}, tap: () => {} };

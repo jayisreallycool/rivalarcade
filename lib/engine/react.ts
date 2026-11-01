@@ -1,7 +1,7 @@
 'use client';
 
 import { DependencyList, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { EngineOptions, GameEngine } from './GameEngine';
+import { EngineOptions, GameEngine, reportEngineFailure } from './GameEngine';
 
 // Layout effect on the client (runs before passive effects), no-op warning-free on the server.
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
@@ -27,10 +27,27 @@ export function useGameEngine(options: EngineOptions, setup: (engine: GameEngine
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const engine = new GameEngine(host, optionsRef.current);
+    // Creating the WebGL context or building the scene can fail on some phones (no WebGL2,
+    // GPU blocklisted, out of memory). Never crash the page: report it so the match flow can
+    // retry in safe mode or switch to the 2D edition.
+    let engine: GameEngine;
+    try {
+      engine = new GameEngine(host, optionsRef.current);
+    } catch (err) {
+      reportEngineFailure('create', err);
+      return;
+    }
     engineRef.current = engine;
-    const cleanup = setupRef.current(engine);
-    engine.start();
+    let cleanup: void | (() => void);
+    try {
+      cleanup = setupRef.current(engine);
+      engine.start();
+    } catch (err) {
+      engine.dispose();
+      engineRef.current = null;
+      reportEngineFailure('setup', err);
+      return;
+    }
     return () => {
       cleanup?.();
       engine.dispose();

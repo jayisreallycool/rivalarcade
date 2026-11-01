@@ -1,6 +1,6 @@
 export { GameEngine, disposeObjectTree } from './GameEngine';
 export type { EngineOptions, EngineStats, Updater } from './GameEngine';
-export { detectQuality, setQualityOverride, supportsWebGL2 } from './quality';
+export { detectQuality, setQualityOverride, supportsWebGL2, enableSafeMode, isSafeMode } from './quality';
 export type { QualityProfile, QualityTier } from './quality';
 export { Pool } from './pool';
 export { ParticleBursts } from './effects';
@@ -8,3 +8,5 @@ export type { BurstOptions } from './effects';
 export { createNeonGridFloor, createCityscape, createStarfield, createBlobShadow, neonMaterial, addArenaLights } from './environment';
 export { useGameEngine, useLatest, useStructuralMemo, useThrottledHud } from './react';
 export { createStudioScene, GradeShader } from './studio';
+export { reportEngineFailure, ENGINE_FAILURE_EVENT } from './GameEngine';
+export type { EngineFailure } from './GameEngine';

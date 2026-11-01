@@ -65,6 +65,32 @@ const PROFILES: Record<QualityTier, Omit<QualityProfile, 'tier'>> = {
 };
 
 let cached: QualityProfile | null = null;
+let safeMode = false;
+
+/**
+ * Safe mode: after a GPU failure (shader compile error, lost context, missing float render
+ * targets…) the next attempt runs with the most compatible settings — low tier, no post
+ * chain, no image-based lighting, standard materials. Kept for the rest of the session.
+ */
+export function enableSafeMode() {
+  safeMode = true;
+  cached = null;
+  try {
+    sessionStorage.setItem('ra.safe3d', '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isSafeMode() {
+  if (safeMode) return true;
+  try {
+    safeMode = typeof window !== 'undefined' && sessionStorage.getItem('ra.safe3d') === '1';
+  } catch {
+    /* ignore */
+  }
+  return safeMode;
+}
 let webgl2Cache: boolean | null = null;
 
 /** True when the browser can create a WebGL2 context (checked once). */
@@ -128,7 +154,7 @@ export function getQualityOverride(): QualityTier | null {
 export function detectQuality(): QualityProfile {
   if (cached) return cached;
   if (typeof window === 'undefined') return { tier: 'medium', ...PROFILES.medium };
-  const tier = readOverride() ?? detectDeviceTier();
+  const tier = isSafeMode() ? 'low' : readOverride() ?? detectDeviceTier();
   cached = { tier, ...PROFILES[tier] };
   return cached;
 }

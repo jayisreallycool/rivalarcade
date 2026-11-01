@@ -23,12 +23,14 @@ class ArcadeAudioEngine {
   private initCtx() {
     if (!this.ctx && typeof window !== 'undefined') {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtx) {
-        this.ctx = new AudioCtx();
+      try {
+        if (AudioCtx) this.ctx = new AudioCtx();
+      } catch {
+        this.ctx = null; // audio unavailable (iOS limits, privacy modes): play silently
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
   }
 

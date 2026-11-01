@@ -6,7 +6,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAPass } from 'three/addons/postprocessing/FXAAPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { detectQuality, QualityProfile } from './quality';
+import { detectQuality, isSafeMode, QualityProfile } from './quality';
 import { createStudioScene, GradeShader } from './studio';
 
 /**
@@ -65,7 +65,61 @@ export interface EngineStats {
   triangles: number;
 }
 
-const MAX_STEP = 1 / 20; // clamp simulation step so a hitch never teleports objects
+const MAX_STEP = 1 / 20;
+
+/** Fired on window when 3D can't run here, so the match flow can retry in safe mode or go 2D. */
+export const ENGINE_FAILURE_EVENT = 'ra:engine-failure';
+export type EngineFailure = 'create' | 'shader' | 'context-lost' | 'setup';
+export function reportEngineFailure(reason: EngineFailure, detail?: unknown) {
+  if (typeof window === 'undefined') return;
+  console.warn('[RivalArcade] 3D engine failure:', reason, detail ?? '');
+  window.dispatchEvent(new CustomEvent(ENGINE_FAILURE_EVENT, { detail: reason }));
+}
+
+/**
+ * What this GPU can actually do (checked on the live renderer, not guessed from the device):
+ *  - hdrTargets: half-float colour buffers, needed by bloom/post targets and PMREM reflections
+ *  - richShaders: enough uniforms/samplers for MeshPhysicalMaterial (clear coat, sheen, iridescence)
+ *    with shadows — weaker mobile GPUs fail to compile those shaders or crawl on them.
+ */
+function probeCapabilities(renderer: THREE.WebGLRenderer) {
+  const gl = renderer.getContext();
+  const ext = renderer.extensions;
+  const hdrTargets = ext.has('EXT_color_buffer_half_float') || ext.has('EXT_color_buffer_float');
+  const fragUniforms = Number(gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS)) || 0;
+  const texUnits = Number(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS)) || 0;
+  const maxTex = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 0;
+  return { hdrTargets, richShaders: fragUniforms >= 1024 && texUnits >= 16, maxTex };
+}
+
+/** Same look, cheaper shader: MeshPhysicalMaterial → MeshStandardMaterial with the shared fields. */
+function toStandard(m: THREE.MeshPhysicalMaterial) {
+  const s = new THREE.MeshStandardMaterial({
+    name: m.name,
+    color: m.color.clone(),
+    map: m.map,
+    emissive: m.emissive.clone(),
+    emissiveMap: m.emissiveMap,
+    emissiveIntensity: m.emissiveIntensity,
+    // Clear-coated surfaces read glossier: approximate with lower roughness.
+    roughness: Math.max(0.05, m.roughness * (m.clearcoat > 0.5 ? 0.6 : 1)),
+    metalness: m.metalness,
+    roughnessMap: m.roughnessMap,
+    metalnessMap: m.metalnessMap,
+    normalMap: m.normalMap,
+    envMapIntensity: m.envMapIntensity,
+    flatShading: m.flatShading,
+    transparent: m.transparent,
+    opacity: m.opacity,
+    side: m.side,
+    depthWrite: m.depthWrite,
+    vertexColors: m.vertexColors,
+    alphaTest: m.alphaTest,
+    toneMapped: m.toneMapped,
+    fog: m.fog,
+  });
+  return s;
+} // clamp simulation step so a hitch never teleports objects
 
 export class GameEngine {
   readonly scene = new THREE.Scene();
@@ -81,6 +135,11 @@ export class GameEngine {
   private readonly ndc = new THREE.Vector2();
 
   private composer: EffectComposer | null = null;
+  /** Physical materials swapped for standard ones on GPUs/tiers that can't afford them. */
+  private readonly liteMaterials = new Map<THREE.Material, THREE.Material>();
+  private readonly useLiteMaterials: boolean;
+  private contextLostTimer: ReturnType<typeof setTimeout> | null = null;
+  private frameErrors = 0;
   private bloomPass: UnrealBloomPass | null = null;
   private baseBloomStrength = 0;
   private bloomKick = 0;
@@ -130,12 +189,23 @@ export class GameEngine {
     this.camera.position.set(...c.position);
     this.camera.lookAt(...c.lookAt);
 
-    // Renderer
+    // Renderer. Throws if WebGL2 can't be created — the React hook turns that into a fallback.
+    const safe = isSafeMode();
     this.renderer = new THREE.WebGLRenderer({
       antialias: this.quality.antialias && !this.quality.bloom,
-      powerPreference: 'high-performance',
+      // 'default' lets phones pick the efficient GPU path; some Android drivers reject 'high-performance'.
+      powerPreference: safe ? 'default' : 'high-performance',
       stencil: false,
+      preserveDrawingBuffer: false,
     });
+    const caps = probeCapabilities(this.renderer);
+    // Any shader that fails to compile (driver limits, precision…) switches the session to safe mode.
+    this.renderer.debug.checkShaderErrors = true;
+    this.renderer.debug.onShaderError = (_gl, _program, vs, fs) => {
+      reportEngineFailure('shader', { vs: _gl.getShaderInfoLog(vs), fs: _gl.getShaderInfoLog(fs) });
+    };
+    this.useLiteMaterials = safe || this.quality.tier !== 'high' || !caps.richShaders;
+    const postOk = this.quality.bloom && caps.hdrTargets && !safe;
     this.pixelRatio = Math.min(window.devicePixelRatio || 1, this.quality.maxPixelRatio);
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(width, height, false);
@@ -149,14 +219,20 @@ export class GameEngine {
 
     // Image-based lighting: a pre-filtered neon studio makes metals, gems, glass and glossy floors
     // read as real. Generated once (a few ms), then free every frame — so every tier gets it.
-    {
-      const pmrem = new THREE.PMREMGenerator(this.renderer);
-      const studio = createStudioScene(options.studio);
-      this.scene.environment = this.own(pmrem.fromScene(studio.scene, 0.035).texture);
-      this.scene.environmentIntensity = options.environment ?? 0.6;
-      studio.dispose();
-      pmrem.dispose();
+    // Needs half-float render targets; without them (or in safe mode) use a flat ambient fill instead.
+    if (caps.hdrTargets && !safe) {
+      try {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        const studio = createStudioScene(options.studio);
+        this.scene.environment = this.own(pmrem.fromScene(studio.scene, 0.035).texture);
+        this.scene.environmentIntensity = options.environment ?? 0.6;
+        studio.dispose();
+        pmrem.dispose();
+      } catch (err) {
+        console.warn('[RivalArcade] reflections unavailable, using ambient light', err);
+      }
     }
+    if (!this.scene.environment) this.scene.add(new THREE.AmbientLight(0xb8c4ff, 0.55 + (options.environment ?? 0.6) * 0.6));
 
     const canvas = this.renderer.domElement;
     canvas.style.width = '100%';
@@ -164,8 +240,8 @@ export class GameEngine {
     canvas.style.display = 'block';
     host.replaceChildren(canvas);
 
-    // Post-processing (neon bloom)
-    if (this.quality.bloom) {
+    // Post-processing (neon bloom) — only where float render targets are supported.
+    if (postOk) {
       // High tier keeps edges clean with multisampled HDR targets (canvas MSAA is bypassed by the composer).
       const target = new THREE.WebGLRenderTarget(width * this.pixelRatio, height * this.pixelRatio, {
         type: THREE.HalfFloatType,
@@ -237,10 +313,16 @@ export class GameEngine {
     e.preventDefault();
     this.contextLost = true;
     this.syncRunning();
+    // Phones drop the GPU context under memory pressure; if it isn't back soon, fall back.
+    if (this.contextLostTimer) clearTimeout(this.contextLostTimer);
+    this.contextLostTimer = setTimeout(() => {
+      if (this.contextLost && !this.disposed && this.pageVisible) reportEngineFailure('context-lost');
+    }, 2500);
   };
 
   private readonly onContextRestored = () => {
     this.contextLost = false;
+    if (this.contextLostTimer) clearTimeout(this.contextLostTimer);
     this.syncRunning();
   };
 
@@ -287,19 +369,68 @@ export class GameEngine {
     const dt = Math.min(realDt, MAX_STEP);
     const elapsed = this.timer.getElapsed();
 
-    this.renderer.info.reset();
-    for (const fn of this.updaters) fn(dt, elapsed);
+    try {
+      this.renderer.info.reset();
+      for (const fn of this.updaters) fn(dt, elapsed);
 
-    if (this.bloomPass) {
-      this.bloomKick = Math.max(0, this.bloomKick - dt * 2.5);
-      this.bloomPass.strength = this.baseBloomStrength + this.bloomKick;
+      if (this.bloomPass) {
+        this.bloomKick = Math.max(0, this.bloomKick - dt * 2.5);
+        this.bloomPass.strength = this.baseBloomStrength + this.bloomKick;
+      }
+
+      if (this.useLiteMaterials) this.liteSwap();
+      if (this.composer) this.composer.render(dt);
+      else this.renderer.render(this.scene, this.camera);
+      this.frameErrors = 0;
+    } catch (err) {
+      // A driver/GPU error mid-game: stop the loop after a few in a row and hand off to the fallback.
+      if (++this.frameErrors === 3) {
+        this.running = false;
+        this.syncRunning();
+        reportEngineFailure('setup', err);
+      }
+      return;
     }
-
-    if (this.composer) this.composer.render(dt);
-    else this.renderer.render(this.scene, this.camera);
 
     this.adapt(realDt);
   };
+
+  /**
+   * Swap any MeshPhysicalMaterial in the scene for a cached standard twin before drawing.
+   * Runs every frame (a cheap traversal) so pooled meshes added mid-game are covered too,
+   * and the expensive physical shader is never compiled on phones that can't handle it.
+   */
+  private liteSwap() {
+    // Keep animated properties (glow pulses, fades) flowing from the original to its twin.
+    this.liteMaterials.forEach((lite, src) => {
+      const a = src as THREE.MeshPhysicalMaterial;
+      const b = lite as THREE.MeshStandardMaterial;
+      if (b.emissiveIntensity !== a.emissiveIntensity) b.emissiveIntensity = a.emissiveIntensity;
+      if (b.opacity !== a.opacity) b.opacity = a.opacity;
+      if (!b.color.equals(a.color)) b.color.copy(a.color);
+      if (!b.emissive.equals(a.emissive)) b.emissive.copy(a.emissive);
+    });
+    this.scene.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      const mat = mesh.material;
+      if (!mat) return;
+      if (Array.isArray(mat)) {
+        if (mat.some((m) => (m as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial)) mesh.material = mat.map((m) => this.liteOf(m));
+      } else if ((mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
+        mesh.material = this.liteOf(mat);
+      }
+    });
+  }
+
+  private liteOf(m: THREE.Material) {
+    if (!(m as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) return m;
+    let lite = this.liteMaterials.get(m);
+    if (!lite) {
+      lite = this.own(toStandard(m as THREE.MeshPhysicalMaterial));
+      this.liteMaterials.set(m, lite);
+    }
+    return lite;
+  }
 
   // ------------------------------------------------------- adaptive resolution
 
@@ -445,6 +576,7 @@ export class GameEngine {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.contextLostTimer) clearTimeout(this.contextLostTimer);
     this.syncRunning();
     this.updaters.clear();
 

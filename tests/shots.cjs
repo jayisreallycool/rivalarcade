@@ -25,6 +25,10 @@ const GAMES = (process.env.GAMES || 'dunk-rush,neon-dash,cyber-reflex,gem-surge,
     await p.click('text=TAP TO PLAY');
     await p.waitForTimeout(4500);
     await p.screenshot({ path: `${OUT}/${g}-play.png` });
+    if (process.env.LATE) {
+      await p.waitForTimeout(+process.env.LATE);
+      await p.screenshot({ path: `${OUT}/${g}-late.png` });
+    }
     await p.click('[aria-label="Close match"]');
     await p.waitForTimeout(500);
   }

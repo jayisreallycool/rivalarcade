@@ -1,6 +1,6 @@
 // Mobile compatibility: every 3D game starts on each quality tier and in safe mode,
-// a lost GPU context falls back (safe mode → 2D edition) with the stake refunded,
-// and devices without WebGL get the lite edition.
+// a lost GPU context rebuilds the arena in 3D compatibility mode with the stake refunded
+// (repeatedly — there is no 2D edition), and devices without WebGL get a clear explanation.
 // Usage: APP_URL=http://localhost:3000 node tests/e2e-compat.cjs
 const { chromium } = require('playwright');
 const assert = require('assert');
@@ -53,7 +53,7 @@ async function startGame(p, id, mode = 'practice', stake) {
     await ctx.close();
   }
 
-  // 2. GPU context lost mid-game → safe-mode retry, stake refunded; lost again → lite (2D) edition.
+  // 2. GPU context lost mid-game → rebuilt in 3D compatibility mode, stake refunded; lost again → rebuilt again (still 3D).
   {
     const ctx = await b.newContext(phone);
     const p = await ctx.newPage();
@@ -66,20 +66,20 @@ async function startGame(p, id, mode = 'practice', stake) {
     const lose = () => p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext());
     await lose();
     await p.waitForSelector('[data-testid=compat-notice]', { timeout: 8000 }).catch(() => {});
-    check(await p.evaluate(() => sessionStorage.getItem('ra.safe3d') === '1'), 'context loss → safe mode');
+    check(await p.evaluate(() => sessionStorage.getItem('ra.safe3d') === '1'), 'context loss → 3D compatibility mode');
     check((await coins()) === before, 'stake refunded after GPU failure');
     await p.waitForSelector('text=TAP TO PLAY', { timeout: 20000 });
-    check(true, 'game restarted in safe mode');
+    check((await p.locator('[data-testid=game-surface] canvas').count()) > 0, 'game rebuilt in 3D');
     await p.click('text=TAP TO PLAY');
     await p.waitForTimeout(3200);
     await lose();
-    await p.waitForSelector('[data-testid=lite-edition]', { timeout: 10000 }).catch(() => {});
-    check((await p.locator('[data-testid=lite-edition]').count()) > 0, 'second failure → lite (2D) edition');
-    await p.screenshot({ path: `${OUT}/lite-fallback.png` });
+    await p.waitForSelector('text=TAP TO PLAY', { timeout: 20000 }).catch(() => {});
+    check((await p.locator('[data-testid=game-surface] canvas').count()) > 0 && !(await p.locator('[data-testid=lite-edition]').count()), 'second failure → rebuilt in 3D again (no 2D edition)');
+    await p.screenshot({ path: `${OUT}/compat-rebuilt.png` });
     await ctx.close();
   }
 
-  // 3. No WebGL at all → lite edition straight away, Brick Blitz still runs (canvas).
+  // 3. No WebGL at all → clear explanation screen (no crash, no 2D edition).
   {
     const nb = await chromium.launch({ args: ['--disable-webgl', '--disable-3d-apis'] });
     const p = await (await nb.newContext(phone)).newPage();
@@ -87,13 +87,14 @@ async function startGame(p, id, mode = 'practice', stake) {
     p.on('pageerror', (e) => errs.push(e.message));
     await p.goto(URL);
     await p.waitForTimeout(800);
-    await p.click('[data-testid=tile-neon-dash]');
-    await p.click('[data-testid=mode-practice]');
-    await p.waitForSelector('[data-testid=lite-edition]', { timeout: 10000 }).catch(() => {});
-    check((await p.locator('[data-testid=lite-edition]').count()) > 0, 'no WebGL → lite edition');
-    await p.click('[aria-label="Close match"]');
-    await startGame(p, 'brick-blitz');
-    check((await p.locator('[data-testid=game-shell]').count()) > 0, 'no WebGL → Brick Blitz runs');
+    for (const g of ['neon-dash', 'brick-blitz']) {
+      await p.click(`[data-testid=tile-${g}]`);
+      await p.click('[data-testid=mode-practice]');
+      await p.waitForSelector('[data-testid=no-3d]', { timeout: 10000 }).catch(() => {});
+      check((await p.locator('[data-testid=no-3d]').count()) > 0, `no WebGL → ${g} explains the 3D requirement`);
+      await p.click('[aria-label="Close match"]');
+      await p.waitForTimeout(300);
+    }
     check(errs.length === 0, 'no WebGL: no page errors');
     await nb.close();
   }

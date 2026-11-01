@@ -2,12 +2,13 @@
 
 import React, { useCallback, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { sound } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
 import {
+  CameraFeel,
   ParticleBursts,
   createBlobShadow,
+  createFirstPersonRig,
   createStarfield,
   neonMaterial,
   useGameEngine,
@@ -35,7 +36,9 @@ const RIM_TUBE = 0.028;
 const RIM_Y = 3.05;
 const HOOP_Z = -2.6; // rim centre depth
 const BOARD_OFFSET = 0.52; // backboard sits this far behind rim centre
-const SPAWN = new THREE.Vector3(0, 1.05, 3.4);
+// The ball is held in your hands just below eye level (first person).
+const SPAWN = new THREE.Vector3(0, 1.36, 3.4);
+const EYE = { y: 1.74, back: 1.0 };
 const MAX_BALLS = 4;
 const RELOAD = 0.38; // seconds before the next ball is ready
 
@@ -232,7 +235,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
     {
       background: 0x07080f,
       fog: { density: 0.022 },
-      camera: { fov: 60, far: 120, position: [0, 2.0, 7.6], lookAt: [0, 2.55, -2.2] },
+      camera: { fov: 66, near: 0.03, far: 120, position: [0, EYE.y, SPAWN.z + EYE.back], lookAt: [0, 1.1, HOOP_Z] },
       exposure: 1.1,
       bloom: { strength: 0.5, radius: 0.32, threshold: 0.88 },
       environment: 0.55,
@@ -243,14 +246,15 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const { scene, camera, quality } = engine;
       const rng = { next: mulberry32(1) };
 
-      // Camera sits behind the shot spot (it follows when the spot shifts), framed per screen shape.
-      const view = { y: 2.0, z: 7.7, camX: 0 };
+      // First person: you hold the ball at the free-throw spot and look up at the rim.
+      // The camera follows when the shot spot shifts; the lens widens on tall phone screens.
+      const view = { camX: 0, lookY: 1.1 };
       engine.onResize((_w, _h, aspect) => {
-        if (aspect < 0.8) Object.assign(view, { y: 2.0, z: 7.7 });
-        else Object.assign(view, { y: 2.25, z: 8.2 });
-        camera.fov = aspect < 0.8 ? 64 : 44;
+        camera.fov = aspect < 0.6 ? 70 : aspect < 0.8 ? 64 : 50;
+        view.lookY = aspect < 0.8 ? 1.1 : 1.45;
         camera.updateProjectionMatrix();
       });
+      const feel = new CameraFeel();
 
       // ---------------- lighting: arena key + rim lights + soft fill
       scene.add(new THREE.HemisphereLight(0xffe6c8, 0x2a1a10, 0.9));
@@ -395,13 +399,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       hoopShadow.position.set(0, 0.02, HOOP_Z);
       hoop.add(hoopShadow);
 
-      // ---------------- shooter avatar (beside the ball)
-      const avatar3D = create3DAvatar(stableAvatar);
-      engine.own(avatar3D);
-      avatar3D.group.scale.setScalar(0.85);
-      scene.add(avatar3D.group);
-      const avatarShadow = createBlobShadow(engine, 0.5);
-      scene.add(avatarShadow);
+      // ---------------- your arms, holding the ball
+      const arms = createFirstPersonRig(engine, stableAvatar, { spread: 0.2, drop: 0.47, depth: 0.62 });
+      let throwT = 0; // >0 while the follow-through plays
 
       // ---------------- balls
       const ballTex = engine.own(new THREE.CanvasTexture(makeBallTexture()));
@@ -446,14 +446,6 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const tmp = new THREE.Vector3();
       const tmp2 = new THREE.Vector3();
 
-      const placeShooter = () => {
-        // Stand off to the side and slightly ahead so the shooter frames the shot, not blocks it.
-        avatar3D.group.position.set(spawn.x - 1.9, 0, spawn.z - 1.4);
-        avatar3D.group.rotation.y = 0.55;
-        avatarShadow.position.set(spawn.x - 1.9, 0.02, spawn.z - 1.4);
-      };
-      placeShooter();
-
       resetRef.current = () => {
         rng.next = mulberry32(seedRef.current ?? randomSeed());
         hoopPhase = rng.next() * Math.PI * 2;
@@ -465,7 +457,6 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           b.mesh.visible = false;
         });
         particles.clear();
-        placeShooter();
       };
 
       /** Velocity that lands exactly on `target` after `t` seconds. */
@@ -551,7 +542,8 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         st.reload = RELOAD;
         sound.playJump();
         haptic('light');
-        avatar3D.trigger('shoot', 0.4);
+        throwT = 0.45;
+        feel.kick(0.25);
       };
 
       const score = (ball: Ball) => {
@@ -592,7 +584,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         else if (ball.bank) popups.current?.pop('BANK!', p.x, p.y + 10, { color: '#c4b5fd', size: 'sm' });
         if (st.streak === 3) popups.current?.banner('HEATING UP ×2', '#fb923c');
         if (st.streak === 6) popups.current?.banner('ON FIRE ×3', '#f43f5e');
-        avatar3D.trigger('celebrate', swish ? 1.1 : 0.6);
+        if (swish) feel.kick(0.35);
 
         // Level up → hoop starts moving; shot spot shifts (seeded, same for every player)
         const nextLevel = LEVELS.reduce((lv, l, i) => (st.makes >= l.makes ? i : lv), 0);
@@ -604,7 +596,6 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         if (shift > 0) {
           spawn.x = (rng.next() - 0.5) * shift;
           spawn.z = SPAWN.z + (rng.next() - 0.5) * 0.3 * shift;
-          placeShooter();
         }
         pushHud({ score: st.score, streak: st.streak, level: st.level }, true);
       };
@@ -745,13 +736,29 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         }
         rimMat.emissiveIntensity = 0.5 + netKick * 2.5;
 
-        avatar3D.updateAnimation(t, 'idle', dt);
+        // First-person camera at the shot spot (follows it when it shifts), gentle breathing sway.
+        view.camX += (spawn.x - view.camX) * Math.min(1, dt * 3);
+        const off = feel.update(dt, t, 0);
+        const breathe = Math.sin(t * 1.3) * 0.006;
+        camera.position.set(view.camX + off.x, EYE.y + breathe + off.y, spawn.z + EYE.back);
+        camera.lookAt(view.camX * 0.85 + hoopX * 0.15, view.lookY, HOOP_Z);
 
-        // Follow the shooting spot so the ball always sits bottom-centre, hoop in view.
-        view.camX += (spawn.x * 0.8 - view.camX) * Math.min(1, dt * 3);
-        camera.position.set(view.camX, view.y, view.z);
-        camera.lookAt(view.camX * 0.45 + hoopX * 0.2, 2.55, -2.2);
-
+        // Arms: cradle the ball, then push up and through on the shot.
+        arms.ready(t);
+        if (throwT > 0) {
+          throwT = Math.max(0, throwT - dt);
+          const k = Math.sin((1 - throwT / 0.45) * Math.PI); // 0 → 1 → 0
+          for (const a of [arms.left, arms.right]) {
+            a.pivot.position.y += k * 0.16;
+            a.pivot.position.z -= k * 0.18;
+            a.pivot.rotation.x = k * 0.9;
+          }
+        } else if (!readyBall.visible) {
+          // Reloading: hands drop to catch the next ball.
+          arms.left.pivot.position.y -= 0.05;
+          arms.right.pivot.position.y -= 0.05;
+        }
+        arms.setGlow(st.streak >= 6 ? 1.5 : st.streak >= 3 ? 0.6 : 0);
       });
 
       return () => {
@@ -798,7 +805,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Lean to aim' },
         { icon: <Flame className="w-6 h-6" />, label: '3 in a row = ×2' },
       ]}
-      scoring="Starts easy: still hoop and strong aim help. Every few baskets the hoop moves faster and the help eases off. Basket 100 · Swish +50 · Bank +25 · Streaks ×2/×3 · Last 10s ×2."
+      scoring="First-person shooting. Starts easy: still hoop and strong aim help. Every few baskets the hoop moves faster and the help eases off. Basket 100 · Swish +50 · Bank +25 · Streaks ×2/×3 · Last 10s ×2."
     />
   );
 }

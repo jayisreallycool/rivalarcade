@@ -10,3 +10,5 @@ export { useGameEngine, useLatest, useStructuralMemo, useThrottledHud } from './
 export { createStudioScene, GradeShader } from './studio';
 export { reportEngineFailure, ENGINE_FAILURE_EVENT } from './GameEngine';
 export type { EngineFailure } from './GameEngine';
+export { createFirstPersonRig, CameraFeel } from './first-person';
+export type { FirstPersonRig } from './first-person';

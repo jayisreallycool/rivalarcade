@@ -5,6 +5,7 @@ import type { MatchExtras, MatchInfo, RivalInfo } from '@/lib/game-types';
 import { sound, useMuted } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
 import { useLatest } from '@/lib/engine/react';
+import { enterGameFullscreen, isIOS, isStandalone } from '@/lib/fullscreen';
 import AvatarView from '@/components/avatar/AvatarView';
 import { X, Volume2, VolumeX, Play, Zap, Coins, Crown } from 'lucide-react';
 
@@ -162,30 +163,14 @@ export default function GameShell(props: GameShellProps) {
   const extras = useContext(MatchExtrasContext);
   const extrasRef = useLatest(extras);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // iPhone Safari can't hide its bars from a web page; installing to the Home Screen can.
+  const [iosTip] = useState(() => isIOS() && !isStandalone());
 
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
-  // Leave browser fullscreen when the game closes.
-  useEffect(
-    () => () => {
-      try {
-        if (document.fullscreenElement) void document.exitFullscreen();
-      } catch {
-        /* not supported */
-      }
-    },
-    [],
-  );
-
   const begin = useCallback(() => {
-    // True fullscreen on phones that allow it (Android); iOS keeps the in-page full-screen layout.
-    try {
-      if (window.matchMedia('(pointer: coarse)').matches && !document.fullscreenElement) {
-        void document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
-      }
-    } catch {
-      /* not supported */
-    }
+    // Re-enter full screen if the player left it (Android back gesture, notification shade…).
+    enterGameFullscreen();
     const steps: (number | 'GO')[] = [3, 2, 1, 'GO'];
     steps.forEach((v, i) => {
       timers.current.push(
@@ -393,6 +378,11 @@ export default function GameShell(props: GameShellProps) {
               ))}
             </div>
             <p className="text-[11px] text-white/50 text-center mb-4 leading-snug">{scoring}</p>
+            {iosTip && (
+              <p className="text-[10px] text-cyan-200/80 text-center -mt-2 mb-3" data-testid="ios-fullscreen-tip">
+                Full screen on iPhone: tap Share → Add to Home Screen
+              </p>
+            )}
 
             <button
               onClick={begin}

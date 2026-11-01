@@ -376,10 +376,10 @@ async function waitResults(page, timeout = 150000) {
   watch(np, 'nowebgl');
   await np.goto(URL);
   await np.waitForTimeout(800);
-  await step('falls back to 2D edition without WebGL', async () => {
+  await step('explains 3D requirement without WebGL (no crash, no 2D edition)', async () => {
     await np.locator('[data-testid="tile-neon-dash"]').click();
     await np.locator('[data-testid="mode-practice"]').click();
-    await np.locator('[data-testid="lite-edition"]').waitFor({ timeout: 8000 });
+    await np.locator('[data-testid="no-3d"]').waitFor({ timeout: 8000 });
     await np.waitForTimeout(1500);
     expect(!(await np.getByText('Application error').count()), 'crashed');
     await np.screenshot({ path: `${S}/nowebgl.png` });

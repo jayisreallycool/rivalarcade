@@ -11,6 +11,10 @@ export const metadata: Metadata = {
     description: 'Play competitive arcade games with your own custom avatar. 1v1 duels, automated tournaments, and zero pay-to-win.',
     type: 'website',
   },
+  applicationName: 'RivalArcade',
+  appleWebApp: { capable: true, title: 'RivalArcade', statusBarStyle: 'black-translucent' },
+  icons: { icon: '/icon.svg', apple: '/apple-icon.png' },
+  other: { 'mobile-web-app-capable': 'yes' },
   twitter: {
     card: 'summary_large_image',
     title: 'RivalArcade - Competitive Skill Gaming',
@@ -24,6 +28,8 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   themeColor: '#0b0b10',
+  // Draw under the notch / home indicator; layouts pad with env(safe-area-inset-*).
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {

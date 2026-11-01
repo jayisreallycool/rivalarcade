@@ -3,11 +3,12 @@
 import React, { useCallback, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { sound } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
 import {
+  CameraFeel,
   ParticleBursts,
+  createFirstPersonRig,
   addArenaLights,
   createStarfield,
   neonMaterial,
@@ -81,7 +82,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
     {
       background: 0x0a0b14,
       fog: { density: 0.02 },
-      camera: { fov: 48, far: 90, position: [1.5, 2.5, 9.2], lookAt: [1.5, 2.2, 0] },
+      camera: { fov: 60, near: 0.03, far: 90, position: [BOARD_CENTER.x, BOARD_CENTER.y - 1.6, 12], lookAt: [BOARD_CENTER.x, BOARD_CENTER.y - 0.3, 0] },
       exposure: 1.2,
       bloom: { strength: 0.65, radius: 0.3, threshold: 0.85 },
       environment: 0.75,
@@ -107,43 +108,92 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
       cursor.visible = false;
       scene.add(cursor);
 
-      // Podium + avatar
-      const stage = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.6, 0.4, 32), new THREE.MeshPhysicalMaterial({ color: 0x181a28, roughness: 0.3, metalness: 0.8, clearcoat: 1, clearcoatRoughness: 0.08 }));
-      stage.position.set(-2.4, 0.2, 0);
-      const stageRing = new THREE.Mesh(new THREE.TorusGeometry(1.42, 0.03, 6, 64), neonMaterial(0xa855f7, 1.6));
-      stageRing.rotation.x = Math.PI / 2;
-      stageRing.position.set(-2.4, 0.41, 0);
-      scene.add(stage, stageRing);
+      // Arcade cabinet around the board: marquee, side panels and a control deck you stand at.
+      const cabMat = new THREE.MeshPhysicalMaterial({ color: 0x141626, roughness: 0.4, metalness: 0.5, clearcoat: 0.7, clearcoatRoughness: 0.15 });
+      const cab = new THREE.Group();
+      scene.add(cab);
+      const marqueeCanvas = document.createElement('canvas');
+      marqueeCanvas.width = 1024;
+      marqueeCanvas.height = 192;
+      {
+        const g = marqueeCanvas.getContext('2d')!;
+        const bg = g.createLinearGradient(0, 0, 1024, 0);
+        bg.addColorStop(0, '#3b0764');
+        bg.addColorStop(0.5, '#7e22ce');
+        bg.addColorStop(1, '#3b0764');
+        g.fillStyle = bg;
+        g.fillRect(0, 0, 1024, 192);
+        g.font = '900 118px system-ui, sans-serif';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.lineWidth = 14;
+        g.strokeStyle = '#1e0536';
+        g.strokeText('GEM SURGE', 512, 100);
+        const tg = g.createLinearGradient(0, 40, 0, 160);
+        tg.addColorStop(0, '#fdf4ff');
+        tg.addColorStop(1, '#f0abfc');
+        g.fillStyle = tg;
+        g.fillText('GEM SURGE', 512, 100);
+      }
+      const marqueeTex = engine.own(new THREE.CanvasTexture(marqueeCanvas));
+      marqueeTex.colorSpace = THREE.SRGBColorSpace;
+      const marquee = new THREE.Mesh(new THREE.BoxGeometry(6.8, 1.3, 0.5), [cabMat, cabMat, cabMat, cabMat, new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xffffff, emissiveMap: marqueeTex, emissiveIntensity: 1.1 }), cabMat]);
+      marquee.position.set(2.55, 5.95, 0.1);
+      marquee.rotation.x = 0.12;
+      cab.add(marquee);
+      [-1, 1].forEach((side) => {
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(0.35, 9.2, 3.4), cabMat);
+        panel.position.set(2.55 + side * 3.6, 1.6, 1.3);
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 9.2, 0.06), neonMaterial(side < 0 ? 0x22d3ee : 0xf472b6, 1.6));
+        strip.position.set(2.55 + side * 3.42, 1.6, 2.95);
+        cab.add(panel, strip);
+      });
+      const deck = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.4, 3.0), cabMat);
+      deck.position.set(2.55, -1.85, 1.5);
+      deck.rotation.x = 0.28;
+      deck.receiveShadow = engine.quality.shadows;
+      cab.add(deck);
+      const deckEdge = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.05, 0.05), neonMaterial(0xa855f7, 1.8));
+      deckEdge.position.set(2.55, -1.62, 2.95);
+      cab.add(deckEdge);
+      // Joystick + three buttons on the deck.
+      const controls = new THREE.Group();
+      controls.position.copy(deck.position);
+      controls.rotation.x = deck.rotation.x;
+      cab.add(controls);
+      const stickBase = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.08, 32), new THREE.MeshPhysicalMaterial({ color: 0x0b0b10, roughness: 0.3, metalness: 0.6 }));
+      stickBase.position.set(-1.9, 0.24, 0.2);
+      const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.55, 12), new THREE.MeshPhysicalMaterial({ color: 0xd4d4d8, metalness: 1, roughness: 0.2 }));
+      stick.position.set(-1.9, 0.5, 0.2);
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.19, 28, 18), new THREE.MeshPhysicalMaterial({ color: 0xff2d55, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.05 }));
+      knob.position.set(-1.9, 0.8, 0.2);
+      controls.add(stickBase, stick, knob);
+      const buttons: THREE.Mesh[] = [];
+      [0x22d3ee, 0xfacc15, 0xf472b6].forEach((c, i) => {
+        const b = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.14, 28), new THREE.MeshPhysicalMaterial({ color: c, emissive: c, emissiveIntensity: 0.5, roughness: 0.2, clearcoat: 1 }));
+        b.position.set(0.4 + i * 0.75, 0.25, 0.25 - i * 0.12);
+        controls.add(b);
+        buttons.push(b);
+      });
 
-      const avatar3D = create3DAvatar(stableAvatar);
-      engine.own(avatar3D);
-      avatar3D.group.position.set(-2.4, 0.4, 0);
-      avatar3D.group.rotation.y = 0.4;
-      scene.add(avatar3D.group);
+      // First person: you stand at the cabinet; your hands rest in front of you.
+      const arms = createFirstPersonRig(engine, stableAvatar, { spread: 0.26, drop: 0.46, depth: 0.5 });
+      const feel = new CameraFeel();
+      let poke = 0;
+      let pressed = -1;
+      const view = { x: BOARD_CENTER.x, y: BOARD_CENTER.y - 1.6, z: 12, lookY: BOARD_CENTER.y - 0.3 };
 
       const particles = new ParticleBursts(engine);
 
-      // Portrait: board fills the width with the avatar cheering below. Landscape: avatar beside it.
+      // Portrait: the board fills the width with the marquee above and the control deck below.
       engine.onResize((_w, _h, aspect) => {
         if (aspect < 0.8) {
-          const halfW = 3.7;
-          camera.fov = 58;
+          camera.fov = 62;
           const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * aspect;
-          const dist = halfW / tanH;
-          camera.position.set(BOARD_CENTER.x, BOARD_CENTER.y - 1.2, dist);
-          camera.lookAt(BOARD_CENTER.x, BOARD_CENTER.y - 1.2, 0);
-          stage.position.set(BOARD_CENTER.x, -2.95, 0.6);
-          stageRing.position.set(BOARD_CENTER.x, -2.74, 0.6);
-          avatar3D.group.position.set(BOARD_CENTER.x, -2.75, 0.6);
-          avatar3D.group.rotation.y = 0;
+          Object.assign(view, { x: BOARD_CENTER.x, y: BOARD_CENTER.y - 1.7, z: 3.45 / tanH, lookY: BOARD_CENTER.y - 0.25 });
         } else {
-          camera.fov = 48;
-          camera.position.set(1.4, 2.0, 10.6);
-          camera.lookAt(1.4, 1.9, 0);
-          stage.position.set(-2.4, 0.2, 0);
-          stageRing.position.set(-2.4, 0.41, 0);
-          avatar3D.group.position.set(-2.4, 0.4, 0);
-          avatar3D.group.rotation.y = 0.4;
+          camera.fov = 50;
+          Object.assign(view, { x: BOARD_CENTER.x, y: BOARD_CENTER.y - 1.2, z: 10.5, lookY: BOARD_CENTER.y });
         }
         camera.updateProjectionMatrix();
       });
@@ -336,7 +386,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         haptic(s.combo >= 2 ? 'big' : 'score');
         sound.playScore(1 + Math.min(s.combo * 0.1, 1.5));
         engine.flash(Math.min(1, 0.25 + matched.size * 0.04));
-        avatar3D.trigger('celebrate', 0.9);
+        if (s.combo >= 2) feel.kick(0.25);
         pushHud({ score: s.score, combo: s.combo, bestCombo: s.bestCombo }, true);
         collapse();
         later(0.32, resolve);
@@ -346,6 +396,8 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         busy = true;
         idle = 0;
         hint = null;
+        poke = 1;
+        pressed = sim.current.moves % 3;
         sim.current.moves += 1;
         haptic('tap');
         sim.current.combo = 0; // each move starts a fresh cascade chain
@@ -499,7 +551,23 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
           cursor.rotation.z += dt * 2;
         }
 
-        avatar3D.updateAnimation(t, 'idle', dt);
+        // First-person camera with a slow breathing sway; cascades shake it a little.
+        const off = feel.update(dt, t, 0);
+        camera.position.set(view.x + Math.sin(t * 0.6) * 0.04 + off.x, view.y + Math.sin(t * 1.1) * 0.03 + off.y, view.z);
+        camera.lookAt(view.x, view.lookY, 0);
+
+        // Hands: right hand taps a deck button on each swap.
+        arms.ready(t);
+        if (poke > 0) {
+          poke = Math.max(0, poke - dt * 5);
+          const k = Math.sin(poke * Math.PI);
+          arms.right.pivot.position.z -= k * 0.08;
+          arms.right.pivot.position.y -= k * 0.04;
+          arms.right.pivot.rotation.x = -k * 0.3;
+        }
+        buttons.forEach((b, i) => (b.position.y = 0.25 - (i === pressed ? Math.sin(poke * Math.PI) * 0.06 : 0)));
+        knob.position.x = -1.9 + Math.sin(t * 0.9) * 0.03;
+        arms.setGlow(Math.min(1.5, s.combo * 0.4));
       });
 
       return () => {
@@ -536,7 +604,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <Pointer className="w-6 h-6" />, label: 'Or tap, then tap neighbour' },
         { icon: <Layers className="w-6 h-6" />, label: 'Chain cascades' },
       ]}
-      scoring="Four gem types for the first 20s, then five. Stuck? A valid swap starts to pulse. 60 per gem cleared · Each cascade step in one move multiplies (×2, ×3…) · Last 10s ×2. Same board for every player."
+      scoring="First-person arcade cabinet. Four gem types for the first 20s, then five. Stuck? A valid swap starts to pulse. 60 per gem cleared · Each cascade step in one move multiplies (×2, ×3…) · Last 10s ×2. Same board for every player."
     />
   );
 }

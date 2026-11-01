@@ -23,8 +23,9 @@ const stats = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('rival_arc
 
 (async () => {
   require('fs').mkdirSync(OUT, { recursive: true });
-  const b = await chromium.launch();
+  const b = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
   const p = await b.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await p.addInitScript(() => localStorage.setItem('ra.quality', 'low'));
   const errs = [];
   p.on('pageerror', (e) => errs.push(e.message));
   await p.goto(URL);

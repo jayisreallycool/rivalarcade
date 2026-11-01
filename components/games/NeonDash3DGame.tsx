@@ -2,15 +2,15 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { sound } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
 import {
   Pool,
   ParticleBursts,
+  CameraFeel,
   addArenaLights,
-  createBlobShadow,
   createCityscape,
+  createFirstPersonRig,
   createNeonGridFloor,
   createStarfield,
   neonMaterial,
@@ -72,6 +72,18 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
   const [hud, pushHud] = useThrottledHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false, shields: SHIELDS });
   const popups = useRef<PopupApi | null>(null);
   const resetWorldRef = useRef<() => void>(() => {});
+  const flashRef = useRef<HTMLDivElement | null>(null);
+  /** Red edge flash when you take a hit (first person has no body to see it on). */
+  const hitFlash = useCallback(() => {
+    const el = flashRef.current;
+    if (!el) return;
+    el.style.transition = 'none';
+    el.style.opacity = '1';
+    requestAnimationFrame(() => {
+      el.style.transition = 'opacity 600ms ease-out';
+      el.style.opacity = '0';
+    });
+  }, []);
 
   // Simulation state lives in a ref: the render loop reads it every frame without React re-renders.
   const sim = useRef({
@@ -219,7 +231,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
     {
       background: 0x070810,
       fog: { density: 0.016 },
-      camera: { fov: 58, far: 220, position: [0, 3.8, 6.5], lookAt: [0, 1.2, -8] },
+      camera: { fov: 74, near: 0.03, far: 220, position: [0, 1.55, 0.4], lookAt: [0, 1.2, -12] },
       exposure: 1.15,
       bloom: { strength: 0.65, radius: 0.22, threshold: 0.85 },
       environment: 0.6,
@@ -228,15 +240,19 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
     (engine) => {
       const { scene, camera, quality } = engine;
 
-      // Portrait phones: higher, wider camera so all three lanes and upcoming hazards fit.
-      const view = { fov: 58, y: 3.8, z: 6.5, lookY: 1.2 };
+      // First person: you ARE the runner. Eye height 1.55 m, wider lens on tall phone screens
+      // so all three lanes ahead stay in view.
+      const EYE = 1.55;
+      const SLIDE_EYE = 0.62;
+      const view = { fov: 74 };
       engine.onResize((_w, _h, aspect) => {
-        if (aspect < 0.8) Object.assign(view, { fov: 74, y: 5.0, z: 7.6, lookY: 0.6 });
-        else Object.assign(view, { fov: 58, y: 3.8, z: 6.5, lookY: 1.2 });
+        view.fov = aspect < 0.6 ? 86 : aspect < 0.8 ? 80 : 72;
         camera.fov = view.fov;
-        camera.position.set(camera.position.x, view.y, view.z);
         camera.updateProjectionMatrix();
       });
+      const feel = new CameraFeel();
+      let eye = EYE;
+      let roll = 0;
 
       addArenaLights(engine, { sky: 0x7fdfff, hemi: 0.9, key: 1.8, keyPos: [8, 16, 10], rim: 0xff0055, shadowFrustum: 10 });
 
@@ -295,13 +311,8 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       sun.position.set(0, 16, -190);
       scene.add(sun);
 
-      // Player
-      const avatar3D = create3DAvatar(stableAvatar);
-      engine.own(avatar3D);
-      scene.add(avatar3D.group);
-      const blob = createBlobShadow(engine, 0.55);
-      blob.position.y = 0.03;
-      scene.add(blob);
+      // Player: your own arms pump at the bottom of the screen.
+      const arms = createFirstPersonRig(engine, stableAvatar, { spread: 0.27, drop: 0.42, depth: 0.5 });
 
       const particles = new ParticleBursts(engine);
 
@@ -374,9 +385,10 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
           engine.flash(0.6);
         } else {
           s.action = 'idle';
-          s.shake = 0.45;
+          feel.kick(1);
+          hitFlash();
           engine.flash(1.2);
-          tmp.set(s.currentX, 1, 0);
+          tmp.set(s.currentX, 1, -1.5);
           particles.emit(tmp, 0xff0055, { count: 40, speed: 7, life: 0.9 });
           popups.current?.banner('CRASHED', '#fb7185');
           sound.playLose();
@@ -501,7 +513,8 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
                   break;
                 }
                 s.invuln = INVULN;
-                s.shake = 0.3;
+                feel.kick(0.8);
+                hitFlash();
                 engine.flash(0.8);
                 particles.emit(o.obj.position, 0xff0055, { count: 26, speed: 6, life: 0.7 });
                 o.obj.visible = false;
@@ -541,31 +554,38 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
           pushHud({ score: totalScore(), combo: s.combo, distance: Math.floor(s.distance), timeLeft: Math.max(0, s.timeLeft), clutch: s.timeLeft <= CLUTCH_SECONDS });
         }
 
-        // Player transform + animation
-        avatar3D.group.position.set(s.currentX, s.playerY, 0);
-        avatar3D.group.visible = s.invuln <= 0 || Math.floor(t * 14) % 2 === 0;
-        avatar3D.updateAnimation(t, s.playing ? s.action : 'idle', dt);
-        blob.position.x = s.currentX;
-        const lift = Math.min(1, s.playerY / 3);
-        blob.scale.setScalar(1 - lift * 0.5);
-        (blob.material as THREE.MeshBasicMaterial).opacity = 0.55 * (1 - lift * 0.7);
-
-        // Camera: soft follow, speed FOV kick, impact shake
-        const follow = 1 - Math.exp(-5 * dt);
-        camera.position.x += (s.currentX * 0.4 - camera.position.x) * follow;
-        camera.position.y += (view.y + s.playerY * 0.25 - camera.position.y) * follow;
-        if (s.shake > 0) {
-          s.shake = Math.max(0, s.shake - dt);
-          const a = s.shake * 0.5;
-          camera.position.x += (Math.random() - 0.5) * a;
-          camera.position.y += (Math.random() - 0.5) * a;
-        }
-        const targetFov = view.fov + (s.playing ? (s.speed - BASE_SPEED) * 0.55 : 0);
+        // First-person camera: eye height follows jump / slide, lane changes lean the view,
+        // footsteps bob it, hits shake it, and the lens widens with speed.
+        const targetEye = (s.isSliding ? SLIDE_EYE : EYE) + s.playerY;
+        eye += (targetEye - eye) * (1 - Math.exp(-(s.isSliding ? 22 : 16) * dt));
+        const running = s.playing && !s.isJumping && !s.isSliding;
+        const bob = running ? 0.035 + (s.speed - BASE_SPEED) * 0.0012 : 0;
+        const off = feel.update(dt, t * (s.speed / BASE_SPEED), bob);
+        camera.position.set(s.currentX + off.x, eye + off.y, 0.4);
+        camera.lookAt(s.currentX * 0.92, eye - 0.38 - (s.isSliding ? 0.1 : 0), -12);
+        roll += ((s.targetX - s.currentX) * -0.05 - roll) * (1 - Math.exp(-10 * dt));
+        camera.rotateZ(roll);
+        const targetFov = view.fov + (s.playing ? Math.min(9, (s.speed - BASE_SPEED) * 0.5) : 0);
         if (Math.abs(camera.fov - targetFov) > 0.05) {
-          camera.fov += (targetFov - camera.fov) * follow;
+          camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-4 * dt));
           camera.updateProjectionMatrix();
         }
-        camera.lookAt(camera.position.x * 0.5, view.lookY, -8);
+
+        // Arms: pump while running, tuck while sliding, fling up on a jump; blink when shielded.
+        if (s.isJumping) {
+          arms.ready(t);
+          arms.left.pivot.position.y += 0.08;
+          arms.right.pivot.position.y += 0.08;
+          arms.left.pivot.rotation.x = arms.right.pivot.rotation.x = 0.5;
+        } else if (s.isSliding) {
+          arms.ready(t);
+          arms.left.pivot.position.y -= 0.12;
+          arms.right.pivot.position.y -= 0.12;
+        } else {
+          arms.run(t, s.playing ? 7 + s.speed * 0.25 : 2.2, s.playing ? 1 : 0.25);
+        }
+        arms.root.visible = s.invuln <= 0 || Math.floor(t * 14) % 2 === 0;
+        arms.setGlow(s.combo >= 5 ? 1.2 : 0);
       });
 
       return () => {
@@ -612,7 +632,9 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Swipe up / tap: jump spikes' },
         { icon: <ArrowDown className="w-6 h-6" />, label: 'Swipe down: slide lasers' },
       ]}
-      scoring="60-second run that starts slow and speeds up. 3 shields — a hit costs one and your combo. Crystals 150 × combo · Dodges 50 × combo · Finish the run +500 · Last 10s ×2. Same road for every player."
-    />
+      scoring="First-person 60-second run that starts slow and speeds up. 3 shields — a hit costs one and your combo. Crystals 150 × combo · Dodges 50 × combo · Finish the run +500 · Last 10s ×2. Same road for every player."
+    >
+      <div ref={flashRef} className="absolute inset-0 z-10 pointer-events-none opacity-0" style={{ background: 'radial-gradient(ellipse at center, transparent 45%, rgba(255,0,72,0.55) 100%)' }} />
+    </GameShell>
   );
 }

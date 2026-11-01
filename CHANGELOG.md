@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-01 — Full 3D, first person, full screen
+
+- Every game is now full 3D with a first-person camera and your own avatar's arms (skin tone, shirt and accent colour) in view:
+  - Neon Dash: run the road at eye height; jumps and slides move your view, lane changes lean it, footsteps bob it, hits shake it with a red edge flash.
+  - Dunk Rush: hold the ball in your hands at the shot spot and flick it at the rim; hands follow through on each shot.
+  - Cyber Reflex: stand on the platform and fire lasers from your hand at nodes that appear in front of you (layouts are seeded as screen fractions, so every phone sees the same drill).
+  - Gem Surge: play at a 3D arcade cabinet with marquee, joystick and buttons; your hand taps a button on each swap.
+  - Brick Blitz: rebuilt in 3D (it was canvas 2D). Stand behind the launcher, point down the lane to aim, watch volleys bounce through instanced 3D bricks with hit counts. Rules, seeding and scoring are unchanged.
+- Removed the 2D "lite edition". GPU trouble now rebuilds the arena in 3D compatibility mode (up to 3 times, stake refunded each time), then offers Try again. Devices without WebGL 2 get a clear explanation instead of a 2D game.
+- Full screen: matches enter browser full screen and lock portrait on Android; the app installs to the Home Screen as a full-screen portrait web app (manifest + Apple web-app tags, `viewport-fit=cover`), with a tip on iPhone Safari. New app icon.
+- Arms render with cheap standard materials, one merged mesh per hand, drawn last so the world never clips through them.
+
 ## 2026-10-31 — 3D compatibility on every phone
 
 - Engine checks what the GPU can really do on the live renderer: half-float render targets (bloom, reflections) and shader limits.

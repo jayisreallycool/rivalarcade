@@ -2,13 +2,14 @@
 
 import React, { useCallback, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { sound } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
 import {
+  CameraFeel,
   Pool,
   ParticleBursts,
   addArenaLights,
+  createFirstPersonRig,
   createNeonGridFloor,
   createStarfield,
   neonMaterial,
@@ -41,6 +42,9 @@ const rampK = (elapsed: number) => {
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 const CLUTCH_SECONDS = 10;
 const TOUCH_SLOP = 46; // px: a near-miss tap still counts on phones
+const EYE_Y = 1.62;
+/** Nodes are seen up close in first person, so they are drawn smaller than in the old overhead view. */
+const NODE_SCALE = 0.62;
 
 interface NodeObj {
   group: THREE.Group;
@@ -62,6 +66,17 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
   const popups = useRef<PopupApi | null>(null);
   const hitRef = useRef<(x: number, y: number, isTap: boolean) => void>(() => {});
   const resetWorldRef = useRef<() => void>(() => {});
+  const flashRef = useRef<HTMLDivElement | null>(null);
+  const hitFlash = useCallback(() => {
+    const el = flashRef.current;
+    if (!el) return;
+    el.style.transition = 'none';
+    el.style.opacity = '1';
+    requestAnimationFrame(() => {
+      el.style.transition = 'opacity 500ms ease-out';
+      el.style.opacity = '0';
+    });
+  }, []);
 
   const fresh = () => ({ playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, spawnTimer: 0, clutchAnnounced: false, hits: 0, perfects: 0, hazards: 0, pHits: 0, pPerfect: 0, pStreak: 0, pClutch: 0, pHazard: 0 });
   const sim = useRef({ ...fresh(), playing: false });
@@ -86,9 +101,9 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
     {
       background: 0x080911,
       fog: { density: 0.03 },
-      camera: { fov: 50, far: 90, position: [0, 3.8, 8.2], lookAt: [0, 1.2, 0] },
-      exposure: 1.25,
-      bloom: { strength: 0.75, radius: 0.3, threshold: 0.82 },
+      camera: { fov: 70, near: 0.03, far: 90, position: [0, EYE_Y, 0], lookAt: [0, EYE_Y, -10] },
+      exposure: 1.1,
+      bloom: { strength: 0.5, radius: 0.28, threshold: 0.9 },
       environment: 0.65,
       ao: true,
       studio: { top: 0x1a1640, left: 0x00f0ff, right: 0x8b5cf6 },
@@ -96,20 +111,16 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
     (engine) => {
       const { scene, camera } = engine;
 
-      // Same node positions for every player (seeded); the camera adapts to the screen instead.
-      const view = { fov: 50, y: 3.8, z: 8.2, lookY: 1.2, lookZ: 0 };
+      // First person: you stand on the command platform and nodes materialise in front of you.
+      // Node spots are seeded as screen fractions + depth, so every player sees the same layout
+      // on any screen shape; the lens widens on tall phones.
       engine.onResize((_w, _h, aspect) => {
-        if (aspect < 0.8) {
-          // Narrow screens: steeper overhead view, distance chosen so the whole node ring fits the width.
-          const halfW = 5.1;
-          const fov = 66;
-          const dist = halfW / (aspect * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
-          const elev = THREE.MathUtils.degToRad(58);
-          Object.assign(view, { fov, y: 1.4 + dist * Math.sin(elev), z: -0.4 + dist * Math.cos(elev), lookY: 1.4, lookZ: -0.4 });
-        } else Object.assign(view, { fov: 50, y: 3.8, z: 8.2, lookY: 1.2, lookZ: 0 });
-        camera.fov = view.fov;
+        camera.fov = aspect < 0.6 ? 76 : aspect < 0.8 ? 70 : 60;
         camera.updateProjectionMatrix();
       });
+      const feel = new CameraFeel();
+      let lookX = 0;
+      let lookY = 0;
 
       addArenaLights(engine, { sky: 0x00f0ff, ground: 0x1a1233, hemi: 1.2, key: 1.8, keyPos: [6, 12, 8], rim: 0x8b5cf6, shadowFrustum: 6 });
 
@@ -118,10 +129,10 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
       scene.add(createStarfield(engine, { count: 600, radius: 50, yMin: 3 }));
 
       // Command platform
-      const platform = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.6, 0.4, 48), new THREE.MeshPhysicalMaterial({ color: 0x121424, roughness: 0.25, metalness: 0.85, clearcoat: 1, clearcoatRoughness: 0.06 }));
+      const platform = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.45, 0.4, 48), new THREE.MeshPhysicalMaterial({ color: 0x121424, roughness: 0.25, metalness: 0.85, clearcoat: 1, clearcoatRoughness: 0.06 }));
       platform.position.y = 0.2;
       platform.receiveShadow = engine.quality.shadows;
-      const pRing = new THREE.Mesh(new THREE.TorusGeometry(2.3, 0.04, 8, 96), neonMaterial(0x00f0ff, 1.6));
+      const pRing = new THREE.Mesh(new THREE.TorusGeometry(1.22, 0.035, 8, 96), neonMaterial(0x00f0ff, 1.2));
       pRing.rotation.x = -Math.PI / 2;
       pRing.position.y = 0.42;
       scene.add(platform, pRing);
@@ -133,18 +144,13 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
         r.rotation.x = Math.PI / 2 + (i - 1) * 0.25;
         halo.add(r);
       }
-      halo.position.y = 2;
+      halo.position.set(0, 2.2, -9);
       scene.add(halo);
 
-      const avatar3D = create3DAvatar(stableAvatar);
-      engine.own(avatar3D);
-      avatar3D.group.position.set(0, 0.4, 0);
-      scene.add(avatar3D.group);
-
-      const shieldMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff, wireframe: true, transparent: true, opacity: 0.22, toneMapped: false });
-      const shield = new THREE.Mesh(new THREE.IcosahedronGeometry(1.6, 2), shieldMat);
-      shield.position.set(0, 1.4, 0);
-      scene.add(shield);
+      // Your arms: the right hand fires the laser.
+      const arms = createFirstPersonRig(engine, stableAvatar, { spread: 0.24, drop: 0.42, depth: 0.5 });
+      let recoil = 0;
+      const muzzle = new THREE.Vector3();
 
       // Laser beam (one reusable mesh, stretched between avatar and target)
       const beamMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending });
@@ -182,9 +188,6 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
       const nodes: NodeObj[] = [];
       const hitTargets: THREE.Object3D[] = [];
       const tmp = new THREE.Vector3();
-      const avatarChest = new THREE.Vector3(0, 1.6, 0);
-      let shake = 0;
-      let faceAngle = 0;
 
       const removeNode = (i: number) => {
         pool.release(nodes[i]);
@@ -247,9 +250,8 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
           s.combo = 0;
           sound.playLose();
           haptic('fail');
-          shieldMat.color.setHex(0xff0055);
-          shield.scale.setScalar(1.4);
-          shake = 0.3;
+          feel.kick(0.7);
+          hitFlash();
           particles.emit(tmp, 0xff0055, { count: 30, speed: 6 });
           popups.current?.pop(`-${loss}`, sp.x, sp.y, { color: '#fb7185', size: 'md' });
         } else {
@@ -271,21 +273,23 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
           if (accurate) s.perfects += 1;
           sound.playScore(1 + (s.combo % 8) * 0.1);
           haptic(accurate ? 'score' : 'light');
-          shieldMat.color.setHex(0x00f0ff);
-          shield.scale.setScalar(1.25);
           engine.flash(accurate ? 0.55 : 0.25);
           particles.emit(tmp, NODE_COLORS[node.type], { count: accurate ? 28 : 16, speed: accurate ? 6 : 4 });
           popups.current?.pop(`+${pts}`, sp.x, sp.y - 18, { color: accurate ? '#fde047' : '#7df9ff', size: pts >= 1000 ? 'lg' : 'md' });
           if (accurate) popups.current?.pop('PERFECT', sp.x, sp.y + 16, { color: '#fde047', size: 'sm' });
           if (s.combo > 0 && s.combo % 5 === 0) popups.current?.banner(`STREAK ×${mult}`, '#7df9ff');
-          avatar3D.trigger('shoot', 0.35);
+          // Laser from your right hand to the node; the view leans toward it a touch.
+          recoil = 1;
+          feel.kick(0.18);
+          arms.right.hand.getWorldPosition(muzzle);
           beamMat.color.setHex(NODE_COLORS[node.type]).multiplyScalar(2);
-          beam.position.copy(avatarChest).lerp(tmp, 0.5);
-          beam.scale.set(1, 1, avatarChest.distanceTo(tmp));
+          beam.position.copy(muzzle).lerp(tmp, 0.5);
+          beam.scale.set(1, 1, muzzle.distanceTo(tmp));
           beam.lookAt(tmp);
           beam.visible = true;
           beamLife = 0.18;
-          faceAngle = Math.atan2(tmp.x, tmp.z);
+          lookX = THREE.MathUtils.clamp(tmp.x * 0.05, -0.25, 0.25);
+          lookY = THREE.MathUtils.clamp((tmp.y - EYE_Y) * 0.05, -0.15, 0.15);
         }
         pushHud({ score: s.score, combo: s.combo, bestCombo: s.bestCombo }, true);
         removeNode(idx);
@@ -313,9 +317,6 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
 
         halo.rotation.y += dt * 0.25;
         halo.children.forEach((c, i) => (c.rotation.z += dt * (0.2 + i * 0.15)));
-        shield.rotation.y += dt * 0.4;
-        if (shield.scale.x > 1) shield.scale.setScalar(Math.max(1, shield.scale.x - dt * 2.4));
-        shieldMat.opacity = 0.18 + (shield.scale.x - 1) * 0.9;
 
         if (beamLife > 0) {
           beamLife -= dt;
@@ -348,9 +349,15 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
             n.ringScale = RING_START;
             n.orb.material = orbMats[type];
             n.ring.material = ringMats[type];
-            const angle = rng() * Math.PI * 2;
-            const radius = rng() * 1.6 + 2.8;
-            n.group.position.set(Math.cos(angle) * radius, rng() * 2.0 + 0.9, Math.min(Math.sin(angle) * radius, 3.2));
+            // Seeded spot as a fraction of the view (same for everyone) + depth in metres.
+            const u = rng() * 2 - 1;
+            const v = rng() * 2 - 1;
+            const d = 5 + rng() * 3;
+            const hh = d * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+            const hw = hh * camera.aspect;
+            // Vertically: from just above the floor up to well above eye level (never under the HUD).
+            const top = EYE_Y + hh * 0.42;
+            n.group.position.set(u * hw * 0.72, 1.1 + ((v + 1) / 2) * (top - 1.1), -d);
             n.group.scale.setScalar(0.01);
             nodes.push(n);
           }
@@ -358,7 +365,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
 
         for (let i = nodes.length - 1; i >= 0; i--) {
           const n = nodes[i];
-          if (n.group.scale.x < 1) n.group.scale.setScalar(Math.min(1, n.group.scale.x + dt * 6)); // pop-in
+          if (n.group.scale.x < NODE_SCALE) n.group.scale.setScalar(Math.min(NODE_SCALE, n.group.scale.x + dt * 4)); // pop-in
           if (s.playing) n.ringScale -= lerp(0.62, 1.25, rampK(ROUND_SECONDS - s.timeLeft)) * dt;
           n.ring.scale.setScalar(n.ringScale);
           n.orb.rotation.y += 2 * dt;
@@ -373,18 +380,21 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
           }
         }
 
-        // Avatar turns toward the last target and settles back
-        faceAngle *= 1 - Math.min(1, dt * 0.8);
-        avatar3D.group.rotation.y += (faceAngle - avatar3D.group.rotation.y) * (1 - Math.exp(-10 * dt));
-        avatar3D.updateAnimation(t, 'idle', dt);
+        // First-person camera: tiny lean toward the last shot, settles back; shake on hazards.
+        lookX *= 1 - Math.min(1, dt * 2);
+        lookY *= 1 - Math.min(1, dt * 2);
+        const off = feel.update(dt, t, 0);
+        camera.position.set(off.x, EYE_Y + Math.sin(t * 1.2) * 0.008 + off.y, 0);
+        camera.lookAt(lookX * 10, EYE_Y + lookY * 10, -10);
 
-        camera.position.set(0, view.y, view.z);
-        if (shake > 0) {
-          shake = Math.max(0, shake - dt);
-          camera.position.x += (Math.random() - 0.5) * shake;
-          camera.position.y += (Math.random() - 0.5) * shake;
+        // Arms ready; right hand kicks back on each shot.
+        arms.ready(t);
+        if (recoil > 0) {
+          recoil = Math.max(0, recoil - dt * 6);
+          arms.right.pivot.position.z += recoil * 0.07;
+          arms.right.pivot.rotation.x = recoil * 0.35;
         }
-        camera.lookAt(0, view.lookY, view.lookZ);
+        arms.setGlow(Math.min(1.5, s.combo * 0.1));
       });
 
       return () => {
@@ -427,7 +437,9 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
         { icon: <Hand className="w-6 h-6" />, label: 'Slash across many' },
         { icon: <ShieldAlert className="w-6 h-6" />, label: 'Avoid red' },
       ]}
-      scoring="Starts slow with no red nodes; speeds up as the clock runs. Hit 160 · Perfect ring timing +90 · Gold ×2 · Every 5 in a row raises the multiplier (max ×5) · Red −150 · Last 10s ×2."
-    />
+      scoring="First-person laser drill. Starts slow with no red nodes; speeds up as the clock runs. Hit 160 · Perfect ring timing +90 · Gold ×2 · Every 5 in a row raises the multiplier (max ×5) · Red −150 · Last 10s ×2."
+    >
+      <div ref={flashRef} className="absolute inset-0 z-10 pointer-events-none opacity-0" style={{ background: 'radial-gradient(ellipse at center, transparent 45%, rgba(255,0,72,0.55) 100%)' }} />
+    </GameShell>
   );
 }

@@ -25,8 +25,9 @@ import {
 import { botAvatar, botName, botScore } from '@/lib/bots';
 import { mulberry32, randomSeed, seedCode } from '@/lib/rng';
 import { standings, tournamentStatus } from '@/lib/tournaments-data';
-import { enableSafeMode, isSafeMode, supportsWebGL2 } from '@/lib/engine/quality';
+import { enableSafeMode, supportsWebGL2 } from '@/lib/engine/quality';
 import { ENGINE_FAILURE_EVENT } from '@/lib/engine/GameEngine';
+import { enterGameFullscreen, exitGameFullscreen } from '@/lib/fullscreen';
 import MatchResultsModal, { ResultData } from './MatchResultsModal';
 import { MatchExtrasContext } from './GameShell';
 import AvatarView from '@/components/avatar/AvatarView';
@@ -36,7 +37,7 @@ import { X, Swords, Users } from 'lucide-react';
  * Catches anything that blows up while loading or running a game (a stale code chunk after a
  * new deploy, a GPU error thrown during render…) so the player gets a retry, not a blank page.
  */
-class GameErrorBoundary extends React.Component<{ onCrash: () => void; onRetry: () => void; onLite?: () => void; onClose: () => void; children: React.ReactNode }, { error: Error | null }> {
+class GameErrorBoundary extends React.Component<{ onCrash: () => void; onRetry: () => void; onClose: () => void; children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
     return { error };
@@ -52,7 +53,7 @@ class GameErrorBoundary extends React.Component<{ onCrash: () => void; onRetry: 
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center bg-[#070810]" data-testid="game-error">
         <h3 className="text-lg font-black text-white">{stale ? 'A new version is available' : 'This game hit a snag'}</h3>
-        <p className="text-xs text-slate-400 max-w-xs">{stale ? 'Reload to get the latest update, then jump back in.' : 'Your stake was not lost. Try again, or play the lite edition built for every phone.'}</p>
+        <p className="text-xs text-slate-400 max-w-xs">{stale ? 'Reload to get the latest update, then jump back in.' : 'Your stake was not lost. Tap Try again to reload the 3D arena.'}</p>
         <div className="flex flex-wrap justify-center gap-2 mt-2">
           {stale ? (
             <button onClick={() => window.location.reload()} className="h-11 px-5 rounded-full bg-cyan-400 text-black font-black">
@@ -69,17 +70,6 @@ class GameErrorBoundary extends React.Component<{ onCrash: () => void; onRetry: 
               >
                 Try again
               </button>
-              {this.props.onLite && (
-                <button
-                  onClick={() => {
-                    this.setState({ error: null });
-                    this.props.onLite?.();
-                  }}
-                  className="h-11 px-5 rounded-full bg-white/10 text-white font-black"
-                >
-                  Play lite edition
-                </button>
-              )}
             </>
           )}
           <button onClick={this.props.onClose} className="h-11 px-5 rounded-full bg-white/5 text-white/70 font-bold">
@@ -91,14 +81,6 @@ class GameErrorBoundary extends React.Component<{ onCrash: () => void; onRetry: 
   }
 }
 
-const force2D = () => {
-  try {
-    return sessionStorage.getItem('ra.force2d') === '1';
-  } catch {
-    return false;
-  }
-};
-
 function GameLoading() {
   return (
     <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-[#070810] text-slate-400">
@@ -108,25 +90,15 @@ function GameLoading() {
   );
 }
 
-const BrickBlitz = dynamic(() => import('./BrickBlitzGame'), { ssr: false, loading: GameLoading });
-
-// 3D games (and three.js) are code-split so they only download when a match opens.
+// Every game is full 3D; each (and three.js) is code-split so it only downloads when a match opens.
 const GAMES_3D: Record<GameId, React.ComponentType<GameProps>> = {
   'neon-dash': dynamic(() => import('./NeonDash3DGame'), { ssr: false, loading: GameLoading }),
   'dunk-rush': dynamic(() => import('./DunkRush3DGame'), { ssr: false, loading: GameLoading }),
   'cyber-reflex': dynamic(() => import('./CyberReflex3DGame'), { ssr: false, loading: GameLoading }),
   'gem-surge': dynamic(() => import('./GemSurge3DGame'), { ssr: false, loading: GameLoading }),
-  'brick-blitz': BrickBlitz,
+  'brick-blitz': dynamic(() => import('./BrickBlitz3DGame'), { ssr: false, loading: GameLoading }),
 };
 
-type Game2DProps = { avatar: AvatarConfig; onFinish: (score: number) => void; modeName?: string };
-// Canvas 2D versions for devices without WebGL2.
-const GAMES_2D: Partial<Record<GameId, React.ComponentType<Game2DProps>>> = {
-  'neon-dash': dynamic(() => import('./NeonDashGame'), { ssr: false }),
-  'dunk-rush': dynamic(() => import('./DunkRushGame'), { ssr: false }),
-  'cyber-reflex': dynamic(() => import('./CyberReflexGame'), { ssr: false }),
-  'gem-surge': dynamic(() => import('./GemSurgeGame'), { ssr: false }),
-};
 
 interface GameModalProps {
   gameId: GameId;
@@ -174,7 +146,9 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
   const [seed, setSeed] = useState(() => randomSeed());
   const [matchmaking, setMatchmaking] = useState(mode === 'duel' || mode === 'arena');
   const [result, setResult] = useState<ResultData | null>(null);
-  const [use2D, setUse2D] = useState(() => !supportsWebGL2() || force2D());
+  const [no3D] = useState(() => !supportsWebGL2());
+  const [failed, setFailed] = useState(false);
+  const failures = useRef(0);
   const [notice, setNotice] = useState<string | null>(null);
   // Wall-clock time the current run opened (a snapshot, so render stays pure).
   const [runStartedAt, setRunStartedAt] = useState(() => Date.now());
@@ -183,27 +157,23 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
   const charged = useRef(false);
   const entryRef = useRef(entry);
 
-  // GPU trouble (shader limits, lost context, no WebGL2): retry once in compatibility mode,
-  // then switch to the 2D edition. Any stake already taken for the failed run is returned.
+  // GPU trouble (shader limits, lost context, out of memory): rebuild the 3D arena with the
+  // compatibility renderer (still full 3D — lighter shaders, lower resolution) and try again.
+  // Any stake already taken for the failed run is returned.
   useEffect(() => {
     const onFail = () => {
       if (charged.current) {
         userStore.refundEntry(entryRef.current);
         charged.current = false;
       }
-      if (!isSafeMode()) {
-        enableSafeMode();
-        setNotice('Switched to compatibility graphics for this device.');
+      failures.current += 1;
+      enableSafeMode();
+      if (failures.current <= 3) {
+        setNotice('Optimizing 3D graphics for this device…');
+        setRunKey((k) => k + 1);
       } else {
-        try {
-          sessionStorage.setItem('ra.force2d', '1');
-        } catch {
-          /* ignore */
-        }
-        setUse2D(true);
-        setNotice(null);
+        setFailed(true);
       }
-      setRunKey((k) => k + 1);
     };
     window.addEventListener(ENGINE_FAILURE_EVENT, onFail);
     return () => window.removeEventListener(ENGINE_FAILURE_EVENT, onFail);
@@ -255,6 +225,12 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
     const timer = setTimeout(() => setMatchmaking(false), 1500);
     return () => clearTimeout(timer);
   }, [matchmaking, mode]);
+
+  // Matches play full screen on phones (the tap that opened the match is the required gesture).
+  useEffect(() => {
+    enterGameFullscreen();
+    return () => exitGameFullscreen();
+  }, []);
 
   // Esc closes; page behind doesn't scroll while a match is open.
   useEffect(() => {
@@ -452,7 +428,6 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
 
   const tournamentClosed = tournament && tournamentStatus(tournament, runStartedAt) !== 'live';
   const Game3D = GAMES_3D[gameId];
-  const Game2D = GAMES_2D[gameId];
   const modeLabel = mode === 'duel' ? (entry ? `1v1 · ${entry} entry` : '1v1 Ranked') : MODE_LABEL[mode];
 
   const extras: MatchExtras = useMemo(() => {
@@ -532,22 +507,31 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
           <p className="text-xs text-slate-400 mb-6">Runs can be submitted only while the tournament is live.</p>
           <button onClick={onClose} className="px-5 py-2.5 bg-cyan-500 text-black font-bold text-sm rounded-lg">Back to Arena</button>
         </div>
-      ) : use2D && Game2D ? (
-        <div className="relative h-full flex flex-col items-center justify-center p-2 overflow-y-auto">
+      ) : no3D || failed ? (
+        <div className="relative h-full flex flex-col items-center justify-center gap-3 px-6 text-center bg-[#070810]" data-testid="no-3d">
           {closeBtn}
-          <div className="w-full max-w-2xl">
-            <div className="px-4 py-1.5 text-[11px] text-cyan-200 bg-cyan-950/30 border border-cyan-700/30 rounded-t-xl" data-testid="lite-edition">
-              Lite edition — built to run smoothly on every device.
-            </div>
-            <Game2D
-              key={runKey}
-              avatar={userState.avatar}
-              onFinish={(s) => {
-                onStarted();
-                handleGameFinish(s);
-              }}
-              modeName={modeLabel}
-            />
+          <h3 className="text-lg font-black text-white">{no3D ? '3D graphics are turned off' : '3D graphics stopped responding'}</h3>
+          <p className="text-xs text-slate-400 max-w-xs">
+            {no3D
+              ? 'RivalArcade games run in full 3D (WebGL 2). Update your browser, turn off Low Power / Data Saver mode, or open the app in Safari or Chrome.'
+              : 'Your phone ran low on graphics memory. Close other apps or tabs, then try again. No coins were lost.'}
+          </p>
+          <div className="flex gap-2 mt-2">
+            {!no3D && (
+              <button
+                onClick={() => {
+                  failures.current = 0;
+                  setFailed(false);
+                  setRunKey((k) => k + 1);
+                }}
+                className="h-11 px-5 rounded-full bg-cyan-400 text-black font-black"
+              >
+                Try again
+              </button>
+            )}
+            <button onClick={onClose} className="h-11 px-5 rounded-full bg-white/10 text-white font-bold">
+              Back
+            </button>
           </div>
         </div>
       ) : (
@@ -560,18 +544,6 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
             }
           }}
           onRetry={() => setRunKey((k) => k + 1)}
-          onLite={
-            Game2D
-              ? () => {
-                  try {
-                    sessionStorage.setItem('ra.force2d', '1');
-                  } catch {
-                    /* ignore */
-                  }
-                  setUse2D(true);
-                }
-              : undefined
-          }
           onClose={onClose}
         >
           <MatchExtrasContext.Provider value={extras}>

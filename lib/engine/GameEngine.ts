@@ -70,10 +70,41 @@ const MAX_STEP = 1 / 20;
 /** Fired on window when 3D can't run here, so the match flow can retry in safe mode or go 2D. */
 export const ENGINE_FAILURE_EVENT = 'ra:engine-failure';
 export type EngineFailure = 'create' | 'shader' | 'context-lost' | 'setup';
+export interface EngineFailureDetail {
+  reason: EngineFailure;
+  message: string;
+}
 export function reportEngineFailure(reason: EngineFailure, detail?: unknown) {
   if (typeof window === 'undefined') return;
   console.warn('[RivalArcade] 3D engine failure:', reason, detail ?? '');
-  window.dispatchEvent(new CustomEvent(ENGINE_FAILURE_EVENT, { detail: reason }));
+  let message = '';
+  try {
+    message = detail instanceof Error ? `${detail.name}: ${detail.message}` : typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : '';
+  } catch {
+    message = String(detail);
+  }
+  window.dispatchEvent(new CustomEvent<EngineFailureDetail>(ENGINE_FAILURE_EVENT, { detail: { reason, message: message.slice(0, 300) } }));
+}
+
+/**
+ * Create the WebGL2 renderer, retrying with plainer context attributes when a phone driver
+ * refuses the first set (power preference, MSAA…). Throws only if every attempt fails.
+ */
+function createRenderer(antialias: boolean, safe: boolean): THREE.WebGLRenderer {
+  const attempts: THREE.WebGLRendererParameters[] = [
+    { antialias, powerPreference: safe ? 'default' : 'high-performance', stencil: false },
+    { antialias: false, powerPreference: 'default', stencil: false, failIfMajorPerformanceCaveat: false },
+    { antialias: false, powerPreference: 'low-power', stencil: false, alpha: false, depth: true, failIfMajorPerformanceCaveat: false },
+  ];
+  let last: unknown = null;
+  for (const params of attempts) {
+    try {
+      return new THREE.WebGLRenderer({ preserveDrawingBuffer: false, ...params });
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last instanceof Error ? last : new Error('Could not create a WebGL 2 context');
 }
 
 /**
@@ -191,18 +222,21 @@ export class GameEngine {
 
     // Renderer. Throws if WebGL2 can't be created — the React hook turns that into a fallback.
     const safe = isSafeMode();
-    this.renderer = new THREE.WebGLRenderer({
-      antialias: this.quality.antialias && !this.quality.bloom,
-      // 'default' lets phones pick the efficient GPU path; some Android drivers reject 'high-performance'.
-      powerPreference: safe ? 'default' : 'high-performance',
-      stencil: false,
-      preserveDrawingBuffer: false,
-    });
+    this.renderer = createRenderer(this.quality.antialias && !this.quality.bloom, safe);
     const caps = probeCapabilities(this.renderer);
     // Any shader that fails to compile (driver limits, precision…) switches the session to safe mode.
     this.renderer.debug.checkShaderErrors = true;
+    // In safe mode a failed shader only blanks that one object, so keep playing instead of
+    // tearing the game down again (that loop is what showed "not compatible" on some phones).
+    let shaderReported = false;
     this.renderer.debug.onShaderError = (_gl, _program, vs, fs) => {
-      reportEngineFailure('shader', { vs: _gl.getShaderInfoLog(vs), fs: _gl.getShaderInfoLog(fs) });
+      const log = { vs: _gl.getShaderInfoLog(vs), fs: _gl.getShaderInfoLog(fs) };
+      if (safe || shaderReported) {
+        console.warn('[RivalArcade] shader skipped in compatibility mode', log);
+        return;
+      }
+      shaderReported = true;
+      reportEngineFailure('shader', log);
     };
     this.useLiteMaterials = safe || this.quality.tier !== 'high' || !caps.richShaders;
     const postOk = this.quality.bloom && caps.hdrTargets && !safe;

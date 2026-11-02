@@ -91,15 +91,10 @@ export function isSafeMode() {
   }
   return safeMode;
 }
-let webgl2Cache: boolean | null = null;
-
-/** True when the browser can create a WebGL2 context (checked once). */
+/** True when the browser can create a WebGL2 context (re-probed until it succeeds). */
 export function supportsWebGL2(): boolean {
-  if (webgl2Cache !== null) return webgl2Cache;
   if (typeof window === 'undefined') return true;
-  detectDeviceTier();
-  if (webgl2Cache === null) webgl2Cache = probeGpu().webgl2;
-  return webgl2Cache;
+  return probeGpu().webgl2;
 }
 
 function readOverride(): QualityTier | null {
@@ -111,18 +106,66 @@ function readOverride(): QualityTier | null {
   }
 }
 
-function probeGpu(): { renderer: string; webgl2: boolean } {
-  try {
-    const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
-    if (!gl) return { renderer: 'none', webgl2: false };
-    const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    const renderer = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
-    gl.getExtension('WEBGL_lose_context')?.loseContext();
-    return { renderer, webgl2: true };
-  } catch {
-    return { renderer: 'none', webgl2: false };
+// Context attribute sets tried in order. Some phone drivers refuse a context with particular
+// attributes (power preference, MSAA, stencil) but accept a plainer one.
+export const CONTEXT_ATTEMPTS: WebGLContextAttributes[] = [
+  {},
+  { powerPreference: 'default', antialias: false, stencil: false, failIfMajorPerformanceCaveat: false },
+  { powerPreference: 'low-power', antialias: false, stencil: false, depth: true, alpha: false, failIfMajorPerformanceCaveat: false },
+];
+
+export interface GpuInfo {
+  renderer: string;
+  webgl2: boolean;
+  webgl1: boolean;
+}
+let gpuCache: GpuInfo | null = null;
+
+function probeGpu(): GpuInfo {
+  if (gpuCache) return gpuCache;
+  let renderer = 'none';
+  let webgl2 = false;
+  let webgl1 = false;
+  for (const attrs of CONTEXT_ATTEMPTS) {
+    let gl: WebGL2RenderingContext | null = null;
+    try {
+      gl = document.createElement('canvas').getContext('webgl2', attrs) as WebGL2RenderingContext | null;
+    } catch {
+      gl = null;
+    }
+    if (!gl) continue;
+    webgl2 = true;
+    // Reading the GPU name is optional — some privacy modes block or throw on it.
+    try {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      renderer = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || 'unknown');
+    } catch {
+      renderer = 'unknown';
+    }
+    try {
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    } catch {
+      /* ignore */
+    }
+    break;
   }
+  if (!webgl2) {
+    try {
+      webgl1 = Boolean(document.createElement('canvas').getContext('webgl'));
+    } catch {
+      webgl1 = false;
+    }
+  }
+  // Only cache a positive result: a probe can fail transiently (tab in background, GPU busy).
+  const info = { renderer, webgl2, webgl1 };
+  if (webgl2) gpuCache = info;
+  return info;
+}
+
+/** GPU name and API support, for diagnostics. */
+export function gpuInfo(): GpuInfo {
+  if (typeof window === 'undefined') return { renderer: 'ssr', webgl2: true, webgl1: true };
+  return probeGpu();
 }
 
 let deviceTier: QualityTier | null = null;
@@ -132,7 +175,6 @@ export function detectDeviceTier(): QualityTier {
   if (deviceTier) return deviceTier;
   if (typeof window === 'undefined') return 'medium';
   const { renderer, webgl2 } = probeGpu();
-  webgl2Cache = webgl2;
   const software = /SwiftShader|llvmpipe|softpipe|Software|Basic Render|none/i.test(renderer);
   const nav = navigator as Navigator & { deviceMemory?: number };
   const cores = nav.hardwareConcurrency || 4;

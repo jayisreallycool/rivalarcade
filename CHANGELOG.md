@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-01 — Phones wrongly told 3D was "not compatible"
+
+- Removed the up-front WebGL check that could misfire on real phones and lock the game out; games now always try to start in 3D.
+- The renderer retries with plainer graphics settings when a phone's driver refuses the first set.
+- In compatibility mode a shader the GPU can't compile no longer ends the game.
+- If 3D still fails, the help screen gives device-specific steps (iPhone, Android, in-app browsers), always offers Try again, and shows a short diagnostic code.
+
 ## 2026-11-01 — Full 3D, first person, full screen
 
 - Every game is now full 3D with a first-person camera and your own avatar's arms (skin tone, shirt and accent colour) in view:

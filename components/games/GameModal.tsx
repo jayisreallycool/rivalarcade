@@ -25,8 +25,9 @@ import {
 import { botAvatar, botName, botScore } from '@/lib/bots';
 import { mulberry32, randomSeed, seedCode } from '@/lib/rng';
 import { standings, tournamentStatus } from '@/lib/tournaments-data';
-import { enableSafeMode, supportsWebGL2 } from '@/lib/engine/quality';
-import { ENGINE_FAILURE_EVENT } from '@/lib/engine/GameEngine';
+import { enableSafeMode, gpuInfo, isSafeMode } from '@/lib/engine/quality';
+import { ENGINE_FAILURE_EVENT, type EngineFailureDetail } from '@/lib/engine/GameEngine';
+import { isIOS } from '@/lib/fullscreen';
 import { enterGameFullscreen, exitGameFullscreen } from '@/lib/fullscreen';
 import MatchResultsModal, { ResultData } from './MatchResultsModal';
 import { MatchExtrasContext } from './GameShell';
@@ -146,8 +147,12 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
   const [seed, setSeed] = useState(() => randomSeed());
   const [matchmaking, setMatchmaking] = useState(mode === 'duel' || mode === 'arena');
   const [result, setResult] = useState<ResultData | null>(null);
-  const [no3D] = useState(() => !supportsWebGL2());
+  // No up-front "is WebGL supported?" gate: the probe can misfire on real phones, so the game
+  // always tries to start and only an actual failure (after retries) shows the help screen.
   const [failed, setFailed] = useState(false);
+  const [no3D, setNo3D] = useState(false);
+  const [diag, setDiag] = useState('');
+  const inAppBrowser = typeof navigator !== 'undefined' && /Instagram|FBAN|FBAV|TikTok|musical_ly|Bytedance|Snapchat|Line\//i.test(navigator.userAgent);
   const failures = useRef(0);
   const [notice, setNotice] = useState<string | null>(null);
   // Wall-clock time the current run opened (a snapshot, so render stays pure).
@@ -161,7 +166,10 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
   // compatibility renderer (still full 3D — lighter shaders, lower resolution) and try again.
   // Any stake already taken for the failed run is returned.
   useEffect(() => {
-    const onFail = () => {
+    const onFail = (e: Event) => {
+      const d = (e as CustomEvent<EngineFailureDetail>).detail;
+      const gpu = gpuInfo();
+      setDiag(`${d?.reason ?? 'unknown'} · ${gpu.renderer} · webgl2 ${gpu.webgl2 ? 'yes' : 'no'}${gpu.webgl2 ? '' : ` · webgl1 ${gpu.webgl1 ? 'yes' : 'no'}`}${isSafeMode() ? ' · safe' : ''}${d?.message ? ` · ${d.message}` : ''}`);
       if (charged.current) {
         userStore.refundEntry(entryRef.current);
         charged.current = false;
@@ -172,6 +180,7 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
         setNotice('Optimizing 3D graphics for this device…');
         setRunKey((k) => k + 1);
       } else {
+        setNo3D(!gpu.webgl2);
         setFailed(true);
       }
     };
@@ -510,29 +519,37 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
       ) : no3D || failed ? (
         <div className="relative h-full flex flex-col items-center justify-center gap-3 px-6 text-center bg-[#070810]" data-testid="no-3d">
           {closeBtn}
-          <h3 className="text-lg font-black text-white">{no3D ? '3D graphics are turned off' : '3D graphics stopped responding'}</h3>
+          <h3 className="text-lg font-black text-white">{no3D ? 'This browser blocked 3D graphics' : '3D graphics stopped responding'}</h3>
           <p className="text-xs text-slate-400 max-w-xs">
             {no3D
-              ? 'RivalArcade games run in full 3D (WebGL 2). Update your browser, turn off Low Power / Data Saver mode, or open the app in Safari or Chrome.'
-              : 'Your phone ran low on graphics memory. Close other apps or tabs, then try again. No coins were lost.'}
+              ? inAppBrowser
+                ? 'In-app browsers (TikTok, Instagram, Facebook…) often block 3D. Tap ••• and choose “Open in browser”, then play in Safari or Chrome.'
+                : isIOS()
+                  ? 'Update iOS to 15 or later. If you’re up to date, check Settings → Apps → Safari → Advanced → Feature Flags and make sure WebGL 2.0 is on.'
+                  : 'Update Chrome, then open chrome://flags and make sure WebGL is not disabled. Turning on “Use graphics acceleration” in Chrome settings also helps.'
+              : 'Close other apps or tabs to free up graphics memory, then try again. No coins were lost.'}
           </p>
           <div className="flex gap-2 mt-2">
-            {!no3D && (
-              <button
-                onClick={() => {
-                  failures.current = 0;
-                  setFailed(false);
-                  setRunKey((k) => k + 1);
-                }}
-                className="h-11 px-5 rounded-full bg-cyan-400 text-black font-black"
-              >
-                Try again
-              </button>
-            )}
+            <button
+              onClick={() => {
+                failures.current = 0;
+                setNo3D(false);
+                setFailed(false);
+                setRunKey((k) => k + 1);
+              }}
+              className="h-11 px-5 rounded-full bg-cyan-400 text-black font-black"
+            >
+              Try again
+            </button>
             <button onClick={onClose} className="h-11 px-5 rounded-full bg-white/10 text-white font-bold">
               Back
             </button>
           </div>
+          {diag && (
+            <p className="mt-3 max-w-xs break-words font-mono text-[10px] text-slate-600" data-testid="gpu-diag">
+              {diag}
+            </p>
+          )}
         </div>
       ) : (
         <GameErrorBoundary
@@ -552,7 +569,7 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
         </GameErrorBoundary>
       )}
 
-      {notice && (
+      {notice && !failed && (
         <div className="absolute top-[calc(env(safe-area-inset-top)+64px)] inset-x-0 z-[60] flex justify-center pointer-events-none" data-testid="compat-notice">
           <span className="px-4 py-2 rounded-full bg-black/75 backdrop-blur text-xs font-bold text-cyan-200">{notice}</span>
         </div>

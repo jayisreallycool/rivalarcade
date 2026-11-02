@@ -79,6 +79,29 @@ async function startGame(p, id, mode = 'practice', stake) {
     await ctx.close();
   }
 
+  // 2b. Picky phone drivers: the GPU probe misfires once and the renderer's first context
+  //     attributes are refused → the game must still start in full 3D.
+  {
+    const ctx = await b.newContext(phone);
+    await ctx.addInitScript(() => {
+      const orig = HTMLCanvasElement.prototype.getContext;
+      let probes = 0;
+      HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+        if (type === 'webgl2' && (probes++ === 0 || (attrs && attrs.powerPreference === 'high-performance'))) return null;
+        return orig.call(this, type, attrs);
+      };
+    });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('pageerror', (e) => errs.push(e.message));
+    await p.goto(URL);
+    await p.waitForTimeout(800);
+    await startGame(p, 'neon-dash');
+    check((await p.locator('[data-testid=game-shell]').count()) > 0 && !(await p.locator('[data-testid=no-3d]').count()), 'picky driver: game still starts in 3D');
+    check(errs.length === 0, 'picky driver: no page errors');
+    await ctx.close();
+  }
+
   // 3. No WebGL at all → clear explanation screen (no crash, no 2D edition).
   {
     const nb = await chromium.launch({ args: ['--disable-webgl', '--disable-3d-apis'] });
@@ -92,6 +115,7 @@ async function startGame(p, id, mode = 'practice', stake) {
       await p.click('[data-testid=mode-practice]');
       await p.waitForSelector('[data-testid=no-3d]', { timeout: 10000 }).catch(() => {});
       check((await p.locator('[data-testid=no-3d]').count()) > 0, `no WebGL → ${g} explains the 3D requirement`);
+      check((await p.locator('[data-testid=gpu-diag]').count()) > 0, `no WebGL → ${g} shows a diagnostic code`);
       await p.click('[aria-label="Close match"]');
       await p.waitForTimeout(300);
     }

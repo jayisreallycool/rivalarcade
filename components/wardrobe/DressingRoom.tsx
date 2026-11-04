@@ -6,7 +6,8 @@ import { COSMETICS_CATALOG, SKIN_TONES, HAIR_COLORS } from '@/lib/cosmetics-cata
 import { userStore, useUserStore } from '@/lib/user-store';
 import AvatarView from '@/components/avatar/AvatarView';
 import { sound } from '@/lib/sound';
-import { Check, Lock, Sparkles, Coins } from 'lucide-react';
+import { Check, Lock, Sparkles, Coins, Ban } from 'lucide-react';
+import ItemImage from '@/components/items/ItemImage';
 
 export default function DressingRoom() {
   const userState = useUserStore();
@@ -120,10 +121,10 @@ export default function DressingRoom() {
   const tabItems = COSMETICS_CATALOG.filter((c) => c.category === activeTab);
 
   const getRarityBadgeStyle = (rarity: string) => {
-    if (rarity === 'mythic') return 'border-cyan-400 text-cyan-300 bg-cyan-950/40';
+    if (rarity === 'mythic') return 'border-fuchsia-300 text-fuchsia-200 bg-fuchsia-950/40';
     if (rarity === 'legendary') return 'border-amber-400 text-amber-300 bg-amber-950/40';
     if (rarity === 'epic') return 'border-purple-400 text-purple-300 bg-purple-950/40';
-    if (rarity === 'rare') return 'border-blue-400 text-blue-300 bg-blue-950/40';
+    if (rarity === 'rare') return 'border-sky-400 text-sky-300 bg-sky-950/40';
     return 'border-slate-700 text-slate-400 bg-slate-900/40';
   };
 
@@ -350,7 +351,7 @@ export default function DressingRoom() {
 
         {/* Tab Content: Collectible Cosmetic Item Grid */}
         {activeTab !== 'base' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[460px] overflow-y-auto pr-1">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[560px] overflow-y-auto pr-1">
             {tabItems.map((item) => {
               const isOwned = userState.inventory.includes(item.id);
               const isEquipped =
@@ -377,9 +378,16 @@ export default function DressingRoom() {
                       : 'border-[#1e202f] bg-[#0e1018] opacity-80 hover:opacity-100 hover:border-slate-700'
                   }`}
                 >
+                  {item.id === 'none' ? (
+                    <div className="aspect-square mb-2 rounded-xl border border-dashed border-slate-700 bg-[#0a0b12] flex items-center justify-center text-slate-600">
+                      <Ban className="w-8 h-8" />
+                    </div>
+                  ) : (
+                    <ItemImage item={item} badge={false} className="mb-2" />
+                  )}
                   {/* Top Line: Item Name & Rarity */}
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="font-bold text-xs text-white truncate max-w-[140px]">{item.name}</span>
+                  <div className="flex items-center justify-between gap-1 mb-1.5">
+                    <span className="font-bold text-xs text-white truncate">{item.name}</span>
                     <span className={`text-[9px] uppercase font-black px-1.5 py-0.5 rounded border ${getRarityBadgeStyle(item.rarity)}`}>
                       {item.rarity}
                     </span>

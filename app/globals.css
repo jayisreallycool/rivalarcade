@@ -121,3 +121,39 @@ canvas {
 @media (prefers-reduced-motion: reduce) {
   .ra-pop, .ra-banner, .ra-count { animation-duration: 0.01s; }
 }
+
+/* Item art: foil sheen for legendary / mythic, holo ring for mythic. */
+.ra-sheen {
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.28) 45%, rgba(255, 255, 255, 0.05) 55%, transparent 70%);
+  background-size: 250% 100%;
+  animation: ra-sheen 3.2s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+@keyframes ra-sheen {
+  0% { background-position: 130% 0; }
+  60%, 100% { background-position: -120% 0; }
+}
+.ra-holo-ring::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(from var(--ra-a, 0deg), #22d3ee, #a78bfa, #f472b6, #facc15, #22d3ee);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: ra-spin 4s linear infinite;
+  pointer-events: none;
+}
+@property --ra-a {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes ra-spin {
+  to { --ra-a: 360deg; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ra-sheen, .ra-holo-ring::after { animation: none; }
+}

@@ -48,7 +48,18 @@ export interface CosmeticItem {
   styleName?: string;
   icon?: string;
   glowColor?: string;
+  /** Base shape this item reuses (defaults to its own id) — lets recolours share one model. */
+  model?: string;
+  /** Fabric print for tops / bottoms. */
+  pattern?: ItemPattern;
+  /** Surface finish; defaults by rarity (common matte … mythic holographic). */
+  finish?: ItemFinish;
+  /** Extra colours (trails, gradients, holo foils). */
+  palette?: string[];
 }
+
+export type ItemPattern = 'solid' | 'stripes' | 'camo' | 'circuit' | 'flames' | 'checker' | 'stars' | 'gradient' | 'denim';
+export type ItemFinish = 'matte' | 'gloss' | 'metal' | 'chrome' | 'neon' | 'holo';
 
 export interface AvatarConfig {
   gender: GenderType;

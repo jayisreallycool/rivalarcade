@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-04 — Unique items with generated images
+
+- 33 new uniquely named cosmetics (74 total), each with its own colours, print and finish: e.g. Seraph Halo, Bassline Studio Cans, Obsidian Warlord Crown, Aurora Holo Coat, Inferno Jersey #99, Void Walkers, Rocket Jetpack MK-II, Midnight Champion Cape, Ember Phoenix Wings, Rainbow Rush and Void Rift trails.
+- Rarity drives look and price: one table (`RARITY`) for colours, glow, finish (matte → gloss → metal → chrome → holo) and price bands, enforced by a unit test along with unique ids and names.
+- New shapes on both the 2D menu avatar and the 3D model: mohawk, twin buns, halo, headphones, round specs, cape, jetpack, feathered wings; fabric prints (camo, flames, circuit, checker, stars, stripes, denim, holo gradient) also show on your first-person sleeves.
+- Every item has a generated product image (`public/items/<id>.webp`): its real 3D model, framed on the item, over a background seeded from the item's name and themed by rarity (god rays for legendary, holo foil for mythic). Regenerate with `node scripts/render-items.cjs` against a running build (`/item-lab` shows the contact sheet).
+- Rewards tab: full Item Shop with featured strip, rarity filters and a detail sheet; Wardrobe cards, Season Road rewards and cup prizes show the images.
+- 3D avatar fixes: hair no longer covers the eyes (visors and aviators were hidden inside it), Solar Puffs is two puffs, face has a mouth.
+
 ## 2026-11-02 — Brick Blitz: endless runs, power-ups, more balls, music
 
 - No more 90-second clock: a run lasts until the wall reaches the red line with no shields left. Difficulty ramps more slowly, then tightens past row 45. +50 points per row survived.

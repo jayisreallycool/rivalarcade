@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { AvatarConfig } from '../avatar-types';
-import { COSMETICS_CATALOG, SKIN_TONES } from '../cosmetics-catalog';
+import { COSMETICS_CATALOG, SKIN_TONES, itemFinish } from '../cosmetics-catalog';
+import { patternCanvas } from '../item-patterns';
 import type { GameEngine } from './GameEngine';
 
 /**
@@ -43,6 +44,17 @@ export function createFirstPersonRig(engine: GameEngine, avatar: AvatarConfig, o
   const skinMat = engine.own(new THREE.MeshStandardMaterial({ color: new THREE.Color(skin.color).multiplyScalar(0.85), roughness: 0.6, metalness: 0, envMapIntensity: 0.5 }));
   // Slightly darkened: arms sit right in front of the lens and would otherwise bloom out.
   const sleeveMat = engine.own(new THREE.MeshStandardMaterial({ color: new THREE.Color(shirt?.color ?? '#1e293b').multiplyScalar(0.7), roughness: 0.9, metalness: 0, envMapIntensity: 0.4 }));
+  // Printed tops (camo, flames, circuit…) show on your sleeves too.
+  const swatch = shirt ? patternCanvas(shirt) : null;
+  if (swatch) {
+    const tex = engine.own(new THREE.CanvasTexture(swatch));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1.5, 2);
+    sleeveMat.map = tex;
+    sleeveMat.color.setScalar(0.7);
+  }
+  if (shirt && itemFinish(shirt) === 'chrome') Object.assign(sleeveMat, { metalness: 0.8, roughness: 0.25 });
   const accent = new THREE.Color(shirt?.accentColor ?? '#00f0ff');
   const cuffMat = engine.own(new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.25, roughness: 0.35, metalness: 0.2 }));
 

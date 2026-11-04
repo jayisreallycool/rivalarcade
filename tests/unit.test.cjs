@@ -117,4 +117,22 @@ ok('leagues by crowns', () => {
   assert(G.GAME_IDS.length === Object.keys(G.GAME_NAMES).length && G.GAME_IDS.every((id) => G.SCORE_BASELINE[id] > 0));
 });
 
+ok('item catalog: unique ids + names, priced inside their rarity band, image per item', () => {
+  const C = require('../.test-build/cosmetics-catalog');
+  const items = C.SHOP_ITEMS();
+  assert(items.length >= 70, `catalog size ${items.length}`);
+  assert.strictEqual(new Set(items.map((i) => i.id)).size, items.length, 'duplicate item id');
+  assert.strictEqual(new Set(items.map((i) => i.name.toLowerCase())).size, items.length, 'duplicate item name');
+  const fs = require('fs');
+  for (const i of items) {
+    const [lo, hi] = C.RARITY[i.rarity].price;
+    if (!i.isUnlockedDefault) assert(i.cost >= lo && i.cost <= hi, `${i.id} costs ${i.cost}, ${i.rarity} band is ${lo}-${hi}`);
+    assert(fs.existsSync(`public${C.itemImage(i.id)}`), `missing image for ${i.id}`);
+  }
+  // Higher rarity never cheaper on average.
+  const avg = (r) => { const xs = items.filter((i) => i.rarity === r && !i.isUnlockedDefault).map((i) => i.cost); return xs.reduce((a, b) => a + b, 0) / xs.length; };
+  const order = ['common', 'rare', 'epic', 'legendary', 'mythic'].map(avg);
+  assert.deepStrictEqual(order.slice().sort((a, b) => a - b), order);
+});
+
 console.log(`\n${n} unit checks passed`);

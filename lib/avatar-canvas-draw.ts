@@ -1,5 +1,28 @@
-import { AvatarConfig } from './avatar-types';
-import { SKIN_TONES, HAIR_COLORS, COSMETICS_CATALOG } from './cosmetics-catalog';
+import { AvatarConfig, CosmeticItem } from './avatar-types';
+import { SKIN_TONES, HAIR_COLORS, COSMETICS_CATALOG, findItem, itemFinish, itemShape } from './cosmetics-catalog';
+import { patternCanvas } from './item-patterns';
+
+/** Fill for a garment: its print as a scaled repeating pattern, a moving foil for holo, else flat colour. */
+const patternCache = new WeakMap<CanvasRenderingContext2D, Map<string, CanvasPattern | null>>();
+function fabric(ctx: CanvasRenderingContext2D, item: CosmeticItem | undefined, fallback: string, frame: number): string | CanvasPattern | CanvasGradient {
+  if (!item) return fallback;
+  if (itemFinish(item) === 'holo' && item.palette?.length) {
+    const shift = Math.sin(frame * 0.05) * 14;
+    const g = ctx.createLinearGradient(-16 + shift, -16, 16 + shift, 16);
+    item.palette.forEach((c, i) => g.addColorStop(i / Math.max(1, item.palette!.length - 1), c));
+    return g;
+  }
+  const swatch = patternCanvas(item);
+  if (!swatch) return item.color || fallback;
+  let byId = patternCache.get(ctx);
+  if (!byId) patternCache.set(ctx, (byId = new Map()));
+  if (!byId.has(item.id)) {
+    const pat = ctx.createPattern(swatch, 'repeat');
+    if (pat && typeof DOMMatrix !== 'undefined') pat.setTransform(new DOMMatrix().scale(0.22));
+    byId.set(item.id, pat);
+  }
+  return byId.get(item.id) ?? item.color ?? fallback;
+}
 
 export interface DrawAvatarOptions {
   frame?: number;           // Animation frame (0..60)
@@ -74,6 +97,10 @@ export function drawAvatar(
     ctx.shadowColor = trailColor;
     ctx.shadowBlur = 12;
     for (let i = 0; i < 4; i++) {
+      if (trail.palette?.length) {
+        ctx.fillStyle = trail.palette[i % trail.palette.length];
+        ctx.shadowColor = ctx.fillStyle;
+      }
       const pOffset = (i + 1) * -8;
       const pY = Math.sin((frame + i * 10) * 0.2) * 6;
       ctx.globalAlpha = 0.4 - i * 0.08;
@@ -85,13 +112,15 @@ export function drawAvatar(
   }
 
   // 3. Back Equipment (Wings / Katana / Skateboard)
+  const backShape = itemShape(back);
   if (back && back.id !== 'none') {
     ctx.save();
-    if (back.id === 'back_cyber_wings') {
+    if (backShape === 'back_cyber_wings') {
       const wingColor = back.color || '#00f0ff';
       const wingSpread = action === 'jump' ? 1.3 : 1.0 + Math.sin(frame * 0.1) * 0.1;
       ctx.strokeStyle = wingColor;
-      ctx.fillStyle = 'rgba(0, 240, 255, 0.25)';
+      ctx.fillStyle = wingColor;
+      ctx.globalAlpha *= 0.85;
       ctx.lineWidth = 2.5;
       ctx.shadowColor = wingColor;
       ctx.shadowBlur = 10;
@@ -103,7 +132,10 @@ export function drawAvatar(
       ctx.lineTo(-46 * wingSpread, -10 * wingSpread);
       ctx.lineTo(-24 * wingSpread, 4);
       ctx.closePath();
+      ctx.save();
+      ctx.globalAlpha *= 0.3;
       ctx.fill();
+      ctx.restore();
       ctx.stroke();
 
       // Right wing
@@ -113,10 +145,13 @@ export function drawAvatar(
       ctx.lineTo(46 * wingSpread, -10 * wingSpread);
       ctx.lineTo(24 * wingSpread, 4);
       ctx.closePath();
+      ctx.save();
+      ctx.globalAlpha *= 0.3;
       ctx.fill();
+      ctx.restore();
       ctx.stroke();
-    } else if (back.id === 'back_katana') {
-      ctx.strokeStyle = '#09090b';
+    } else if (backShape === 'back_katana') {
+      ctx.strokeStyle = back.color || '#09090b';
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(-18, 20);
@@ -124,16 +159,52 @@ export function drawAvatar(
       ctx.stroke();
 
       // Hilt & wrap
-      ctx.strokeStyle = '#ff0055';
+      ctx.strokeStyle = back.accentColor || '#ff0055';
       ctx.lineWidth = 5;
       ctx.beginPath();
       ctx.moveTo(12, -22);
       ctx.lineTo(22, -34);
       ctx.stroke();
-    } else if (back.id === 'back_skateboard') {
+    } else if (backShape === 'back_midnight_cape') {
+      const sway = Math.sin(frame * 0.12) * 2 + (action === 'run' ? -6 : 0);
+      ctx.fillStyle = '#6d28d9';
+      ctx.beginPath();
+      ctx.moveTo(-14, -14);
+      ctx.lineTo(14, -14);
+      ctx.lineTo(20 + sway, 34);
+      ctx.lineTo(-20 + sway, 34);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = back.color || '#1e1b4b';
+      ctx.beginPath();
+      ctx.moveTo(-13, -14);
+      ctx.lineTo(13, -14);
+      ctx.lineTo(17 + sway, 34);
+      ctx.lineTo(-17 + sway, 34);
+      ctx.closePath();
+      ctx.fill();
+    } else if (backShape === 'back_rocket_pack') {
+      const flame = back.accentColor || '#38bdf8';
+      [-9, 5].forEach((x) => {
+        ctx.fillStyle = back.color || '#cbd5e1';
+        ctx.fillRect(x - 1, -14, 8, 22);
+        ctx.fillStyle = '#334155';
+        ctx.fillRect(x, 8, 6, 4);
+        ctx.fillStyle = flame;
+        ctx.shadowColor = flame;
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.moveTo(x, 12);
+        ctx.lineTo(x + 6, 12);
+        ctx.lineTo(x + 3, 22 + Math.sin(frame * 0.6 + x) * 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+    } else if (backShape === 'back_skateboard') {
       ctx.save();
       ctx.rotate(-0.3);
-      ctx.fillStyle = '#8b5cf6';
+      ctx.fillStyle = back.color || '#8b5cf6';
       ctx.fillRect(-6, -20, 12, 38);
       ctx.fillStyle = '#18181b';
       ctx.fillRect(-8, -14, 16, 4);
@@ -149,7 +220,7 @@ export function drawAvatar(
   if (action === 'jump') bodyY -= 18;
 
   // 4. Legs and Pants
-  const pantsColor = pants?.color || '#1e293b';
+  const pantsColor = fabric(ctx, pants, '#1e293b', frame);
   const pantsAccent = pants?.accentColor || '#64748b';
   const shoesColor = shoes?.color || '#ffffff';
   const shoesAccent = shoes?.accentColor || '#00f0ff';
@@ -201,7 +272,7 @@ export function drawAvatar(
   ctx.restore();
 
   // 5. Torso & Shirt
-  const shirtColor = shirt?.color || '#1e293b';
+  const shirtColor = fabric(ctx, shirt, '#1e293b', frame);
   const shirtAccent = shirt?.accentColor || '#00f0ff';
 
   ctx.save();
@@ -318,7 +389,7 @@ export function drawAvatar(
 
   // 7. Hair Styles
   ctx.fillStyle = hairColor.color;
-  const hairStyle = avatar.hairStyleId;
+  const hairStyle = findItem(avatar.hairStyleId)?.model ?? avatar.hairStyleId;
 
   if (hairStyle === 'hair_short_fade') {
     ctx.beginPath();
@@ -362,6 +433,28 @@ export function drawAvatar(
     ctx.arc(-11, -12, 10, 0, Math.PI * 2);
     ctx.arc(11, -12, 10, 0, Math.PI * 2);
     ctx.fill();
+  } else if (hairStyle === 'hair_neon_mohawk') {
+    ctx.beginPath();
+    ctx.arc(0, -6, 14.5, Math.PI * 1.05, Math.PI * 1.95);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-5, -14);
+    ctx.lineTo(-3, -30);
+    ctx.lineTo(2, -24);
+    ctx.lineTo(4, -33);
+    ctx.lineTo(7, -22);
+    ctx.lineTo(5, -14);
+    ctx.closePath();
+    ctx.fill();
+  } else if (hairStyle === 'hair_space_buns') {
+    ctx.beginPath();
+    ctx.arc(0, -6, 14.5, Math.PI * 0.9, Math.PI * 2.1);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(-11, -18, 7, 0, Math.PI * 2);
+    ctx.arc(11, -18, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(-12, -14, 20, 6);
   } else if (hairStyle === 'hair_cyber_undercut') {
     ctx.beginPath();
     ctx.moveTo(-14, -4);
@@ -381,22 +474,33 @@ export function drawAvatar(
   }
 
   // 8. Eyewear (Over eyes, before hat)
+  const eyeShape = itemShape(eyewear);
   if (eyewear && eyewear.id !== 'none') {
     ctx.save();
-    if (eyewear.id === 'eyewear_pixel_shades') {
-      ctx.fillStyle = '#09090b';
+    if (eyeShape === 'eyewear_pixel_shades') {
+      ctx.fillStyle = eyewear.color && eyewear.id !== 'eyewear_pixel_shades' ? eyewear.color : '#09090b';
       ctx.fillRect(-10, -5, 20, 6);
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(-8, -4, 2, 2);
       ctx.fillRect(2, -4, 2, 2);
-    } else if (eyewear.id === 'eyewear_cyber_hud') {
-      ctx.strokeStyle = '#00f0ff';
+    } else if (eyeShape === 'eyewear_round_specs') {
+      ctx.strokeStyle = eyewear.color || '#d4a017';
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.arc(-5.5, -1.5, 4.2, 0, Math.PI * 2);
+      ctx.moveTo(9.7, -1.5);
+      ctx.arc(5.5, -1.5, 4.2, 0, Math.PI * 2);
+      ctx.moveTo(-1.3, -2);
+      ctx.lineTo(1.3, -2);
+      ctx.stroke();
+    } else if (eyeShape === 'eyewear_cyber_hud') {
+      ctx.strokeStyle = eyewear.color || '#00f0ff';
       ctx.fillStyle = 'rgba(0, 240, 255, 0.4)';
       ctx.lineWidth = 1.5;
       ctx.fillRect(1, -6, 9, 8);
       ctx.strokeRect(1, -6, 9, 8);
-    } else if (eyewear.id === 'eyewear_speed_shades') {
-      ctx.fillStyle = '#ffb800';
+    } else if (eyeShape === 'eyewear_speed_shades') {
+      ctx.fillStyle = fabric(ctx, eyewear, eyewear.color || '#ffb800', frame);
       ctx.beginPath();
       ctx.moveTo(-11, -5);
       ctx.lineTo(11, -5);
@@ -409,9 +513,10 @@ export function drawAvatar(
   }
 
   // 9. Headwear (On top of head)
+  const hatShape = itemShape(headwear);
   if (headwear && headwear.id !== 'none') {
     ctx.save();
-    if (headwear.id === 'headwear_snapback') {
+    if (hatShape === 'headwear_snapback') {
       const capColor = headwear.color || '#0f172a';
       const capAccent = headwear.accentColor || '#00f0ff';
       ctx.fillStyle = capColor;
@@ -422,27 +527,33 @@ export function drawAvatar(
       // Backwards brim
       ctx.fillStyle = capAccent;
       ctx.fillRect(-18, -12, 10, 4);
-    } else if (headwear.id === 'headwear_neon_band') {
+    } else if (hatShape === 'headwear_neon_band') {
       ctx.fillStyle = headwear.color || '#ff0055';
       ctx.fillRect(-14, -8, 28, 5);
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(-6, -7, 12, 2);
-    } else if (headwear.id === 'headwear_beanie') {
+    } else if (hatShape === 'headwear_beanie') {
       ctx.fillStyle = headwear.color || '#334155';
       ctx.beginPath();
       ctx.arc(0, -11, 15.5, Math.PI, Math.PI * 2);
       ctx.fill();
       ctx.fillRect(-15, -12, 30, 6);
-    } else if (headwear.id === 'headwear_cyber_visor') {
+      if (headwear.accentColor) {
+        ctx.fillStyle = headwear.accentColor;
+        ctx.beginPath();
+        ctx.arc(0, -27, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (hatShape === 'headwear_cyber_visor') {
       ctx.fillStyle = headwear.color || '#09090b';
       ctx.fillRect(-15, -14, 30, 8);
       ctx.fillStyle = '#00f0ff';
       ctx.shadowColor = '#00f0ff';
       ctx.shadowBlur = 8;
       ctx.fillRect(-13, -11, 26, 3);
-    } else if (headwear.id === 'headwear_crown') {
-      ctx.fillStyle = '#ffb800';
-      ctx.shadowColor = '#ffb800';
+    } else if (hatShape === 'headwear_crown') {
+      ctx.fillStyle = headwear.color || '#ffb800';
+      ctx.shadowColor = headwear.color === '#1e1b2e' ? headwear.accentColor || '#ef4444' : headwear.color || '#ffb800';
       ctx.shadowBlur = 10;
       ctx.beginPath();
       ctx.moveTo(-12, -14);
@@ -455,10 +566,36 @@ export function drawAvatar(
       ctx.closePath();
       ctx.fill();
       // Ruby jewel
-      ctx.fillStyle = '#ff0055';
+      ctx.fillStyle = headwear.accentColor && headwear.accentColor !== '#ffffff' ? headwear.accentColor : '#ff0055';
       ctx.beginPath();
       ctx.arc(0, -17, 2.5, 0, Math.PI * 2);
       ctx.fill();
+    } else if (hatShape === 'headwear_seraph_halo') {
+      const bob = Math.sin(frame * 0.1) * 1.5;
+      ctx.strokeStyle = headwear.color || '#fde68a';
+      ctx.shadowColor = headwear.color || '#fde68a';
+      ctx.shadowBlur = 12;
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.ellipse(0, -27 + bob, 12, 3.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (hatShape === 'headwear_bassline_cans') {
+      ctx.strokeStyle = headwear.color || '#18181b';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, -2, 16, Math.PI * 1.08, Math.PI * 1.92);
+      ctx.stroke();
+      [-15, 15].forEach((x) => {
+        ctx.fillStyle = headwear.color || '#18181b';
+        ctx.beginPath();
+        ctx.ellipse(x, 0, 4.5, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = headwear.accentColor || '#e879f9';
+        ctx.shadowColor = ctx.fillStyle;
+        ctx.shadowBlur = 8;
+        ctx.fillRect(x - 1, -4, 2, 8);
+        ctx.shadowBlur = 0;
+      });
     }
     ctx.restore();
   }

@@ -3,7 +3,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { userStore, useUserStore } from '@/lib/user-store';
 import { botRowAvatar, formatTimeLeft, gameNameOf, participantsCount, standings, Tournament, tournamentStatus } from '@/lib/tournaments-data';
-import { COSMETICS_CATALOG } from '@/lib/cosmetics-catalog';
+import { COSMETICS_CATALOG, findItem } from '@/lib/cosmetics-catalog';
+import ItemImage from '@/components/items/ItemImage';
 import AvatarView from '@/components/avatar/AvatarView';
 import GameModal from '@/components/games/GameModal';
 import { sound } from '@/lib/sound';
@@ -212,7 +213,8 @@ export default function TournamentView() {
             <div className="flex items-center justify-between">
               <span className="text-amber-400 font-black flex items-center gap-1.5">🥇 {Math.round(selected.prizePoolCoins * 0.5).toLocaleString()} coins</span>
               {selected.prizeCosmetic && (
-                <span className="font-bold text-cyan-400 flex items-center gap-1">
+                <span className="font-bold text-cyan-400 flex items-center gap-2">
+                  {findItem(selected.prizeCosmetic) && <ItemImage item={findItem(selected.prizeCosmetic)!} size="sm" className="w-10" />}
                   <Sparkles className="w-3.5 h-3.5" /> {cosmeticName(selected.prizeCosmetic)}
                 </span>
               )}

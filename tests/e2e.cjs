@@ -287,6 +287,35 @@ async function waitResults(page, timeout = 150000) {
     expect((await state(page)).avatar.backId !== 'back_cyber_wings', 'locked item survived reload');
   }, page);
 
+  await step('3D avatar viewer: renders, drag spins, wheel + buttons zoom, reset, follows the look', async () => {
+    await nav(page, 'Wardrobe');
+    const v = page.locator('[data-testid=wardrobe-preview] [data-testid=avatar-3d]');
+    await page.waitForFunction(() => document.querySelector('[data-testid=wardrobe-preview] [data-testid=avatar-3d]')?.dataset.ready === '1', null, { timeout: 20000 });
+    expect(!(await v.getAttribute('data-fallback')), 'fell back to 2D with WebGL available');
+    const num = async (a) => Number(await v.getAttribute(`data-${a}`));
+    const box = await v.boundingBox();
+    const y0 = await num('yaw');
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    expect(Math.abs((await num('yaw')) - y0) > 0.5, `drag did not spin (${y0} → ${await num('yaw')})`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.3);
+    await page.mouse.wheel(0, -400);
+    await page.waitForTimeout(300);
+    expect((await num('zoom')) > 1.3, `wheel did not zoom (${await num('zoom')})`);
+    expect((await v.evaluate((e) => e.style.touchAction)) === 'none', 'zoomed view should own vertical drags');
+    await page.locator('[data-testid=avatar-reset-view]').first().click();
+    await page.waitForTimeout(200);
+    expect((await num('zoom')) === 1, 'reset did not restore zoom');
+    expect((await v.evaluate((e) => e.style.touchAction)) === 'pan-y', 'unzoomed view should let the page scroll');
+    await page.locator('[data-testid=avatar-zoom-in]').first().click();
+    await page.waitForTimeout(200);
+    expect((await num('zoom')) > 1.2, 'zoom button did nothing');
+    await page.locator('[data-testid=avatar-reset-view]').first().click();
+  }, page);
+
   await step('season pass: claim free tier, activate VIP, claim VIP cosmetic', async () => {
     await nav(page, 'Pass');
     const before = await state(page);

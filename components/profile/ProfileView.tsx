@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { userStore, useUserStore } from '@/lib/user-store';
-import AvatarView from '@/components/avatar/AvatarView';
+import Avatar3DView from '@/components/avatar/Avatar3DView';
 import BannerBackdrop from '@/components/avatar/BannerBackdrop';
 import { sound, useMuted } from '@/lib/sound';
 import { formatCountdown, msUntilLocalMidnight } from '@/lib/quests';
@@ -79,17 +79,12 @@ export default function ProfileView() {
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#181a29] to-[#12131d] border border-[#242738] p-6 shadow-xl">
         <div className="flex flex-col md:flex-row items-center gap-6">
           {/* Avatar Showcase */}
-          <div className="relative w-36 h-36 bg-[#0a0b12] rounded-2xl border border-[#242738] flex items-center justify-center shadow-lg">
+          <div className="relative w-48 h-60 sm:w-52 sm:h-64 bg-[#0a0b12] rounded-2xl border border-[#242738] shadow-lg">
             <div className="absolute inset-0 rounded-2xl overflow-hidden">
               <BannerBackdrop bannerId={userState.avatar.bannerId} />
+              <Avatar3DView avatar={userState.avatar} className="absolute inset-0" testId="profile-avatar-3d" compact />
             </div>
-            <AvatarView
-              avatar={userState.avatar}
-              size={130}
-              action="idle"
-              animate={true}
-            />
-            <span className="absolute -bottom-2 px-2.5 py-0.5 rounded-full bg-cyan-500 text-black text-[10px] font-black uppercase tracking-wider shadow">
+            <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full bg-cyan-500 text-black text-[10px] font-black uppercase tracking-wider shadow">
               LVL {userState.stats.level}
             </span>
           </div>

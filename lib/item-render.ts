@@ -629,14 +629,9 @@ export class ItemRenderer {
     } else {
       const av = create3DAvatar(modelFor(item));
       const f = FRAMING[item.category] ?? FRAMING.pose;
-      const action = item.id === 'pose_victory_flex' ? 'celebrate' : 'idle';
+      const action = item.id === 'pose_victory_flex' ? 'celebrate' : item.id === 'pose_peace_sign' ? 'peace' : 'idle';
       av.updateAnimation(1.2, action);
-      if (item.id === 'pose_peace_sign') {
-        av.rightArm.rotation.x = -2.6;
-        av.rightArm.rotation.z = 0.25;
-        av.leftArm.rotation.x = 0.15;
-        av.head.rotation.z = 0.12;
-      } else if (item.id === 'pose_victory_flex') {
+      if (item.id === 'pose_victory_flex') {
         av.leftArm.rotation.x = -2.9;
         av.rightArm.rotation.x = -1.2;
       }

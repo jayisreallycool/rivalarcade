@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-04 — Full 3D avatars you can spin and zoom
+
+- Wardrobe, store try-on ("On you") and profile now show your avatar in full 3D (`components/avatar/Avatar3DView.tsx`): drag with a finger or mouse to spin it all the way round (with inertia), pinch / mouse wheel / trackpad / +− buttons / double-tap to zoom toward the spot under your fingers, drag up and down to look over the body while zoomed, reset button. Unzoomed, vertical swipes still scroll the page. Arrow keys and +/− work when focused.
+- Small avatars in lists (leaderboards, cups, match cards, header) are 3D stills rendered by one shared GPU context that shuts itself off when idle, so they never compete with a running game.
+- Studio lighting with soft shadows and reflections on capable GPUs; weak GPUs get standard materials and 30 fps, and devices without WebGL 2 keep the 2D avatar.
+- More detail on the 3D avatar: rounded eyes with irises and catch-lights, brows and mouth that follow the chosen expression, ears, nose, neck, rounded shoulders, a waistband with buckle, smoother hair and limbs.
+- Chill Peace plays a real V-sign pose in 3D; equipped emotes play at rest. Trails swirl round the 3D avatar in their own style (bolts, flames, glitter, bubbles, falling code, rainbow ribbon, void shards).
+- Product images regenerated with the new model.
+
 ## 2026-11-04 — Items look like their names, everywhere
 
 - One feature table per item (`lib/item-looks.ts`) read by both the 3D model (which renders the shop images) and the 2D avatar (wardrobe, store try-on, profile, games), so the item you see in the shop is the item you see equipped.

@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { AvatarConfig, CosmeticCategory, CosmeticItem } from '@/lib/avatar-types';
 import { COSMETICS_CATALOG, SKIN_TONES, HAIR_COLORS, findItem } from '@/lib/cosmetics-catalog';
 import { userStore, useUserStore } from '@/lib/user-store';
-import AvatarView from '@/components/avatar/AvatarView';
+import Avatar3DView from '@/components/avatar/Avatar3DView';
 import { sound } from '@/lib/sound';
 import { Check, Lock, Sparkles, Coins, Ban, RotateCcw } from 'lucide-react';
 import BannerBackdrop from '@/components/avatar/BannerBackdrop';
@@ -111,7 +111,7 @@ export default function DressingRoom() {
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto flex flex-col md:flex-row gap-6 p-4">
+    <div className="w-full max-w-6xl mx-auto flex flex-col md:flex-row gap-6 p-4">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-6 right-6 z-50 bg-cyan-500 text-black font-extrabold px-4 py-2 rounded-lg shadow-xl shadow-cyan-500/30 flex items-center gap-2 animate-in slide-in-from-top-4 duration-200">
@@ -120,7 +120,7 @@ export default function DressingRoom() {
       )}
 
       {/* LEFT: Live Avatar Preview Stage */}
-      <div className="w-full md:w-80 flex flex-col items-center bg-[#12131d] border border-[#242738] rounded-2xl p-5 shadow-xl">
+      <div className="w-full md:w-[380px] md:shrink-0 md:self-start md:sticky md:top-4 flex flex-col items-center bg-[#12131d] border border-[#242738] rounded-2xl p-5 shadow-xl">
         <div className="w-full flex items-center justify-between mb-3 text-xs text-slate-400">
           <span className="font-bold uppercase tracking-wider text-cyan-400">LIVE PREVIEW</span>
           <div className="flex items-center gap-1.5 text-amber-400 font-bold">
@@ -128,17 +128,10 @@ export default function DressingRoom() {
           </div>
         </div>
 
-        {/* 360 / Animation Test Canvas */}
-        <div className="relative w-full aspect-square bg-[#0a0b12] rounded-xl border border-[#1e202f] flex items-center justify-center overflow-hidden mb-4" data-testid="wardrobe-preview" data-avatar={JSON.stringify(workingAvatar)}>
+        {/* 360° 3D preview: drag to spin, pinch / scroll / buttons to zoom */}
+        <div className="relative w-full aspect-[4/5] bg-[#0a0b12] rounded-xl border border-[#1e202f] overflow-hidden mb-4" data-testid="wardrobe-preview" data-avatar={JSON.stringify(workingAvatar)}>
           <BannerBackdrop bannerId={workingAvatar.bannerId} />
-          {/* Cyber stage rings */}
-          <div className="absolute bottom-6 w-44 h-12 bg-black/30 rounded-full border border-cyan-500/30 blur-[1px]" />
-          <AvatarView
-            avatar={workingAvatar}
-            size={220}
-            action={previewAction}
-            animate={true}
-          />
+          <Avatar3DView avatar={workingAvatar} action={previewAction} className="absolute inset-0" />
         </div>
 
         {/* Animation & Pose Testing Buttons */}
@@ -183,7 +176,7 @@ export default function DressingRoom() {
       </div>
 
       {/* RIGHT: Wardrobe & Customization Shelves */}
-      <div className="flex-1 flex flex-col bg-[#12131d] border border-[#242738] rounded-2xl p-5 shadow-xl">
+      <div className="flex-1 min-w-0 flex flex-col bg-[#12131d] border border-[#242738] rounded-2xl p-5 shadow-xl">
         {/* Category Tabs */}
         <div className="flex items-center gap-1 overflow-x-auto pb-2 border-b border-[#242738] mb-5 scrollbar-thin">
           {[

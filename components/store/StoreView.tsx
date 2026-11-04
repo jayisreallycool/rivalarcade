@@ -5,7 +5,7 @@ import { userStore, useUserStore, SEASON_TIERS } from '@/lib/user-store';
 import { RARITY, SHOP_ITEMS, findItem } from '@/lib/cosmetics-catalog';
 import type { CosmeticCategory, CosmeticItem, Rarity } from '@/lib/avatar-types';
 import ItemImage from '@/components/items/ItemImage';
-import AvatarView from '@/components/avatar/AvatarView';
+import Avatar3DView from '@/components/avatar/Avatar3DView';
 import BannerBackdrop from '@/components/avatar/BannerBackdrop';
 import { equippedIn, withItem } from '@/lib/avatar-slots';
 
@@ -311,9 +311,9 @@ export default function StoreView() {
               {view === 'item' ? (
                 <ItemImage item={detail} size="lg" className="w-full" />
               ) : (
-                <div className="relative aspect-square rounded-xl overflow-hidden flex items-center justify-center" style={{ boxShadow: `0 0 0 2px ${RARITY[detail.rarity].color}` }} data-testid="try-on">
+                <div className="relative aspect-[4/5] rounded-xl overflow-hidden" style={{ boxShadow: `0 0 0 2px ${RARITY[detail.rarity].color}` }} data-testid="try-on">
                   <BannerBackdrop bannerId={tryOn.bannerId} />
-                  <AvatarView avatar={tryOn} size={250} action="idle" />
+                  <Avatar3DView avatar={tryOn} className="absolute inset-0" testId="try-on-3d" />
                 </div>
               )}
               <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 flex rounded-full bg-black/80 border border-white/10 p-0.5 text-[11px] font-black">

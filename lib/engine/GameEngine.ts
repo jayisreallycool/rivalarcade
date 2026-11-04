@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toStandard } from './materials';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -123,34 +124,7 @@ function probeCapabilities(renderer: THREE.WebGLRenderer) {
   return { hdrTargets, richShaders: fragUniforms >= 1024 && texUnits >= 16, maxTex };
 }
 
-/** Same look, cheaper shader: MeshPhysicalMaterial → MeshStandardMaterial with the shared fields. */
-function toStandard(m: THREE.MeshPhysicalMaterial) {
-  const s = new THREE.MeshStandardMaterial({
-    name: m.name,
-    color: m.color.clone(),
-    map: m.map,
-    emissive: m.emissive.clone(),
-    emissiveMap: m.emissiveMap,
-    emissiveIntensity: m.emissiveIntensity,
-    // Clear-coated surfaces read glossier: approximate with lower roughness.
-    roughness: Math.max(0.05, m.roughness * (m.clearcoat > 0.5 ? 0.6 : 1)),
-    metalness: m.metalness,
-    roughnessMap: m.roughnessMap,
-    metalnessMap: m.metalnessMap,
-    normalMap: m.normalMap,
-    envMapIntensity: m.envMapIntensity,
-    flatShading: m.flatShading,
-    transparent: m.transparent,
-    opacity: m.opacity,
-    side: m.side,
-    depthWrite: m.depthWrite,
-    vertexColors: m.vertexColors,
-    alphaTest: m.alphaTest,
-    toneMapped: m.toneMapped,
-    fog: m.fog,
-  });
-  return s;
-} // clamp simulation step so a hitch never teleports objects
+ // clamp simulation step so a hitch never teleports objects
 
 export class GameEngine {
   readonly scene = new THREE.Scene();

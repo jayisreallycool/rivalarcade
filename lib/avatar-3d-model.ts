@@ -4,7 +4,8 @@ import { AvatarConfig } from './avatar-types';
 import { SKIN_TONES, HAIR_COLORS, COSMETICS_CATALOG, findItem, itemFinish, itemShape } from './cosmetics-catalog';
 import type { CosmeticItem, ItemFinish } from './avatar-types';
 import { patternCanvas } from './item-patterns';
-import { topLook, bottomLook, shoeLook } from './item-looks';
+import { topLook, bottomLook, shoeLook, trailStyle } from './item-looks';
+import { trailSprite } from './trail-sprites';
 
 /** Surface parameters for each finish (matte cotton … holographic foil). */
 function finishParams(finish: ItemFinish, item?: CosmeticItem): THREE.MeshPhysicalMaterialParameters {
@@ -33,7 +34,7 @@ function finishParams(finish: ItemFinish, item?: CosmeticItem): THREE.MeshPhysic
   }
 }
 
-export type AvatarAction = 'idle' | 'run' | 'jump' | 'slide' | 'shoot' | 'celebrate';
+export type AvatarAction = 'idle' | 'run' | 'jump' | 'slide' | 'shoot' | 'celebrate' | 'peace';
 
 /** A flat label texture (shirt numbers). */
 function labelTexture(text: string, fg: string): THREE.CanvasTexture | null {
@@ -66,6 +67,8 @@ export interface Avatar3DInstance {
   torso: THREE.Mesh;
   wings?: THREE.Group;
   trailParticles?: THREE.Points;
+  /** Mesh count (for budgets/tests). */
+  meshCount?: number;
   /**
    * Pose the avatar for this frame. Pass `dt` (seconds) to get smooth blending between poses
    * and to let triggered one-shot actions play out; omit it for an instant snap (legacy).
@@ -232,12 +235,17 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
       : { shoulder: 0.32, waist: 0.26, arm: 0.36, hip: 0 };
 
   // 1. Torso
-  const torsoGeo = new THREE.CylinderGeometry(frame.shoulder, frame.waist, 0.72, 28, 3);
+  const torsoGeo = new THREE.CylinderGeometry(frame.shoulder, frame.waist, 0.72, 40, 4);
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.position.y = 1.05;
   torso.castShadow = true;
   root.add(torso);
   disposables.push(torsoGeo);
+
+  const shoulderCap = mesh(new THREE.SphereGeometry(frame.shoulder, 40, 12, 0, Math.PI * 2, 0, Math.PI * 0.22), shirtMat);
+  shoulderCap.scale.set(1, 0.55, 0.9);
+  shoulderCap.position.y = 0.36 - 0.012;
+  torso.add(shoulderCap);
 
   if (frame.hip) {
     const hips = mesh(new THREE.CylinderGeometry(frame.waist + 0.01, frame.hip, 0.22, 28), pantsMat);
@@ -286,38 +294,68 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   head.add(headMesh);
   disposables.push(headGeo);
 
-  // Eyes
-  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const pupilMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(avatar.eyeColor || '#00f0ff') });
-  disposables.push(eyeMat, pupilMat);
-
-  const eyeGeo = new THREE.BoxGeometry(0.06, 0.05, 0.04);
-  const pupilGeo = new THREE.BoxGeometry(0.03, 0.03, 0.05);
-  disposables.push(eyeGeo, pupilGeo);
-
-  const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-  leftEye.position.set(-0.08, 0.04, 0.22);
-  const leftPupil = new THREE.Mesh(pupilGeo, pupilMat);
-  leftPupil.position.set(-0.08, 0.04, 0.23);
-  head.add(leftEye, leftPupil);
-
-  const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-  rightEye.position.set(0.08, 0.04, 0.22);
-  const rightPupil = new THREE.Mesh(pupilGeo, pupilMat);
-  rightPupil.position.set(0.08, 0.04, 0.23);
-  head.add(rightEye, rightPupil);
-
-  // Mouth: a small smile so the face reads as a character, not a mannequin.
-  const mouth = new THREE.Mesh(track(new THREE.TorusGeometry(0.04, 0.009, 6, 16, Math.PI)), track(new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: 0.6 })));
-  mouth.position.set(0, -0.075, 0.228);
-  mouth.rotation.set(0.15, 0, Math.PI);
-  head.add(mouth);
+  // Face: rounded eyes with iris + catch-light, brows and mouth set by expression, ears, nose.
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25 });
+  const pupilMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(avatar.eyeColor || '#00f0ff'), emissive: new THREE.Color(avatar.eyeColor || '#00f0ff'), emissiveIntensity: 0.35, roughness: 0.2 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x0b0b12, roughness: 0.3 });
+  const shineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  disposables.push(eyeMat, pupilMat, darkMat, shineMat);
+  const eyeGeo = track(new THREE.SphereGeometry(0.036, 18, 12));
+  const irisGeo = track(new THREE.CircleGeometry(0.022, 20));
+  const pupilDotGeo = track(new THREE.CircleGeometry(0.011, 14));
+  const shineGeo = track(new THREE.CircleGeometry(0.006, 10));
+  const browMat = std(hairColor.color, { roughness: 0.7, metalness: 0 });
+  const browGeo = track(new RoundedBoxGeometry(0.07, 0.016, 0.02, 2, 0.007));
+  const expr = avatar.expression;
+  [-1, 1].forEach((sx) => {
+    const eye = new THREE.Mesh(eyeGeo, eyeMat);
+    eye.scale.set(1, 1.15, 0.55);
+    eye.position.set(sx * 0.082, 0.04, 0.214);
+    const iris = new THREE.Mesh(irisGeo, pupilMat);
+    iris.position.set(sx * 0.082, 0.038, 0.2345);
+    const dot = new THREE.Mesh(pupilDotGeo, darkMat);
+    dot.position.set(sx * 0.082, 0.038, 0.2352);
+    const shine = new THREE.Mesh(shineGeo, shineMat);
+    shine.position.set(sx * 0.082 + 0.008, 0.048, 0.236);
+    const brow = new THREE.Mesh(browGeo, browMat);
+    const tiltIn = expr === 'fierce' ? 0.35 : expr === 'focused' ? 0.15 : expr === 'chill' ? -0.05 : -0.12;
+    brow.position.set(sx * 0.085, expr === 'victory' ? 0.112 : 0.1, 0.222);
+    brow.rotation.set(-0.25, 0, -sx * tiltIn);
+    head.add(eye, iris, dot, shine, brow);
+    // ears
+    const ear = mesh(new THREE.SphereGeometry(0.045, 14, 10), skinMat);
+    ear.scale.set(0.45, 1, 0.75);
+    ear.position.set(sx * 0.238, 0.01, 0);
+    head.add(ear);
+  });
+  const nose = mesh(new THREE.SphereGeometry(0.022, 12, 8), skinMat);
+  nose.scale.set(1, 0.8, 0.9);
+  nose.position.set(0, -0.015, 0.236);
+  head.add(nose);
+  // Mouth: open grin for victory, smirk for confident/fierce, soft smile otherwise.
+  const lipMat = std(0x7f1d1d, { roughness: 0.6, metalness: 0 });
+  if (expr === 'victory') {
+    const grin = mesh(new THREE.SphereGeometry(0.045, 18, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), lipMat);
+    grin.scale.set(1, 0.7, 0.35);
+    grin.position.set(0, -0.07, 0.222);
+    head.add(grin);
+  } else {
+    const smirk = expr === 'confident' || expr === 'fierce';
+    const mouth = mesh(new THREE.TorusGeometry(0.04, 0.009, 8, 20, smirk ? Math.PI * 0.7 : Math.PI), lipMat);
+    mouth.position.set(smirk ? 0.008 : 0, -0.075, 0.228);
+    mouth.rotation.set(0.15, 0, Math.PI + (smirk ? 0.35 : 0));
+    head.add(mouth);
+  }
+  // neck
+  const neck = mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.14, 20), skinMat);
+  neck.position.y = -0.2;
+  head.add(neck);
 
   // Hair 3D Geometry based on hairStyleId
   const hairGroup = new THREE.Group();
   head.add(hairGroup);
 
-  const capGeo = (r: number, cover = 0.55) => new THREE.SphereGeometry(r, 14, 10, 0, Math.PI * 2, 0, Math.PI * cover);
+  const capGeo = (r: number, cover = 0.55) => new THREE.SphereGeometry(r, 36, 18, 0, Math.PI * 2, 0, Math.PI * cover);
   const hs = findItem(avatar.hairStyleId)?.model ?? avatar.hairStyleId;
   if (hs === 'hair_spiky_punk') {
     const coneGeo = track(new THREE.ConeGeometry(0.09, 0.26, 5));
@@ -753,7 +791,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   }
 
   // 3. Arms (Pivot at shoulders)
-  const armGeo = new THREE.CapsuleGeometry(0.075, 0.42, 6, 16); // rounded limbs, not hex prisms
+  const armGeo = new THREE.CapsuleGeometry(0.075, 0.42, 8, 24); // rounded limbs, not hex prisms
   disposables.push(armGeo);
 
   const armMat = top.sleeves === 'long' ? shirtMat : skinMat;
@@ -776,7 +814,18 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   torso.add(rightArm);
 
   // Hands
-  const handGeo = track(new THREE.SphereGeometry(0.068, 16, 12));
+  const handGeo = track(new THREE.SphereGeometry(0.068, 20, 14));
+  // V-sign fingers (shown only during the peace emote).
+  const peaceFingers = new THREE.Group();
+  const fingerGeo = track(new THREE.CapsuleGeometry(0.016, 0.07, 4, 8));
+  [-0.3, 0.3].forEach((a) => {
+    const f = new THREE.Mesh(fingerGeo, skinMat);
+    f.position.set(Math.sin(a) * 0.04, -0.66, 0);
+    f.rotation.z = a;
+    peaceFingers.add(f);
+  });
+  peaceFingers.visible = false;
+  rightArm.add(peaceFingers);
   [leftArm, rightArm].forEach((arm) => {
     const hand = new THREE.Mesh(handGeo, skinMat);
     hand.position.y = -0.56;
@@ -937,7 +986,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   }
 
   // 4. Legs (Pivot at hips)
-  const legGeo = new THREE.CapsuleGeometry(0.085, 0.5, 6, 16);
+  const legGeo = new THREE.CapsuleGeometry(0.085, 0.5, 8, 24);
   disposables.push(legGeo);
   const legMat = bottom.length === 'shorts' ? skinMat : pantsMat;
   const pantsAccentHex = pants?.accentColor || '#64748b';
@@ -954,6 +1003,17 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
   };
   const leftLeg = makeLeg(-1);
   const rightLeg = makeLeg(1);
+
+  // Waistband with a buckle (shows the pants line under every top).
+  if (!top.coat) {
+    const band = mesh(new THREE.TorusGeometry((frame.hip || frame.waist) + 0.008, 0.026, 8, 40), pantsMat);
+    band.rotation.x = Math.PI / 2;
+    band.position.y = -TH - 0.03;
+    torso.add(band);
+    const buckle = mesh(new RoundedBoxGeometry(0.06, 0.04, 0.02, 2, 0.006), std(pants?.accentColor || '#cbd5e1', { metalness: 0.9, roughness: 0.25 }));
+    buckle.position.set(0, -TH - 0.03, (frame.hip || frame.waist) + 0.03);
+    torso.add(buckle);
+  }
 
   // ---- Bottoms ----
   const pantsTrim = std(pantsAccentHex, { roughness: 0.7, metalness: 0 });
@@ -1300,47 +1360,123 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
     torso.add(pack);
   }
 
-  // 6. Particle Trail System
+  // 6. Trail: styled particles swirling round the avatar (bolts, flames, glitter, bubbles,
+  // falling code, rainbow ribbon, void shards) — the same style as the trail's product image.
   let trailParticles: THREE.Points | undefined;
+  let updateTrail: ((time: number, dt: number) => void) | undefined;
   const trailCosmetic = COSMETICS_CATALOG.find((c) => c.id === avatar.trailId);
   if (trailCosmetic && trailCosmetic.id !== 'none') {
-    const pCount = 35;
+    const style = trailStyle(trailCosmetic);
+    const pal = trailCosmetic.palette?.length ? trailCosmetic.palette : [trailCosmetic.color || '#00f0ff'];
+    const N = style === 'ribbon' ? 72 : 44;
     const pGeo = new THREE.BufferGeometry();
-    const pPositions = new Float32Array(pCount * 3);
-    for (let i = 0; i < pCount * 3; i++) {
-      pPositions[i] = (Math.random() - 0.5) * 0.4;
+    const pos = new Float32Array(N * 3);
+    const col = new Float32Array(N * 3);
+    const base = new Float32Array(N * 3);
+    const seed = Array.from({ length: N }, (_, i) => ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1);
+    const c = new THREE.Color();
+    for (let i = 0; i < N; i++) {
+      const pick = style === 'ribbon' ? pal[i % pal.length] : style === 'flame' ? ['#facc15', '#f97316', pal[0]][i % 3] : pal[i % pal.length];
+      c.set(pick).toArray(base, i * 3);
     }
-    pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
-    if (trailCosmetic.palette?.length) {
-      const cols = new Float32Array(pCount * 3);
-      const c = new THREE.Color();
-      for (let i = 0; i < pCount; i++) c.set(trailCosmetic.palette[i % trailCosmetic.palette.length]).toArray(cols, i * 3);
-      pGeo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    pGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const sprite = trailSprite(style);
+    const tex = sprite ? new THREE.CanvasTexture(sprite) : null;
+    if (tex) disposables.push(tex);
     const pMat = new THREE.PointsMaterial({
-      color: new THREE.Color(trailCosmetic.color || '#00f0ff'),
-      vertexColors: Boolean(trailCosmetic.palette?.length),
-      size: 0.12,
+      map: tex,
+      vertexColors: true,
+      size: style === 'bubble' ? 0.16 : style === 'ribbon' ? 0.09 : style === 'glyph' ? 0.13 : 0.12,
       transparent: true,
-      opacity: 0.8,
-      blending: THREE.AdditiveBlending,
+      opacity: 0.95,
+      depthWrite: false,
+      blending: style === 'bubble' ? THREE.NormalBlending : THREE.AdditiveBlending,
+      toneMapped: false,
     });
     disposables.push(pGeo, pMat);
     trailParticles = new THREE.Points(pGeo, pMat);
-    trailParticles.position.set(0, 0.4, -0.3);
+    trailParticles.frustumCulled = false;
     root.add(trailParticles);
+    updateTrail = (t: number) => {
+      for (let i = 0; i < N; i++) {
+        const r = seed[i];
+        let x = 0, y = 0, z = 0, bright = 1;
+        const ang = r * Math.PI * 2;
+        if (style === 'bolt') {
+          const a = ang + t * 1.6;
+          x = Math.cos(a) * 0.6;
+          z = Math.sin(a) * 0.6;
+          y = 0.2 + ((r * 7.3) % 1) * 1.6 + Math.sin(t * 20 + i) * 0.03;
+          bright = Math.sin(t * 25 + i * 3) > 0.2 ? 1.4 : 0.2;
+        } else if (style === 'flame') {
+          const life = (t * 0.8 + r) % 1;
+          const a = ang + t * 0.6;
+          x = Math.cos(a) * (0.42 - life * 0.15);
+          z = Math.sin(a) * (0.42 - life * 0.15);
+          y = 0.02 + life * 0.9;
+          bright = 1.4 * (1 - life);
+        } else if (style === 'glitter') {
+          const h = (r + t * 0.12) % 1;
+          const a = h * Math.PI * 6 + t * 1.5;
+          x = Math.cos(a) * 0.55;
+          z = Math.sin(a) * 0.55;
+          y = h * 2;
+          bright = 0.5 + Math.max(0, Math.sin(t * 6 + i * 2)) * 1.2;
+        } else if (style === 'bubble') {
+          const life = (t * 0.25 + r) % 1;
+          x = Math.cos(ang) * 0.5 + Math.sin(t * 2 + i) * 0.05;
+          z = Math.sin(ang) * 0.5;
+          y = life * 2.1;
+          bright = life > 0.92 ? 0 : 1;
+        } else if (style === 'glyph') {
+          const column = Math.floor(r * 9);
+          const a = (column / 9) * Math.PI * 1.4 + Math.PI * 0.8;
+          x = Math.cos(a) * 0.55;
+          z = Math.sin(a) * 0.55;
+          const life = (t * 0.45 + ((r * 31) % 1)) % 1;
+          y = 2.1 - life * 2.1;
+          bright = 1.4 - life;
+        } else if (style === 'ribbon') {
+          const k = i % pal.length;
+          const j = Math.floor(i / pal.length) / (N / pal.length);
+          const a = j * Math.PI * 2 + t * 1.2;
+          x = Math.cos(a) * 0.62;
+          z = Math.sin(a) * 0.62;
+          y = 0.9 + Math.sin(a * 2 + t) * 0.25 + k * 0.045;
+          bright = 1.2;
+        } else {
+          // rift
+          const a = ang + t * 0.4 + Math.sin(t * 3 + i) * 0.1;
+          const rr = 0.55 + Math.sin(t * 7 + i * 5) * 0.06;
+          x = Math.cos(a) * rr;
+          z = Math.sin(a) * rr - 0.05;
+          y = 0.3 + ((r * 13.7) % 1) * 1.4;
+          bright = Math.sin(t * 9 + i) > -0.3 ? 1.3 : 0.4;
+        }
+        pos[i * 3] = x;
+        pos[i * 3 + 1] = y;
+        pos[i * 3 + 2] = z;
+        col[i * 3] = base[i * 3] * bright;
+        col[i * 3 + 1] = base[i * 3 + 1] * bright;
+        col[i * 3 + 2] = base[i * 3 + 2] * bright;
+      }
+      pGeo.attributes.position.needsUpdate = true;
+      pGeo.attributes.color.needsUpdate = true;
+    };
+    updateTrail(0, 0);
   }
 
   // ---- Animation: target pose per action, blended with frame-rate independent damping ----
   const REST_TORSO_Y = 1.05;
-  const pose = { la: 0, ra: 0, ll: 0, rl: 0, ty: REST_TORSO_Y, trx: 0, hrx: 0, hry: 0 };
+  const pose = { la: 0, ra: 0, laz: 0, raz: 0, ll: 0, rl: 0, ty: REST_TORSO_Y, trx: 0, hrx: 0, hry: 0, hrz: 0 };
   const target = { ...pose };
   let oneShot: { action: AvatarAction; remaining: number } | null = null;
 
   const computeTarget = (time: number, action: AvatarAction) => {
-    target.la = target.ra = target.ll = target.rl = 0;
+    target.la = target.ra = target.ll = target.rl = target.laz = target.raz = 0;
     target.ty = REST_TORSO_Y;
-    target.trx = target.hrx = target.hry = 0;
+    target.trx = target.hrx = target.hry = target.hrz = 0;
 
     if (action === 'run') {
       const cycle = Math.sin(time * 12);
@@ -1373,6 +1509,15 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
       target.ra = -2.4 - wave;
       target.ty = REST_TORSO_Y + Math.abs(Math.sin(time * 6)) * 0.1;
       target.hry = Math.sin(time * 4) * 0.2;
+    } else if (action === 'peace') {
+      // Chill Peace: right hand up beside the face making a V, head tilted, a little sway.
+      const sway = Math.sin(time * 2) * 0.04;
+      target.ra = -2.75 + sway;
+      target.raz = -0.25;
+      target.la = 0.08;
+      target.laz = 0.12;
+      target.hrz = 0.14 + sway;
+      target.ty = REST_TORSO_Y + Math.sin(time * 2.5) * 0.015;
     } else {
       const breathe = Math.sin(time * 2.5) * 0.03;
       target.la = 0.05 + breathe;
@@ -1399,6 +1544,10 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
 
     leftArm.rotation.x = pose.la;
     rightArm.rotation.x = pose.ra;
+    leftArm.rotation.z = pose.laz;
+    rightArm.rotation.z = pose.raz;
+    head.rotation.z = pose.hrz;
+    peaceFingers.visible = active === 'peace';
     leftLeg.rotation.x = pose.ll;
     rightLeg.rotation.x = pose.rl;
     torso.position.y = pose.ty;
@@ -1409,10 +1558,7 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
     if (wingsGroup) {
       wingsGroup.rotation.y = Math.sin(time * 6) * 0.15;
     }
-    if (trailParticles && dt !== undefined) {
-      trailParticles.rotation.y += dt * 1.8;
-      trailParticles.position.y = 0.4 + Math.sin(time * 5) * 0.05;
-    }
+    if (updateTrail) updateTrail(time, dt ?? 0);
   };
 
   const trigger = (action: AvatarAction, seconds = 0.6) => {
@@ -1433,6 +1579,13 @@ export function create3DAvatar(avatar: AvatarConfig): Avatar3DInstance {
     torso,
     wings: wingsGroup,
     trailParticles,
+    meshCount: (() => {
+      let n = 0;
+      root.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) n++;
+      });
+      return n;
+    })(),
     updateAnimation,
     trigger,
     dispose,

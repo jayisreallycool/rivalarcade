@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AvatarConfig } from '@/lib/avatar-types';
 import { drawAvatar, DrawAvatarOptions } from '@/lib/avatar-canvas-draw';
 import { poseAction } from '@/lib/avatar-slots';
+import { cachedSnapshot, snapshotAvatar, snapshotsAvailable } from '@/lib/avatar-snapshot';
 
 interface AvatarViewProps {
   avatar: AvatarConfig;
@@ -13,6 +14,8 @@ interface AvatarViewProps {
   facingRight?: boolean;
   className?: string;
   showTrail?: boolean;
+  /** Force the 2D drawing (no 3D still). */
+  flat?: boolean;
 }
 
 /**
@@ -29,12 +32,30 @@ export default function AvatarView({
   facingRight = true,
   className = '',
   showTrail = true,
+  flat = false,
 }: AvatarViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // 3D still of the avatar (rendered by one shared GPU context); the 2D drawing shows meanwhile
+  // and stays as the fallback when 3D isn't available.
+  const [still, setStill] = useState<{ key: string; url: string } | null>(null);
+  const px = Math.round(size * 2);
+  const stillKey = flat ? '' : `${px}|${action}|${JSON.stringify(avatar)}`;
+  const cachedUrl = !flat && typeof window !== 'undefined' && snapshotsAvailable() ? cachedSnapshot(avatar, px, action) : null;
+  const url = cachedUrl ?? (still?.key === stillKey ? still.url : null);
+  useEffect(() => {
+    if (flat || !snapshotsAvailable()) return;
+    let live = true;
+    void snapshotAvatar(avatar, px, action).then((u) => {
+      if (live && u) setStill({ key: stillKey, url: u });
+    });
+    return () => {
+      live = false;
+    };
+  }, [avatar, px, action, flat, stillKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || url) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -100,7 +121,24 @@ export default function AvatarView({
       io?.disconnect();
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [avatar, size, action, animate, facingRight, showTrail]);
+  }, [avatar, size, action, animate, facingRight, showTrail, url]);
+
+  if (url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={url}
+        alt=""
+        width={size}
+        height={size}
+        draggable={false}
+        style={{ width: `${size}px`, height: `${size}px`, transform: facingRight ? undefined : 'scaleX(-1)' }}
+        className={`relative inline-block pointer-events-none select-none ${className}`}
+        aria-hidden="true"
+        data-avatar-3d="still"
+      />
+    );
+  }
 
   return (
     <canvas

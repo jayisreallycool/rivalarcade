@@ -499,7 +499,7 @@ export class GameEngine {
 
     if (this.statsEl) {
       const info = this.renderer.info.render;
-      this.statsEl.textContent = `${this.quality.tier.toUpperCase()}  ${this.lastFps.toFixed(0)} fps  ${avgMs.toFixed(1)} ms\npx ${this.pixelRatio.toFixed(2)}  calls ${info.calls}  tris ${info.triangles}`;
+      this.statsEl.textContent = `${this.quality.tier.toUpperCase()}  ${this.lastFps.toFixed(0)} fps  ${avgMs.toFixed(1)} ms\npx ${this.pixelRatio.toFixed(2)}  calls ${info.calls}  tris ${info.triangles}\nbloom ${this.bloomPass ? this.bloomPass.strength.toFixed(2) : '-'}`;
     }
   }
 

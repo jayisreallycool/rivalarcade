@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-02 — Brick Blitz: endless runs, power-ups, more balls, music
+
+- No more 90-second clock: a run lasts until the wall reaches the red line with no shields left. Difficulty ramps more slowly, then tightens past row 45. +50 points per row survived.
+- Start with 10 balls (was 5); "+3 balls" pickups; big volleys launch faster.
+- Eight power-ups unlock one by one as you go deeper (each guaranteed on its debut row, then random): +3 balls (row 3), row laser (5), bomb (8), column laser (11), fireball (14), split (17), shield (20), freeze (24).
+- Original synthwave background track, synthesized live; layers build as you survive deeper and peak when the wall is one row away. Follows the mute button and pauses when the app is in the background.
+- Fixed bloom washing out the screen during long volleys (budgeted flashes, dimmer balls in big volleys, capped cuff glow in every first-person game).
+- Bot opponents rescaled for the higher endless scores.
+
 ## 2026-11-01 — Phones wrongly told 3D was "not compatible"
 
 - Removed the up-front WebGL check that could misfire on real phones and lock the game out; games now always try to start in 3D.

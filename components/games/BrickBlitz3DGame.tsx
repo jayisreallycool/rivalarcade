@@ -21,26 +21,28 @@ import {
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
 import GameShell, { PopupApi, useSwipe, Swipe } from './GameShell';
-import { Crosshair, Hand, CirclePlus } from 'lucide-react';
+import { Crosshair, Hand, Zap } from 'lucide-react';
 
 /**
- * BRICK BLITZ 3D — aim-and-launch brick breaker in first person.
+ * BRICK BLITZ 3D — endless aim-and-launch brick breaker in first person.
  *
  * You stand behind the launcher looking down the brick lane. Point where to fire (drag), release
  * to launch the volley. Every brick shows the hits it needs; each turn the wall moves one row
- * closer. Grab "+1" rings for more balls. Seeded rows: same wall for every player.
+ * closer. There is no clock: the run lasts until the wall reaches the red line with no shields
+ * left. Grab "+1" rings for more balls, and power-ups that unlock one by one as you survive
+ * deeper (then keep appearing at random). Seeded rows: same wall for every player.
  *
- * Rules and scoring are identical to the original canvas edition; the simulation runs in board
- * units (1 = one cell, x 0…COLS left→right, y 0…ROWS far→near) and is drawn on the 3D floor.
+ * The simulation runs in board units (1 = one cell, x 0…COLS left→right, y 0…ROWS far→near)
+ * and is drawn on the 3D floor.
  */
 
 const COLS = 7;
 const ROWS = 10; // row ROWS-1 is the danger line
-const ROUND_SECONDS = 90;
-const CLUTCH_SECONDS = 10;
-const START_BALLS = 5;
-/** One free save: the first time the wall reaches the line, the bottom rows are blasted away. */
+const START_BALLS = 10;
+/** Shield saves: when the wall reaches the line, the bottom rows are blasted away. More drop as power-ups. */
 const SAVES = 1;
+const MAX_SAVES = 3;
+const ROW_POINTS = 50;
 const FIRE_GAP = 0.065; // s between balls in a volley
 const MIN_ANGLE = (10 * Math.PI) / 180;
 const HIT_POINTS = 10;
@@ -49,11 +51,32 @@ const CLEAR_BONUS = 1000;
 const STAR_POINTS = 250;
 const BALL_R = 0.13;
 const MAX_BRICKS = COLS * ROWS;
-const MAX_BALLS = 300;
+const MAX_BALLS = 400;
 const BRICK_H = 0.62;
 
 type Brick = { kind: 'brick'; hp: number; max: number; flash: number };
-type Cell = Brick | { kind: 'ball' } | { kind: 'star' };
+type PowerKind = 'ball3' | 'laserH' | 'laserV' | 'bomb' | 'fire' | 'split' | 'shield' | 'freeze';
+type PickupKind = 'ball' | 'star' | PowerKind;
+type Pickup = { kind: PickupKind; used?: boolean };
+type Cell = Brick | Pickup;
+
+/**
+ * Power-ups unlock one by one as the run goes deeper (first one is guaranteed on its unlock row),
+ * then keep turning up at random. Lasers, fire and split stay on the board for the whole volley —
+ * every ball that passes triggers them — and vanish at the end of a volley that used them.
+ */
+const POWERS: Record<PowerKind, { unlock: number; weight: number; name: string; color: number; css: string; tip: string }> = {
+  ball3: { unlock: 3, weight: 3, name: '+3 BALLS', color: 0x34d399, css: '#34d399', tip: 'three more balls' },
+  laserH: { unlock: 5, weight: 3, name: 'ROW LASER', color: 0xfb923c, css: '#fb923c', tip: 'hits every brick in its row' },
+  bomb: { unlock: 8, weight: 2, name: 'BOMB', color: 0xf43f5e, css: '#f43f5e', tip: 'blasts the bricks around it' },
+  laserV: { unlock: 11, weight: 3, name: 'COLUMN LASER', color: 0xfacc15, css: '#facc15', tip: 'hits every brick in its column' },
+  fire: { unlock: 14, weight: 2, name: 'FIREBALL', color: 0xff6a00, css: '#ff8a3d', tip: 'balls burn straight through bricks' },
+  split: { unlock: 17, weight: 2, name: 'SPLIT', color: 0x22d3ee, css: '#22d3ee', tip: 'each ball splits into three' },
+  shield: { unlock: 20, weight: 1, name: 'SHIELD', color: 0xf472b6, css: '#f472b6', tip: 'one more save at the red line' },
+  freeze: { unlock: 24, weight: 1, name: 'FREEZE', color: 0x93c5fd, css: '#93c5fd', tip: 'the wall skips its next move' },
+};
+const POWER_KINDS = Object.keys(POWERS) as PowerKind[];
+const isPower = (k: PickupKind): k is PowerKind => k in POWERS;
 
 interface Ball {
   x: number;
@@ -61,6 +84,12 @@ interface Ball {
   vx: number;
   vy: number;
   live: boolean;
+  /** Fireball: passes through bricks instead of bouncing. */
+  fire: boolean;
+  /** Pickup cell the ball is currently overlapping (so persistent power-ups trigger once per pass). */
+  inside: number;
+  /** Last brick a fireball burned (one hit per brick per pass). */
+  burned: number;
 }
 
 /** Brick colour by toughness: cyan → violet → hot pink. */
@@ -97,7 +126,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
   const onFinishRef = useLatest(onFinish);
   const popups = useRef<PopupApi | null>(null);
   const [phase, setPhase] = useState<'ready' | 'playing' | 'over'>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, balls: START_BALLS, turn: 1, timeLeft: ROUND_SECONDS, clutch: false, combo: 0, saves: SAVES });
+  const [hud, pushHud] = useThrottledHud({ score: 0, balls: START_BALLS, turn: 1, combo: 0, saves: SAVES, frozen: false });
   const api = useRef<{ start: () => void; drag: (s: Swipe, p: 'start' | 'move' | 'end') => void; tap: () => void }>({ start: () => {}, drag: () => {}, tap: () => {} });
 
   const { hostRef } = useGameEngine(
@@ -203,10 +232,12 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         return m;
       });
 
-      // Pickups: +1 ball rings and stars.
+      // Pickups: +1 ball rings, stars and power-ups. Each is a group with a static floor disc and an
+      // animated "body" (children[1]) floating above it.
       const ringGeo = engine.own(new THREE.TorusGeometry(0.26, 0.035, 10, 40));
       const ringMat = engine.own(neonMaterial(0xffffff, 1.6));
       const dotGeo = engine.own(new THREE.SphereGeometry(0.1, 16, 12));
+      const smallDotGeo = engine.own(new THREE.SphereGeometry(0.075, 14, 10));
       const starShape = new THREE.Shape();
       for (let i = 0; i < 10; i++) {
         const r = i % 2 ? 0.13 : 0.3;
@@ -217,26 +248,127 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       const starGeo = engine.own(new THREE.ExtrudeGeometry(starShape, { depth: 0.1, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 2 }));
       starGeo.center();
       const starMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0xfacc15, emissive: 0xf59e0b, emissiveIntensity: 0.7, metalness: 0.8, roughness: 0.2, clearcoat: 1 }));
+      const discGeo = engine.own(new THREE.RingGeometry(0.3, 0.4, 32));
+      discGeo.rotateX(-Math.PI / 2);
+      const barGeo = engine.own(new THREE.CapsuleGeometry(0.07, 0.5, 4, 12));
+      const bombGeo = engine.own(new THREE.SphereGeometry(0.21, 20, 14));
+      const bombBandGeo = engine.own(new THREE.TorusGeometry(0.215, 0.03, 8, 32));
+      const fuseGeo = engine.own(new THREE.CylinderGeometry(0.025, 0.025, 0.14, 8));
+      const fireGeo = engine.own(new THREE.OctahedronGeometry(0.23, 0));
+      const hexGeo = engine.own(new THREE.CylinderGeometry(0.26, 0.26, 0.07, 6));
+      hexGeo.rotateX(Math.PI / 2);
+      const iceGeo = engine.own(new THREE.IcosahedronGeometry(0.22, 0));
+      const glow = new Map<number, THREE.Material>();
+      const glowMat = (hex: number, k = 1.6) => {
+        const key = hex * 10 + k;
+        let m = glow.get(key);
+        if (!m) glow.set(key, (m = engine.own(neonMaterial(hex, k))));
+        return m;
+      };
+      const discMat = new Map<number, THREE.MeshBasicMaterial>();
+      const floorDisc = (hex: number) => {
+        let m = discMat.get(hex);
+        if (!m) discMat.set(hex, (m = engine.own(new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }))));
+        const d = new THREE.Mesh(discGeo, m);
+        d.position.y = 0.02;
+        return d;
+      };
+      const bombMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0x1a1426, metalness: 0.6, roughness: 0.3, clearcoat: 1 }));
+      const iceMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0xcfe8ff, emissive: 0x60a5fa, emissiveIntensity: 0.6, roughness: 0.1, metalness: 0.1, clearcoat: 1, flatShading: true }));
+      const buildPickup = (kind: PickupKind) => {
+        const g = new THREE.Group();
+        g.userData.kind = kind;
+        const body = new THREE.Group();
+        body.position.y = 0.38;
+        const color = isPower(kind) ? POWERS[kind].color : kind === 'star' ? 0xfacc15 : 0xffffff;
+        const disc = floorDisc(color);
+        if (isPower(kind)) disc.scale.setScalar(1.15);
+        body.position.y = isPower(kind) ? 0.45 : 0.38;
+        g.add(disc, body);
+        if (kind === 'ball' || kind === 'ball3') {
+          const mat = kind === 'ball' ? ringMat : glowMat(color);
+          const ring = new THREE.Mesh(ringGeo, mat);
+          ring.rotation.x = -0.95;
+          body.add(ring);
+          if (kind === 'ball') body.add(new THREE.Mesh(dotGeo, mat));
+          else
+            for (let i = 0; i < 3; i++) {
+              const d = new THREE.Mesh(smallDotGeo, mat);
+              const a = (i / 3) * Math.PI * 2 + Math.PI / 2;
+              d.position.set(Math.cos(a) * 0.1, Math.sin(a) * 0.1, 0);
+              body.add(d);
+            }
+          if (kind === 'ball3') body.scale.setScalar(1.15);
+        } else if (kind === 'star') {
+          body.add(new THREE.Mesh(starGeo, starMat));
+        } else if (kind === 'laserH' || kind === 'laserV') {
+          const bar = new THREE.Mesh(barGeo, glowMat(color, 2));
+          bar.rotation.set(kind === 'laserH' ? 0 : Math.PI / 2, 0, kind === 'laserH' ? Math.PI / 2 : 0);
+          const core = new THREE.Mesh(dotGeo, glowMat(0xffffff, 2));
+          body.add(bar, core);
+        } else if (kind === 'bomb') {
+          const band = new THREE.Mesh(bombBandGeo, glowMat(color, 2));
+          band.rotation.x = Math.PI / 2;
+          const fuse = new THREE.Mesh(fuseGeo, glowMat(0xfde047, 2));
+          fuse.position.y = 0.25;
+          body.add(new THREE.Mesh(bombGeo, bombMat), band, fuse);
+        } else if (kind === 'fire') {
+          body.add(new THREE.Mesh(fireGeo, glowMat(color, 2.2)));
+        } else if (kind === 'split') {
+          for (let i = 0; i < 3; i++) {
+            const d = new THREE.Mesh(dotGeo, glowMat(color, 1.8));
+            const a = (i / 3) * Math.PI * 2;
+            d.position.set(Math.cos(a) * 0.17, 0, Math.sin(a) * 0.17);
+            body.add(d);
+          }
+        } else if (kind === 'shield') {
+          const hex = new THREE.Mesh(hexGeo, glowMat(color, 1.4));
+          hex.rotation.x = -0.6;
+          body.add(hex);
+        } else if (kind === 'freeze') {
+          body.add(new THREE.Mesh(iceGeo, iceMat));
+        }
+        g.traverse((o) => ((o as THREE.Mesh).castShadow = false));
+        return g;
+      };
       const pickupPool: THREE.Group[] = [];
       const pickupsInUse: THREE.Group[] = [];
-      const takePickup = (kind: 'ball' | 'star') => {
+      const takePickup = (kind: PickupKind) => {
         let g = pickupPool.find((p) => p.userData.kind === kind);
         if (g) pickupPool.splice(pickupPool.indexOf(g), 1);
-        else {
-          g = new THREE.Group();
-          g.userData.kind = kind;
-          if (kind === 'ball') {
-            const ring = new THREE.Mesh(ringGeo, ringMat);
-            const dot = new THREE.Mesh(dotGeo, ringMat);
-            g.add(ring, dot);
-          } else {
-            g.add(new THREE.Mesh(starGeo, starMat));
-          }
-        }
+        else g = buildPickup(kind);
         g.visible = true;
         scene.add(g);
         pickupsInUse.push(g);
         return g;
+      };
+
+      // Laser beams (pooled, fade out).
+      const beamGeo = engine.own(new THREE.BoxGeometry(1, 1, 1));
+      // One beam per laser line (re-triggering refreshes it) so 50 balls through one laser don't
+      // stack 50 additive beams into a white-out.
+      const beams: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; key: string }[] = [];
+      let lastZap = 0;
+      const fireBeam = (horizontal: boolean, row: number, c: number, hex: number) => {
+        const key = horizontal ? `h${row}` : `v${c}`;
+        let b = beams.find((x) => x.life > 0 && x.key === key) ?? beams.find((x) => x.life <= 0);
+        if (!b) {
+          const mat = engine.own(new THREE.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0, depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending }));
+          b = { mesh: new THREE.Mesh(beamGeo, mat), mat, life: 0, key };
+          scene.add(b.mesh);
+          beams.push(b);
+        }
+        b.key = key;
+        b.mat.color.setHex(hex).multiplyScalar(1.3);
+        b.life = 1;
+        if (horizontal) {
+          b.mesh.position.set(0, 0.38, wz(row + 0.5));
+          b.mesh.scale.set(COLS, 0.12, 0.16);
+        } else {
+          b.mesh.position.set(wx(c + 0.5), 0.38, -ROWS / 2);
+          b.mesh.scale.set(0.16, 0.12, ROWS);
+        }
+        b.mesh.visible = true;
       };
 
       // Balls (1 instanced draw).
@@ -247,6 +379,13 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       ballMesh.frustumCulled = false;
       ballMesh.count = 0;
       scene.add(ballMesh);
+      // Fireballs: same balls, burning orange (second instanced draw).
+      const fireMat = engine.own(new THREE.MeshStandardMaterial({ color: 0xffd0a0, emissive: 0xff5a00, emissiveIntensity: 1.6, roughness: 0.3 }));
+      const fireMesh = new THREE.InstancedMesh(ballGeo, fireMat, MAX_BALLS);
+      fireMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      fireMesh.frustumCulled = false;
+      fireMesh.count = 0;
+      scene.add(fireMesh);
 
       // Launcher pad + the ball waiting on it + ball count label.
       const launcher = new THREE.Group();
@@ -302,6 +441,15 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       scene.add(aimDots);
 
       const particles = new ParticleBursts(engine);
+      // Screen flashes are budgeted: in a 100-ball volley bricks break every frame, and stacking a
+      // flash per break would leave the whole view blown out with bloom.
+      let flashLevel = 0;
+      const flash = (a: number) => {
+        const add = Math.min(a, Math.max(0, 0.45 - flashLevel));
+        if (add <= 0) return;
+        flashLevel += add;
+        engine.flash(add);
+      };
 
       // Your arms: the right hand points where you aim.
       const arms = createFirstPersonRig(engine, stableAvatar, { spread: 0.31, drop: 0.5, depth: 0.5 });
@@ -324,18 +472,18 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       let dropAnim = 0;
       let pendingBalls = 0;
       let saves = SAVES;
+      let frozen = false;
+      let splits = 0;
       let hudAcc = 0;
-      const s = { score: 0, timeLeft: ROUND_SECONDS, clutchAnnounced: false, playing: false, pHits: 0, pBreaks: 0, pClears: 0, pStars: 0, pClutch: 0, pCombo: 0, broken: 0, bestVolley: 0 };
+      const seen = new Set<PowerKind>();
+      const s = { score: 0, playing: false, pHits: 0, pBreaks: 0, pClears: 0, pStars: 0, pRows: 0, pPowers: 0, pCombo: 0, broken: 0, bestVolley: 0, powers: 0 };
       const launchY = ROWS - 0.02;
       const tmp = new THREE.Vector3();
 
-      const award = (base: number, cat: 'pHits' | 'pBreaks' | 'pClears' | 'pStars', mult = 1) => {
-        const clutchOn = s.timeLeft <= CLUTCH_SECONDS;
-        const withCombo = Math.round(base * mult);
-        const total = clutchOn ? withCombo * 2 : withCombo;
+      const award = (base: number, cat: 'pHits' | 'pBreaks' | 'pClears' | 'pStars' | 'pRows' | 'pPowers', mult = 1) => {
+        const total = Math.round(base * mult);
         s[cat] += base;
-        s.pCombo += withCombo - base;
-        s.pClutch += total - withCombo;
+        s.pCombo += total - base;
         s.score += total;
         return total;
       };
@@ -343,17 +491,34 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       const spawnRow = () => {
         const row: (Cell | null)[] = new Array(COLS).fill(null);
         // Difficulty curve: soft bricks and sparse rows early, full-strength walls from row ~14.
-        const tough = turn >= 8 && rng() < 0.3;
-        let count = turn < 5 ? 1 + Math.floor(rng() * 3) : turn < 10 ? 2 + Math.floor(rng() * 3) : 2 + Math.floor(rng() * 4);
-        if (turn > 14) count = Math.min(6, count + 1);
-        const base = Math.max(1, Math.round(turn * Math.min(1, 0.45 + turn * 0.04)));
+        // Endless run: a slow ramp so a good player lasts many rows, tightening the deeper you go.
+        const tough = turn >= 10 && rng() < 0.3;
+        let count = turn < 6 ? 1 + Math.floor(rng() * 3) : turn < 14 ? 2 + Math.floor(rng() * 3) : 2 + Math.floor(rng() * 4);
+        if (turn > 22) count = Math.min(5, count + 1);
+        const late = turn > 45 ? 1 + (turn - 45) * 0.025 : 1;
+        const base = Math.max(1, Math.round(turn * Math.min(1.05, 0.5 + turn * 0.012) * late));
         const cols = [...Array(COLS).keys()].sort(() => rng() - 0.5);
         for (let i = 0; i < count; i++) {
           const hp = tough && rng() < 0.4 ? base * 2 : base;
           row[cols[i]] = { kind: 'brick', hp, max: hp, flash: 0 };
         }
-        row[cols[count]] = { kind: 'ball' };
-        if (turn % 4 === 0 && count + 1 < COLS) row[cols[count + 1]] = { kind: 'star' };
+        let free = count;
+        row[cols[free++]] = { kind: 'ball' };
+        // Power-ups: each type debuts on its unlock row, then appears at random among those unlocked.
+        const unlocked = POWER_KINDS.filter((k) => turn >= POWERS[k].unlock);
+        const debut = POWER_KINDS.find((k) => POWERS[k].unlock === turn);
+        const chance = Math.min(0.75, 0.35 + unlocked.length * 0.05);
+        const want = debut ? 1 : rng() < chance ? (unlocked.length > 3 && rng() < 0.25 ? 2 : 1) : 0;
+        for (let i = 0; i < want && free < COLS; i++) {
+          let kind: PowerKind | undefined = i === 0 ? debut : undefined;
+          if (!kind) {
+            const total = unlocked.reduce((a, k) => a + POWERS[k].weight, 0);
+            let r = rng() * total;
+            kind = unlocked.find((k) => (r -= POWERS[k].weight) < 0) ?? unlocked[0];
+          }
+          if (kind) row[cols[free++]] = { kind };
+        }
+        if (turn % 4 === 0 && free < COLS) row[cols[free]] = { kind: 'star' };
         return row;
       };
 
@@ -366,40 +531,39 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         grid[0] = spawnRow();
         ballCount = START_BALLS;
         saves = SAVES;
+        frozen = false;
+        seen.clear();
         launchX = COLS / 2;
         balls = [];
         state = 'idle';
         aimAng = null;
         particles.clear();
-        Object.assign(s, { score: 0, timeLeft: ROUND_SECONDS, clutchAnnounced: false, playing: false, pHits: 0, pBreaks: 0, pClears: 0, pStars: 0, pClutch: 0, pCombo: 0, broken: 0, bestVolley: 0 });
+        Object.assign(s, { score: 0, playing: false, pHits: 0, pBreaks: 0, pClears: 0, pStars: 0, pRows: 0, pPowers: 0, pCombo: 0, broken: 0, bestVolley: 0, powers: 0 });
       };
       reset();
 
-      const finish = (reason: 'time' | 'wall') => {
+      const finish = () => {
         if (!s.playing) return;
         s.playing = false;
         state = 'over';
         aimDots.visible = false;
-        if (reason === 'wall') {
-          popups.current?.banner('WALL DOWN!', '#fb7185');
-          feel.kick(1);
-          sound.playLose();
-          haptic('fail');
-        } else {
-          sound.playWin();
-          haptic('big');
-        }
+        popups.current?.banner(`WALL DOWN · ROW ${turn - 1}`, '#fb7185');
+        feel.kick(1);
+        sound.stopMusic(0.4);
+        sound.playLose();
+        haptic('fail');
         const breakdown = [
           { label: `Brick hits`, points: s.pHits },
           { label: `Bricks broken (${s.broken})`, points: s.pBreaks },
+          { label: `Rows survived (${turn - 1})`, points: s.pRows },
+          { label: `Power-ups (${s.powers})`, points: s.pPowers },
           { label: `Volley combo (best ${s.bestVolley} hits)`, points: s.pCombo },
           { label: 'Board clears', points: s.pClears },
           { label: 'Stars', points: s.pStars },
-          { label: 'Clutch time ×2', points: s.pClutch },
         ].filter((b) => b.points > 0);
-        pushHud({ score: s.score, timeLeft: Math.max(0, s.timeLeft), clutch: false }, true);
+        pushHud({ score: s.score }, true);
         setPhase('over');
-        setTimeout(() => onFinishRef.current(s.score, { maxCombo: s.bestVolley, breakdown }), reason === 'wall' ? 900 : 300);
+        setTimeout(() => onFinishRef.current(s.score, { maxCombo: s.bestVolley, breakdown }), 1100);
       };
 
       const popAt = (x: number, y: number, text: string, color: string, size: 'sm' | 'md' | 'lg' = 'sm') => {
@@ -428,8 +592,9 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         reset();
         s.playing = true;
         state = 'idle';
-        pushHud({ score: 0, balls: ballCount, turn: 1, timeLeft: ROUND_SECONDS, clutch: false, combo: 0, saves: SAVES }, true);
+        pushHud({ score: 0, balls: ballCount, turn: 1, combo: 0, saves: SAVES, frozen: false }, true);
         setPhase('playing');
+        sound.startMusic(0.2);
       };
 
       api.current.drag = (sw, p) => {
@@ -455,6 +620,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           fireTimer = 0;
           volleyTime = 0;
           volleyHits = 0;
+          splits = 0;
           nextLaunchX = null;
           pendingBalls = 0;
           balls = [];
@@ -470,8 +636,9 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       };
 
       // ------------------------------------------------------------- physics (board units)
-      const hitBrick = (row: number, colIdx: number, c: Brick) => {
-        c.hp -= 1;
+      const hitBrick = (row: number, colIdx: number, c: Brick, dmg = 1) => {
+        if (grid[row]?.[colIdx] !== c) return;
+        c.hp -= dmg;
         c.flash = 1;
         volleyHits += 1;
         const mult = 1 + Math.min(2, Math.floor(volleyHits / 12) * 0.25);
@@ -484,21 +651,123 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           const hue = hueFor(c.max, turn);
           popAt(colIdx + 0.5, row + 0.5, `+${pts}`, `hsl(${hue} 95% 70%)`, c.max >= turn * 2 ? 'md' : 'sm');
           particles.emit(tmp.set(wx(colIdx + 0.5), BRICK_H / 2, wz(row + 0.5)), col.setHSL(hue / 360, 0.95, 0.6).getHex(), { count: 16, speed: 4, life: 0.6 });
-          engine.flash(0.15);
+          flash(0.06);
           haptic('light');
           feel.kick(0.25);
           if (!grid.some((rw) => rw.some((x) => x?.kind === 'brick'))) {
             const pts2 = award(CLEAR_BONUS, 'pClears');
             popups.current?.banner(`BOARD CLEAR +${pts2}`, '#34d399');
-            engine.flash(0.8);
+            flash(0.45);
             sound.playPowerup();
             haptic('big');
           }
         }
       };
 
+      /** A ball ran over a pickup cell. */
+      const collect = (row: number, col: number, cell: Pickup, b: Ball) => {
+        const k = cell.kind;
+        const cx = col + 0.5;
+        const cy = row + 0.5;
+        if (k === 'ball' || k === 'ball3') {
+          grid[row][col] = null;
+          const n = k === 'ball' ? 1 : 3;
+          pendingBalls += n;
+          if (k === 'ball') popAt(cx, cy, '+1 BALL', '#ffffff');
+          if (n > 1) particles.emit(tmp.set(wx(cx), 0.4, wz(cy)), POWERS.ball3.color, { count: 14, speed: 3 });
+          sound.playJump();
+          haptic('light');
+          if (k === 'ball') return;
+        } else if (k === 'star') {
+          grid[row][col] = null;
+          const pts = award(STAR_POINTS, 'pStars');
+          popAt(cx, cy, `★ +${pts}`, '#facc15', 'md');
+          particles.emit(tmp.set(wx(cx), 0.4, wz(cy)), 0xfacc15, { count: 18, speed: 4 });
+          sound.playPowerup();
+          haptic('light');
+          return;
+        }
+        if (!isPower(k)) return;
+        const info = POWERS[k];
+        const first = !cell.used;
+        if (first) {
+          s.powers += 1;
+          award(100, 'pPowers');
+          popAt(cx, cy, info.name, info.css, 'md');
+        }
+        if (k === 'laserH' || k === 'laserV') {
+          cell.used = true;
+          fireBeam(k === 'laserH', row, col, info.color);
+          if (k === 'laserH') for (let c = 0; c < COLS; c++) {
+            const t = grid[row][c];
+            if (t?.kind === 'brick') hitBrick(row, c, t);
+          }
+          else for (let r = 0; r < ROWS; r++) {
+            const t = grid[r][col];
+            if (t?.kind === 'brick') hitBrick(r, col, t);
+          }
+          const now = performance.now();
+          if (now - lastZap > 120) {
+            lastZap = now;
+            sound.playLaser();
+            feel.kick(0.12);
+          }
+        } else if (k === 'bomb') {
+          grid[row][col] = null;
+          const dmg = Math.max(3, Math.ceil(turn * 0.7));
+          for (let r = row - 1; r <= row + 1; r++)
+            for (let c = col - 1; c <= col + 1; c++) {
+              const t = grid[r]?.[c];
+              if (t?.kind === 'brick') hitBrick(r, c, t, dmg);
+            }
+          particles.emit(tmp.set(wx(cx), 0.4, wz(cy)), info.color, { count: 40, speed: 7, life: 0.8 });
+          flash(0.35);
+          feel.kick(0.7);
+          sound.playLose();
+          haptic('big');
+        } else if (k === 'fire') {
+          cell.used = true;
+          if (!b.fire) {
+            b.fire = true;
+            const now = performance.now();
+            if (now - lastZap > 120) {
+              lastZap = now;
+              sound.playLaser();
+            }
+          }
+        } else if (k === 'split') {
+          cell.used = true;
+          if (splits < 60 && balls.length < MAX_BALLS - 2) {
+            splits++;
+            const sp = Math.hypot(b.vx, b.vy);
+            const a = Math.atan2(b.vy, b.vx);
+            for (const d of [-0.45, 0.45]) {
+              balls.push({ x: b.x, y: b.y, vx: Math.cos(a + d) * sp, vy: Math.sin(a + d) * sp, live: true, fire: b.fire, inside: row * COLS + col, burned: -1 });
+            }
+            const now = performance.now();
+            if (now - lastZap > 120) {
+              lastZap = now;
+              sound.playScore(1.6);
+            }
+          }
+        } else if (k === 'shield') {
+          grid[row][col] = null;
+          saves = Math.min(MAX_SAVES, saves + 1);
+          pushHud({ saves });
+          sound.playPowerup();
+          haptic('big');
+        } else if (k === 'freeze') {
+          grid[row][col] = null;
+          frozen = true;
+          pushHud({ frozen: true });
+          sound.playPowerup();
+        }
+        if (first && k !== 'laserH' && k !== 'laserV') haptic('light');
+      };
+
       const stepBall = (b: Ball, dt: number) => {
         const R = BALL_R;
+        let touching = -1;
         b.x += b.vx * dt;
         b.y += b.vy * dt;
         if (b.x < R) {
@@ -521,19 +790,10 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
             const c = grid[row][c2];
             if (!c) continue;
             if (c.kind !== 'brick') {
-              if (Math.hypot(b.x - (c2 + 0.5), b.y - (row + 0.5)) < R + 0.22) {
-                grid[row][c2] = null;
-                if (c.kind === 'ball') {
-                  pendingBalls += 1;
-                  popAt(c2 + 0.5, row + 0.5, '+1 BALL', '#ffffff');
-                  sound.playJump();
-                } else {
-                  const pts = award(STAR_POINTS, 'pStars');
-                  popAt(c2 + 0.5, row + 0.5, `★ +${pts}`, '#facc15', 'md');
-                  particles.emit(tmp.set(wx(c2 + 0.5), 0.4, wz(row + 0.5)), 0xfacc15, { count: 18, speed: 4 });
-                  sound.playPowerup();
-                }
-                haptic('light');
+              if (Math.hypot(b.x - (c2 + 0.5), b.y - (row + 0.5)) < R + 0.24) {
+                const key = row * COLS + c2;
+                touching = key;
+                if (b.inside !== key) collect(row, c2, c, b);
               }
               continue;
             }
@@ -548,6 +808,15 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
             const dy = b.y - ny;
             const d2 = dx * dx + dy * dy;
             if (d2 >= R * R) continue;
+            if (b.fire) {
+              // Fireball: burn through without bouncing (one hit per brick per pass).
+              const key = row * COLS + c2;
+              if (b.burned !== key) {
+                b.burned = key;
+                hitBrick(row, c2, c, 2);
+              }
+              continue;
+            }
             if (d2 > 1e-9) {
               const d = Math.sqrt(d2);
               const ux = dx / d;
@@ -568,9 +837,11 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
               else (b.y = y1 + R), (b.vy = Math.abs(b.vy));
             }
             hitBrick(row, c2, c);
+            b.inside = touching;
             return; // one hit per substep
           }
         }
+        b.inside = touching;
         if (Math.abs(b.vy) < 0.6) b.vy = b.vy < 0 ? -0.6 : 0.6; // no endless horizontal loops
         if (b.y >= launchY && b.vy > 0) {
           b.live = false;
@@ -584,9 +855,26 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         launchX = nextLaunchX ?? launchX;
         s.bestVolley = Math.max(s.bestVolley, volleyHits);
         if (volleyHits >= 25) popups.current?.banner(volleyHits >= 60 ? `MEGA VOLLEY ${volleyHits}` : `${volleyHits} HIT VOLLEY`, '#22d3ee');
+        // Lasers, fire and split that fired this volley are spent.
+        for (const rw of grid) rw.forEach((c, i) => c && c.kind !== 'brick' && c.used && (rw[i] = null));
+        if (frozen) {
+          frozen = false;
+          popups.current?.banner('WALL FROZEN', POWERS.freeze.css);
+          state = 'idle';
+          pushHud({ balls: ballCount, combo: 0, frozen: false });
+          return;
+        }
         grid.pop();
         turn += 1;
-        grid.unshift(spawnRow());
+        const row = spawnRow();
+        grid.unshift(row);
+        award(ROW_POINTS, 'pRows');
+        const debut = row.find((c): c is Pickup => !!c && c.kind !== 'brick' && isPower(c.kind) && !seen.has(c.kind as PowerKind));
+        if (debut && isPower(debut.kind)) {
+          seen.add(debut.kind);
+          if (POWERS[debut.kind].unlock === turn) popups.current?.banner(`NEW POWER-UP · ${POWERS[debut.kind].name}`, POWERS[debut.kind].css);
+        }
+        sound.setMusicIntensity(0.2 + (turn - 1) / 24);
         dropAnim = 1;
         state = 'drop';
         pushHud({ balls: ballCount, turn: turn - 1, combo: 0 });
@@ -606,16 +894,20 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
             haptic('big');
             pushHud({ saves });
           } else {
-            finish('wall');
+            finish();
             return;
           }
         }
+        // Pickups that reach the line: balls are collected, everything else is lost.
         last.forEach((c, i) => {
-          if (c && c.kind === 'ball') {
-            ballCount += 1;
-            last[i] = null;
-          } else if (c && c.kind === 'star') last[i] = null;
+          if (!c || c.kind === 'brick') return;
+          if (c.kind === 'ball') ballCount += 1;
+          else if (c.kind === 'ball3') ballCount += 3;
+          last[i] = null;
         });
+        pushHud({ balls: ballCount });
+        // Bricks one row from the line: push the music to full tension.
+        if (grid[ROWS - 2].some((c) => c?.kind === 'brick')) sound.setMusicIntensity(1);
       };
 
       /** March a virtual ball to its first contacts for the dotted aim guide. */
@@ -688,29 +980,22 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
 
       // ------------------------------------------------------------- per frame
       engine.addUpdate((dt, t) => {
-        if (s.playing) {
-          s.timeLeft -= dt;
-          if (!s.clutchAnnounced && s.timeLeft <= CLUTCH_SECONDS) {
-            s.clutchAnnounced = true;
-            popups.current?.banner('CLUTCH TIME ×2', '#fbbf24');
-            haptic('big');
-          }
-          if (s.timeLeft <= 0) finish('time');
-        }
-
         if (state === 'volley') {
           volleyTime += dt;
           const speedMul = volleyTime > 2.5 ? 2.2 : 1; // auto fast-forward long volleys
           const speed = 15 * speedMul;
           fireTimer -= dt;
+          // Big volleys fire faster so 100+ balls still leave in about two seconds.
+          const gap = Math.min(FIRE_GAP, 2.2 / Math.max(1, ballCount));
           while (toFire > 0 && fireTimer <= 0) {
-            balls.push({ x: launchX, y: launchY - 0.01, vx: Math.cos(fireAngle) * 15, vy: -Math.sin(fireAngle) * 15, live: true });
+            balls.push({ x: launchX, y: launchY - 0.01, vx: Math.cos(fireAngle) * 15, vy: -Math.sin(fireAngle) * 15, live: true, fire: false, inside: -1, burned: -1 });
             toFire -= 1;
-            fireTimer += FIRE_GAP / speedMul;
+            fireTimer += gap / speedMul;
           }
           const sub = Math.ceil((speed * dt) / (BALL_R * 0.8));
           const h = (dt * speedMul) / sub;
-          for (const b of balls) {
+          for (let bi2 = 0; bi2 < balls.length; bi2++) {
+            const b = balls[bi2];
             if (!b.live) continue;
             for (let i = 0; i < sub && b.live; i++) stepBall(b, h);
           }
@@ -723,10 +1008,11 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           }
         }
 
+        flashLevel = Math.max(0, flashLevel - dt * 0.9);
         hudAcc += dt;
         if (hudAcc > 0.1 && s.playing) {
           hudAcc = 0;
-          pushHud({ score: s.score, timeLeft: s.timeLeft, clutch: s.timeLeft <= CLUTCH_SECONDS, combo: state === 'volley' ? volleyHits : 0, balls: ballCount + (state === 'volley' ? pendingBalls : 0) });
+          pushHud({ score: s.score, combo: state === 'volley' ? volleyHits : 0, balls: ballCount + (state === 'volley' ? pendingBalls : 0) });
         }
 
         // ---- draw: bricks, labels, pickups
@@ -761,13 +1047,15 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
               bi++;
             } else {
               const g = takePickup(cell.kind);
-              g.position.set(x, cell.kind === 'ball' ? 0.35 + Math.sin(t * 4 + c) * 0.05 : 0.4, z);
-              if (cell.kind === 'ball') {
-                g.children[0].rotation.set(-0.95, 0, 0);
-                g.scale.setScalar(1 + Math.sin(t * 6 + c) * 0.08);
-              } else {
-                g.rotation.set(-0.6, t * 1.8, 0);
-              }
+              const body = g.children[1];
+              const k = cell.kind;
+              g.position.set(x, 0, z);
+              body.position.y = (isPower(k) ? 0.45 : 0.38) + Math.sin(t * 4 + c + row) * 0.05;
+              const pulse = 1 + Math.sin(t * 6 + c) * 0.08;
+              body.scale.setScalar((isPower(k) ? 1.45 : 1) * pulse * (cell.used ? 0.8 : 1));
+              if (k === 'star') body.rotation.set(-0.6, t * 1.8, 0);
+              else if (k === 'bomb' || k === 'fire' || k === 'freeze' || k === 'split') body.rotation.set(0, t * (k === 'split' ? 3 : 1.6), 0);
+              else if (k === 'shield') body.rotation.set(0, Math.sin(t * 2) * 0.5, 0);
             }
           }
         }
@@ -780,15 +1068,30 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         const near = grid[ROWS - 2].some((c) => c?.kind === 'brick');
         dangerMat.opacity = near ? 0.22 + 0.14 * Math.sin(t * 8) : 0.07;
 
-        // Balls
+        // Balls (plain + burning)
         let n = 0;
+        let nf = 0;
         for (const b of balls) {
-          if (!b.live || n >= MAX_BALLS) continue;
+          if (!b.live) continue;
           m4.makeTranslation(wx(b.x), BALL_R + 0.02, wz(b.y));
-          ballMesh.setMatrixAt(n++, m4);
+          if (b.fire) {
+            if (nf < MAX_BALLS) fireMesh.setMatrixAt(nf++, m4);
+          } else if (n < MAX_BALLS) ballMesh.setMatrixAt(n++, m4);
         }
         ballMesh.count = n;
         ballMesh.instanceMatrix.needsUpdate = true;
+        fireMesh.count = nf;
+        fireMesh.instanceMatrix.needsUpdate = true;
+        // Many glowing balls add up to a screen-wide bloom haze: dim each ball as the volley grows.
+        const glowK = Math.min(1, 0.25 + 7 / Math.max(1, n + nf));
+        ballMat.emissiveIntensity = 1.1 * glowK;
+        fireMat.emissiveIntensity = 1.6 * glowK;
+        for (const bm of beams) {
+          if (bm.life <= 0) continue;
+          bm.life = Math.max(0, bm.life - dt * 3.2);
+          bm.mat.opacity = bm.life * 0.6;
+          bm.mesh.visible = bm.life > 0;
+        }
 
         // Launcher, waiting count, landing ghost
         launcher.position.set(wx(launchX), 0, wz(launchY) + 0.15);
@@ -821,10 +1124,12 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           arms.left.pivot.position.z -= k * 0.1;
           arms.right.pivot.position.z -= k * 0.1;
         }
-        arms.setGlow(Math.min(1.5, volleyHits / 30));
+        // Cuffs sit right in front of the lens: keep their glow modest or it blooms over the whole view.
+        arms.setGlow(state === 'volley' ? Math.min(0.6, volleyHits / 80) : 0);
       });
 
       return () => {
+        sound.stopMusic(0.3);
         api.current = { start: () => {}, drag: () => {}, tap: () => {} };
       };
     },
@@ -844,6 +1149,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${hud.saves > 0 ? 'bg-rose-500 text-white' : 'bg-white/10 text-white/30'}`} title="Shield save">
         ◆ {hud.saves}
       </span>
+      {hud.frozen && <span className="px-2 py-0.5 rounded-full bg-sky-300 text-black text-[11px] font-black">❄ FROZEN</span>}
       {hud.combo >= 12 && <span className="px-2 py-0.5 rounded-full bg-cyan-400 text-black text-[11px] font-black">{hud.combo} HITS</span>}
     </>
   );
@@ -857,9 +1163,6 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       phase={phase}
       onStart={startGame}
       score={hud.score}
-      timeLeft={phase === 'ready' ? ROUND_SECONDS : hud.timeLeft}
-      roundSeconds={ROUND_SECONDS}
-      clutch={hud.clutch}
       chips={chips}
       rival={rival}
       match={match}
@@ -869,9 +1172,9 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       tutorial={[
         { icon: <Crosshair className="w-6 h-6" />, label: 'Drag to aim' },
         { icon: <Hand className="w-6 h-6" />, label: 'Release to fire' },
-        { icon: <CirclePlus className="w-6 h-6" />, label: 'Grab +1 balls' },
+        { icon: <Zap className="w-6 h-6" />, label: 'Grab balls & power-ups' },
       ]}
-      scoring="First-person 3D lane. 10 per hit · Break bonus grows with brick toughness · Long volleys multiply · Clear the board +1000 · Last 10s ×2. Starts with soft bricks; the wall toughens each row. One shield save if the wall hits the red line. Tap during a volley to fast-forward. Same wall for every player."
+      scoring={`Endless — survive as many rows as you can. The run ends when the wall reaches the red line with no shields left. Start with ${START_BALLS} balls. 10 per hit · +${ROW_POINTS} per row · long volleys multiply · board clear +1000. New power-ups unlock as you go deeper: ${POWER_KINDS.map((k) => POWERS[k].name.toLowerCase()).join(', ')}. Tap during a volley to fast-forward.`}
     />
   );
 }

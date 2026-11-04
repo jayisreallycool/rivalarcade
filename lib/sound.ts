@@ -41,8 +41,15 @@ class ArcadeAudioEngine {
     return () => this.listeners.delete(fn);
   }
 
+  /** Call from a tap: phones only allow audio to start inside a user gesture. */
+  public unlock() {
+    if (this.enabled) this.initCtx();
+  }
+
   public setEnabled(on: boolean) {
     this.enabled = on;
+    if (!on) this.haltMusic(0.15);
+    else if (this.music.want) this.runMusic();
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem('rival_audio_enabled', String(on));
@@ -321,6 +328,186 @@ class ArcadeAudioEngine {
 
       curTime += 0.14;
     });
+  }
+
+  // ------------------------------------------------------------------ background music
+  // An original synthwave loop, synthesized live (no audio files): pad + bass + drums + arpeggio.
+  // Layers fade in as `intensity` rises (0 calm → 1 full), so the track builds with the game.
+  private music = {
+    want: false,
+    timer: null as ReturnType<typeof setInterval> | null,
+    gain: null as GainNode | null,
+    step: 0,
+    next: 0,
+    intensity: 0.2,
+    bound: false,
+  };
+  private noise: AudioBuffer | null = null;
+
+  /** Start (or keep playing) the background loop. Call from a tap or right after one. */
+  public startMusic(intensity = 0.2) {
+    this.music.want = true;
+    this.music.intensity = intensity;
+    if (typeof document !== 'undefined' && !this.music.bound) {
+      this.music.bound = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') this.haltMusic(0.05);
+        else if (this.music.want) this.runMusic();
+      });
+    }
+    this.runMusic();
+  }
+
+  public stopMusic(fade = 0.8) {
+    this.music.want = false;
+    this.haltMusic(fade);
+  }
+
+  public setMusicIntensity(v: number) {
+    this.music.intensity = Math.max(0, Math.min(1, v));
+  }
+
+  public get musicPlaying() {
+    return Boolean(this.music.timer);
+  }
+
+  private runMusic() {
+    if (!this.enabled || this.music.timer) return;
+    this.initCtx();
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.5, ctx.currentTime + 1.2);
+    gain.connect(ctx.destination);
+    this.music.gain = gain;
+    this.music.step = 0;
+    this.music.next = ctx.currentTime + 0.1;
+    // Look-ahead scheduler: a cheap timer queues notes ~150 ms ahead on the audio clock.
+    this.music.timer = setInterval(() => this.scheduleMusic(), 30);
+  }
+
+  private haltMusic(fade: number) {
+    const m = this.music;
+    if (m.timer) clearInterval(m.timer);
+    m.timer = null;
+    const g = m.gain;
+    m.gain = null;
+    if (g && this.ctx) {
+      const t = this.ctx.currentTime;
+      try {
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + fade);
+      } catch {
+        /* ignore */
+      }
+      setTimeout(() => g.disconnect(), (fade + 0.3) * 1000);
+    }
+  }
+
+  private static readonly TEMPO = 112;
+  // Am – F – C – G, one bar each (MIDI notes).
+  private static readonly CHORDS = [
+    [57, 60, 64],
+    [53, 57, 60],
+    [48, 52, 55],
+    [55, 59, 62],
+  ];
+  private static readonly ARP = [0, 1, 2, 1, 0, 1, 2, 3, 0, 1, 2, 1, 3, 2, 1, 2];
+
+  private scheduleMusic() {
+    const ctx = this.ctx;
+    const out = this.music.gain;
+    if (!ctx || !out) return;
+    const stepDur = 60 / ArcadeAudioEngine.TEMPO / 4;
+    // After a long stall (tab throttled) skip ahead rather than playing a burst of notes.
+    if (this.music.next < ctx.currentTime - 0.2) this.music.next = ctx.currentTime + 0.05;
+    while (this.music.next < ctx.currentTime + 0.15) {
+      this.playMusicStep(this.music.step, this.music.next, stepDur, out);
+      this.music.next += stepDur;
+      this.music.step = (this.music.step + 1) % 64;
+    }
+  }
+
+  private playMusicStep(step: number, t: number, sd: number, out: GainNode) {
+    const lvl = this.music.intensity;
+    const s16 = step % 16;
+    const chord = ArcadeAudioEngine.CHORDS[Math.floor(step / 16)];
+    const hz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
+
+    // Pad: soft sustained chord each bar.
+    if (s16 === 0) chord.forEach((n) => this.tone(out, 'triangle', hz(n), t, sd * 16, 0.045, 900, 0.35));
+    // Bass: eighth notes, octave bounce.
+    if (s16 % 2 === 0) this.tone(out, 'sawtooth', hz(chord[0] - 24 + (s16 % 8 === 6 ? 12 : 0)), t, sd * 1.6, 0.16, 520 + lvl * 500, 0.005);
+    // Hats on the off-beats; 16ths once it heats up.
+    if (s16 % 4 === 2 || (lvl > 0.75 && s16 % 2 === 1)) this.drum(out, 'hat', t, s16 % 4 === 2 ? 0.09 : 0.04);
+    // Kick: four on the floor from intensity 0.35.
+    if (lvl > 0.35 && s16 % 4 === 0) this.drum(out, 'kick', t, 0.75);
+    else if (s16 === 0) this.drum(out, 'kick', t, 0.55);
+    // Snare on 2 and 4 from intensity 0.6.
+    if (lvl > 0.6 && (s16 === 4 || s16 === 12)) this.drum(out, 'snare', t, 0.28);
+    // Arpeggio from intensity 0.5, an octave higher doubling near the top.
+    if (lvl > 0.5) {
+      const idx = ArcadeAudioEngine.ARP[s16];
+      const n = idx < 3 ? chord[idx] + 12 : chord[0] + 24;
+      this.tone(out, 'square', hz(n), t, sd * 0.9, 0.035, 2200, 0.004);
+      if (lvl > 0.85 && s16 % 2 === 0) this.tone(out, 'square', hz(n + 12), t, sd * 0.7, 0.018, 3200, 0.004);
+    }
+  }
+
+  private tone(out: AudioNode, type: OscillatorType, freq: number, t: number, dur: number, vol: number, cutoff: number, attack: number) {
+    const ctx = this.ctx!;
+    const osc = ctx.createOscillator();
+    const f = ctx.createBiquadFilter();
+    const g = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(cutoff, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(f);
+    f.connect(g);
+    g.connect(out);
+    osc.start(t);
+    osc.stop(t + dur + 0.05);
+  }
+
+  private drum(out: AudioNode, kind: 'kick' | 'hat' | 'snare', t: number, vol: number) {
+    const ctx = this.ctx!;
+    const g = ctx.createGain();
+    g.connect(out);
+    if (kind === 'kick') {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(150, t);
+      osc.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      osc.connect(g);
+      osc.start(t);
+      osc.stop(t + 0.25);
+      return;
+    }
+    if (!this.noise) {
+      const len = ctx.sampleRate;
+      this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = kind === 'hat' ? 'highpass' : 'bandpass';
+    f.frequency.value = kind === 'hat' ? 7000 : 1800;
+    const dur = kind === 'hat' ? 0.045 : 0.16;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f);
+    f.connect(g);
+    src.start(t, Math.random() * 0.8, dur + 0.02);
   }
 }
 

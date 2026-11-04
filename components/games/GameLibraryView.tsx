@@ -32,7 +32,7 @@ const CHIPS: { id: 'all' | 'live' | Category; label: string }[] = [
 
 export const TILES: Record<GameId, GameTile> = {
   'dunk-rush': { id: 'dunk-rush', title: 'Dunk Rush', genre: 'Flick Basketball', blurb: 'Flick to shoot. Swishes, banks and streak multipliers.', from: '#f97316', to: '#7c2d12', tags: ['sports', 'popular'] },
-  'brick-blitz': { id: 'brick-blitz', title: 'Brick Blitz', genre: 'Aim & Launch', blurb: 'Drag, aim, release a volley. Break the wall before it lands.', from: '#38bdf8', to: '#4338ca', tags: ['puzzle', 'new', 'popular'] },
+  'brick-blitz': { id: 'brick-blitz', title: 'Brick Blitz', genre: 'Aim & Launch', blurb: 'Endless volleys and power-ups. Hold back the wall as long as you can.', from: '#38bdf8', to: '#4338ca', tags: ['puzzle', 'new', 'popular'] },
   'neon-dash': { id: 'neon-dash', title: 'Neon Dash', genre: 'Swipe Runner', blurb: 'Swipe lanes, jump and slide down a neon highway.', from: '#ec4899', to: '#1e0b4b', tags: ['action', 'popular'] },
   'gem-surge': { id: 'gem-surge', title: 'Gem Surge', genre: 'Match-3', blurb: 'Swipe to swap. Cascades multiply every clear.', from: '#c084fc', to: '#2e1065', tags: ['puzzle'] },
   'cyber-reflex': { id: 'cyber-reflex', title: 'Cyber Reflex', genre: 'Tap & Slash', blurb: 'Hit targets dead-centre, chain perfects, dodge hazards.', from: '#14b8a6', to: '#042f2e', tags: ['action', 'new'] },

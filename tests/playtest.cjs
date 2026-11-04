@@ -86,7 +86,8 @@ const bots = {
   async 'brick-blitz'(p, b) {
     const t0 = Date.now();
     let shots = 0;
-    while (!(await done(p)) && Date.now() - t0 < 100000) {
+    // Endless survival: keep playing until the wall comes down (bounded so CI can't hang).
+    while (!(await done(p)) && Date.now() - t0 < 600000) {
       await swipe(p, b.x + b.width / 2, b.y + b.height * 0.8, b.x + rnd(40, b.width - 40), b.y + b.height * rnd(0.25, 0.55), 3);
       await p.waitForTimeout(500);
       await p.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
@@ -131,7 +132,7 @@ const bots = {
     const box = await open(p, g);
     const r = await bots[g](p, box);
     console.log('  ', g, 'bot:', JSON.stringify(r));
-    await p.waitForSelector('[data-testid=results-modal]', { timeout: 180000 });
+    await p.waitForSelector('[data-testid=results-modal]', { timeout: 600000 });
     const final = Number((await p.textContent('[data-testid=results-modal] .text-cyan-300.tabular-nums').catch(() => '0')).replace(/\D/g, '')) || null;
     await p.screenshot({ path: `${OUT}/${g}-results.png` });
     console.log(g, JSON.stringify({ ...r, final, header: (await p.textContent('[data-testid=results-header]')).trim() }));

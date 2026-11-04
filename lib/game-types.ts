@@ -142,5 +142,6 @@ export const SCORE_BASELINE: Record<GameId, number> = {
   'dunk-rush': 2600,
   'cyber-reflex': 6000,
   'gem-surge': 5000,
-  'brick-blitz': 10000,
+  // Endless survival: a steady player clears ~40–50 rows.
+  'brick-blitz': 90000,
 };

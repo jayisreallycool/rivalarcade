@@ -152,7 +152,8 @@ export function createFirstPersonRig(engine: GameEngine, avatar: AvatarConfig, o
       right.pivot.rotation.set(0, 0, 0);
     },
     setGlow(v) {
-      cuffMat.emissiveIntensity = 0.25 + v;
+      // Capped: the cuffs fill a big part of the screen, and a bright cuff blooms over the whole view.
+      cuffMat.emissiveIntensity = 0.25 + Math.min(0.55, Math.max(0, v) * 0.4);
     },
   };
 }

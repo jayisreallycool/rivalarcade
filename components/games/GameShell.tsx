@@ -171,6 +171,7 @@ export default function GameShell(props: GameShellProps) {
   const begin = useCallback(() => {
     // Re-enter full screen if the player left it (Android back gesture, notification shade…).
     enterGameFullscreen();
+    sound.unlock();
     const steps: (number | 'GO')[] = [3, 2, 1, 'GO'];
     steps.forEach((v, i) => {
       timers.current.push(

@@ -48,7 +48,8 @@ const stats = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('rival_arc
     if (mode === 'blitz') assert(await p.$('[data-testid=blitz-coins]'), 'blitz coin counter');
     if (mode === 'streak') assert(await p.$('[data-testid=streak-round]'), 'streak round dots');
     await p.screenshot({ path: `${OUT}/${mode}-play.png` });
-    await playBricks(p, 120);
+    // Brick Blitz is endless: play until the wall comes down.
+    await playBricks(p, 600);
     await p.waitForSelector('[data-testid=results-modal]', { timeout: 30000 });
     await p.waitForTimeout(600);
     await p.screenshot({ path: `${OUT}/${mode}-results.png` });

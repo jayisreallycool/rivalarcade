@@ -166,6 +166,115 @@ function paint(g: CanvasRenderingContext2D, item: CosmeticItem) {
       void grd;
       break;
     }
+    case 'carbon': {
+      // Woven carbon twill: alternating light/dark diagonal cells.
+      const n = 16;
+      const cell = S / n;
+      for (let y = 0; y < n; y++)
+        for (let x = 0; x < n; x++) {
+          const on = (x + Math.floor(y / 2)) % 2 === 0;
+          const grd = g.createLinearGradient(x * cell, y * cell, (x + 1) * cell, (y + 1) * cell);
+          grd.addColorStop(0, on ? '#3f3f46' : '#09090b');
+          grd.addColorStop(1, on ? '#18181b' : '#27272a');
+          g.fillStyle = grd;
+          g.fillRect(x * cell, y * cell, cell, cell);
+        }
+      break;
+    }
+    case 'hex': {
+      // Nanomesh: thin glowing hex cells.
+      g.strokeStyle = accent;
+      g.lineWidth = 1.5;
+      g.globalAlpha = 0.75;
+      const R = S / 8 / Math.sqrt(3);
+      const w = R * Math.sqrt(3);
+      for (let row = -1; row < S / (R * 1.5) + 1; row++)
+        for (let col = -1; col < S / w + 1; col++) {
+          const cx = col * w + (row % 2 ? w / 2 : 0);
+          const cy = row * R * 1.5;
+          g.beginPath();
+          for (let k = 0; k < 6; k++) {
+            const a = (k / 6) * Math.PI * 2 + Math.PI / 6;
+            const px = cx + Math.cos(a) * R;
+            const py = cy + Math.sin(a) * R;
+            k ? g.lineTo(px, py) : g.moveTo(px, py);
+          }
+          g.closePath();
+          g.stroke();
+        }
+      g.globalAlpha = 1;
+      break;
+    }
+    case 'colorblock': {
+      // 1989 windbreaker: bold diagonal colour blocks.
+      g.fillStyle = pal[1] ?? accent;
+      g.beginPath();
+      g.moveTo(0, S * 0.18);
+      g.lineTo(S, S * 0.52);
+      g.lineTo(S, S * 0.78);
+      g.lineTo(0, S * 0.44);
+      g.closePath();
+      g.fill();
+      g.fillStyle = pal[2] ?? '#f472b6';
+      g.beginPath();
+      g.moveTo(0, S * 0.44);
+      g.lineTo(S, S * 0.78);
+      g.lineTo(S, S * 0.9);
+      g.lineTo(0, S * 0.56);
+      g.closePath();
+      g.fill();
+      break;
+    }
+    case 'knit': {
+      // Ribbed cable knit: vertical ribs with braided cables.
+      const dark = pal[1] ?? '#00000033';
+      for (let x = 0; x < S; x += 16) {
+        g.fillStyle = dark;
+        g.globalAlpha = 0.35;
+        g.fillRect(x, 0, 4, S);
+        g.globalAlpha = 0.25;
+        g.fillStyle = '#ffffff';
+        for (let y = 0; y < S; y += 12) {
+          g.beginPath();
+          g.ellipse(x + 10, y + 6, 3, 5, 0.5, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      g.globalAlpha = 1;
+      break;
+    }
+    case 'cracks': {
+      // Obsidian crust split by molten cracks (bright core, orange glow).
+      const lines: [number, number][][] = [];
+      for (let i = 0; i < 7; i++) {
+        let x = rng() * S;
+        let y = rng() * S;
+        const pts: [number, number][] = [[x, y]];
+        const dir = rng() * Math.PI * 2;
+        for (let k = 0; k < 6; k++) {
+          x += Math.cos(dir + (rng() - 0.5) * 1.6) * 14;
+          y += Math.sin(dir + (rng() - 0.5) * 1.6) * 14;
+          pts.push([x, y]);
+        }
+        lines.push(pts);
+      }
+      const stroke = (w: number, col: string) => {
+        g.strokeStyle = col;
+        g.lineWidth = w;
+        g.lineJoin = 'round';
+        for (const pts of lines)
+          for (const dx of [-S, 0, S])
+            for (const dy of [-S, 0, S]) {
+              g.beginPath();
+              pts.forEach(([px, py], k) => (k ? g.lineTo(px + dx, py + dy) : g.moveTo(px + dx, py + dy)));
+              g.stroke();
+            }
+      };
+      stroke(7, accent + '55');
+      stroke(3.5, accent);
+      stroke(1.2, pal[2] ?? '#fde68a');
+      break;
+    }
     case 'denim': {
       g.strokeStyle = pal[1] ?? '#1e40af';
       g.lineWidth = 1;

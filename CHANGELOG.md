@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-04 — Items look like their names, everywhere
+
+- One feature table per item (`lib/item-looks.ts`) read by both the 3D model (which renders the shop images) and the 2D avatar (wardrobe, store try-on, profile, games), so the item you see in the shop is the item you see equipped.
+- Tops: hoodies have hoods, drawstrings and a kangaroo pocket (Sub-Zero is sleeveless); tees and jerseys have short sleeves; Rival-01 and Inferno #99 carry their numbers; bombers and windbreakers get collars, zips and ribbed cuffs; Exo-Weave Vest has a glowing reactor and hex nanomesh; Vector Carbon Top is real carbon weave with conduits; Aurora is an actual long coat; Diamond Royale has a varsity collar and diamond crest.
+- Bottoms: Court Rush are shorts, Prism Flex are slim leggings, cargos have pockets, joggers and raw denim have cuffs (denim with orange stitching), tech pants have armoured knee plates, Afterburner glows at the ankles.
+- Shoes: high-tops have ankle collars, Grav-Boots are tall boots with glowing rings, cleats have studs, Retro Canvas has a cream toe cap, Laser-Trac has a glowing sole and swoosh, Magma Step glows through molten cracks, Void Walkers float on a hover pad.
+- Hair & headwear: dreadlocks are beaded locs with gold bands, the ponytail and waves are visible, Twin Nova buns have orbit rings, the undercut has neon circuitry; snapbacks show their backwards brim, button and strap (Lava Flow has a flame print); beanies are cable knit; Obsidian Crown is jagged glass shards; aviators have teardrop lenses; Ruby Laser Shades and Prism Wrap Visor have their own frames.
+- Back gear & trails: Plasma Light Wings are angular hard-light panels (Ember Phoenix keeps feathers); the katana has a scabbard; Jade Spirit Blade is a straight jian with tassel; the hoverboard hovers on glowing pads. Each trail has its own effect: lightning, flames, glitter, bubbles, falling code, rainbow ribbon, void rift.
+- Equipping a hairstyle also takes its shop colour (change it after if you like); two new hair colours, Riot Magenta and Nova Sky.
+- All 74 product images regenerated. A unit test fails if two items look identical or if a name promises a feature (hoodie, shorts, cleats, #99…) the item doesn't have. `/item-lab?view=compare` shows every image beside the avatar wearing it.
+
 ## 2026-11-04 — Wardrobe and avatar always in sync
 
 - One slot map (`lib/avatar-slots.ts`) used by the wardrobe, store try-on, saving and loading, so an item always lands on the same slot and "equipped" means the same thing everywhere.

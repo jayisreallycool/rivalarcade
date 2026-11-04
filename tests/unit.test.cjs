@@ -135,4 +135,52 @@ ok('item catalog: unique ids + names, priced inside their rarity band, image per
   assert.deepStrictEqual(order.slice().sort((a, b) => a - b), order);
 });
 
+ok('item looks: every item has its own design, and named features are really there', () => {
+  const C = require('../.test-build/cosmetics-catalog');
+  const L = require('../.test-build/item-looks');
+  const items = C.SHOP_ITEMS();
+  // No two items in a slot share a design (shape + features + print + finish + colours).
+  const sigs = new Map();
+  for (const i of items) {
+    const sig = L.signature(i);
+    assert(!sigs.has(sig), `${i.id} looks identical to ${sigs.get(sig)}`);
+    sigs.set(sig, i.id);
+  }
+  // Every top, bottom, shoe and trail has an explicit look (no silent default).
+  for (const i of items) {
+    const shape = C.itemShape(i);
+    if (i.category === 'shirt') assert(L.TOP_LOOKS[shape], `no top look for ${i.id}`);
+    if (i.category === 'pants') assert(L.BOTTOM_LOOKS[shape], `no bottom look for ${i.id}`);
+    if (i.category === 'shoes') assert(L.SHOE_LOOKS[shape], `no shoe look for ${i.id}`);
+    if (i.category === 'trail') assert(L.TRAIL_STYLE[shape], `no trail style for ${i.id}`);
+  }
+  // Trails each move differently.
+  const trails = items.filter((i) => i.category === 'trail');
+  assert.strictEqual(new Set(trails.map((t) => L.trailStyle(t))).size, trails.length, 'two trails share a style');
+  // Names promise features: check the ones a player would notice.
+  const find = (id) => items.find((i) => i.id === id);
+  const promise = [
+    [/hoodie/i, (i) => L.topLook(i).hood],
+    [/jersey|tee\b/i, (i) => L.topLook(i).sleeves === 'short'],
+    [/vest/i, (i) => L.topLook(i).sleeves === 'none'],
+    [/coat/i, (i) => L.topLook(i).coat],
+    [/bomber|windbreaker|jacket/i, (i) => L.topLook(i).sleeves === 'long' && L.topLook(i).collar],
+    [/#\s?(\d+)/, (i) => L.topLook(i).emblem?.text === i.name.match(/#\s?(\d+)/)[1]],
+    [/shorts/i, (i) => L.bottomLook(i).length === 'shorts'],
+    [/leggings/i, (i) => L.bottomLook(i).length === 'leggings'],
+    [/cargo/i, (i) => L.bottomLook(i).cargo],
+    [/high-tops/i, (i) => L.shoeLook(i).height === 'high'],
+    [/boots/i, (i) => L.shoeLook(i).height === 'boot'],
+    [/cleats/i, (i) => L.shoeLook(i).studs],
+    [/lows/i, (i) => L.shoeLook(i).height === 'low'],
+  ];
+  for (const i of items.filter((x) => ['shirt', 'pants', 'shoes'].includes(x.category)))
+    for (const [re, has] of promise) if (re.test(i.name)) assert(has(i), `"${i.name}" is missing what its name promises (${re})`);
+  // Recolours that share a base shape still differ in print or colour.
+  assert(find('headwear_lava_snapback').pattern === 'flames');
+  assert(C.itemShape(find('eyewear_ruby_shades')) !== C.itemShape(find('eyewear_pixel_shades')));
+  // A hairstyle's shop colour is one the player can pick, so equipping it matches the image.
+  for (const h of items.filter((x) => x.category === 'hair')) assert(C.HAIR_COLORS.some((c) => c.color === h.color), `${h.id} colour not in HAIR_COLORS`);
+});
+
 console.log(`\n${n} unit checks passed`);

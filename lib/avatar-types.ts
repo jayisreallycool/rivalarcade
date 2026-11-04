@@ -58,7 +58,7 @@ export interface CosmeticItem {
   palette?: string[];
 }
 
-export type ItemPattern = 'solid' | 'stripes' | 'camo' | 'circuit' | 'flames' | 'checker' | 'stars' | 'gradient' | 'denim';
+export type ItemPattern = 'solid' | 'stripes' | 'camo' | 'circuit' | 'flames' | 'checker' | 'stars' | 'gradient' | 'denim' | 'carbon' | 'hex' | 'colorblock' | 'knit' | 'cracks';
 export type ItemFinish = 'matte' | 'gloss' | 'metal' | 'chrome' | 'neon' | 'holo';
 
 export interface AvatarConfig {

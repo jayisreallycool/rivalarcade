@@ -1,3 +1,4 @@
+import { findItem, hairColorFor } from './cosmetics-catalog';
 import type { AvatarConfig, CosmeticCategory, CosmeticItem, PoseType } from './avatar-types';
 
 /**
@@ -36,9 +37,13 @@ export function equippedIn(avatar: AvatarConfig, category: CosmeticCategory): st
   return String(avatar[SLOT_FIELD[category]] ?? 'none');
 }
 
-/** A copy of `avatar` wearing `item` in its slot. */
+/**
+ * A copy of `avatar` wearing `item` in its slot. Switching hairstyle also takes on the colour the
+ * style is shown in, so what you saw in the shop is what you get (the colour can be changed after).
+ */
 export function withItem(avatar: AvatarConfig, item: Pick<CosmeticItem, 'id' | 'category'>): AvatarConfig {
   if (item.category === 'pose') return { ...avatar, pose: POSE_OF_ITEM[item.id] ?? 'ready' };
+  if (item.category === 'hair' && avatar.hairStyleId !== item.id) return { ...avatar, hairStyleId: item.id, hairColorId: hairColorFor(findItem(item.id)) };
   return { ...avatar, [SLOT_FIELD[item.category]]: item.id };
 }
 

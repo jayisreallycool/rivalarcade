@@ -4,6 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { AvatarConfig } from '../avatar-types';
 import { COSMETICS_CATALOG, SKIN_TONES, itemFinish } from '../cosmetics-catalog';
 import { patternCanvas } from '../item-patterns';
+import { topLook } from '../item-looks';
 import type { GameEngine } from './GameEngine';
 
 /**
@@ -104,7 +105,8 @@ export function createFirstPersonRig(engine: GameEngine, avatar: AvatarConfig, o
     const fore = new THREE.Group();
     fore.rotation.set(-Math.PI / 2 + 0.25, 0, side * 0.22);
     pivot.add(fore);
-    const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
+    // Short-sleeved and sleeveless tops leave your forearms bare (the cuff becomes a wristband).
+    const sleeve = new THREE.Mesh(sleeveGeo, topLook(shirt).sleeves === 'long' ? sleeveMat : skinMat);
     sleeve.position.y = 0.16;
     const cuff = new THREE.Mesh(cuffGeo, cuffMat);
     cuff.position.y = 0.36;

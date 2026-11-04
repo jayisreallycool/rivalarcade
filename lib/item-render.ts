@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { AvatarConfig, CosmeticItem } from './avatar-types';
-import { HAIR_COLORS, RARITY, getStarterAvatar } from './cosmetics-catalog';
+import { RARITY, getStarterAvatar, hairColorFor } from './cosmetics-catalog';
+import { trailStyle } from './item-looks';
 import { create3DAvatar } from './avatar-3d-model';
 import { mulberry32, hashSeed } from './rng';
 
@@ -20,29 +21,13 @@ const hex = (c: string, a = 1) => {
   return `rgba(${Math.round(v.r * 255)},${Math.round(v.g * 255)},${Math.round(v.b * 255)},${a})`;
 };
 
-function nearestHair(color?: string) {
-  if (!color) return HAIR_COLORS[0].id;
-  const t = new THREE.Color(color);
-  let best = HAIR_COLORS[0];
-  let d = Infinity;
-  for (const h of HAIR_COLORS) {
-    const c = new THREE.Color(h.color);
-    const dd = (c.r - t.r) ** 2 + (c.g - t.g) ** 2 + (c.b - t.b) ** 2;
-    if (dd < d) {
-      d = dd;
-      best = h;
-    }
-  }
-  return best.id;
-}
-
 /** The mannequin wearing the item (neutral look so the item is the star). */
 function modelFor(item: CosmeticItem): AvatarConfig {
   const a: AvatarConfig = { ...getStarterAvatar('neutral'), skinToneId: 'golden', hairStyleId: 'hair_short_fade', hairColorId: 'jet_black', eyeColor: '#38bdf8', headwearId: 'none', eyewearId: 'none', backId: 'none', trailId: 'none' };
   switch (item.category) {
     case 'hair':
       a.hairStyleId = item.id;
-      a.hairColorId = nearestHair(item.color);
+      a.hairColorId = hairColorFor(item);
       break;
     case 'shirt':
       a.shirtId = item.id;
@@ -390,52 +375,187 @@ function paintBanner(g: CanvasRenderingContext2D, item: CosmeticItem, S: number,
   g.restore();
 }
 
-// ------------------------------------------------------------------ trails (3D ribbon)
+// ------------------------------------------------------------------ trails (one look per trail)
+
+const basic = (color: THREE.ColorRepresentation, extra: THREE.MeshBasicMaterialParameters = {}) =>
+  new THREE.MeshBasicMaterial({ color: new THREE.Color(color), toneMapped: false, ...extra });
+
+/** The swooping path every trail follows (the player's motion). */
+function trailPath(rng: Rng) {
+  const pts: THREE.Vector3[] = [];
+  const turns = 1.1 + rng() * 0.4;
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60;
+    const a = t * Math.PI * 2 * turns;
+    pts.push(new THREE.Vector3(Math.cos(a) * (0.95 - t * 0.5), -0.9 + t * 1.65, Math.sin(a) * (0.95 - t * 0.5)));
+  }
+  return new THREE.CatmullRomCurve3(pts);
+}
+
+function glyphTexture(color: string) {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64 * 8;
+  const g = c.getContext('2d')!;
+  g.font = '900 58px monospace';
+  g.shadowColor = color;
+  g.shadowBlur = 10;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const chars = 'ｱｶｻﾀﾅ01ﾊﾏﾔﾗ10ﾜ';
+  for (let k = 0; k < 8; k++) {
+    g.globalAlpha = 0.25 + (k / 7) * 0.75;
+    g.fillStyle = k === 7 ? '#ecfccb' : color;
+    g.fillText(chars[(k * 5) % chars.length], 32, 32 + k * 64);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 
 function trailScene(item: CosmeticItem, rng: Rng) {
   const group = new THREE.Group();
   const pal = item.palette?.length ? item.palette : [item.color ?? '#00f0ff'];
-  const pts: THREE.Vector3[] = [];
-  const turns = 1.3 + rng() * 0.6;
-  for (let i = 0; i <= 60; i++) {
-    const t = i / 60;
-    const a = t * Math.PI * 2 * turns;
-    pts.push(new THREE.Vector3(Math.cos(a) * (0.9 - t * 0.55), -0.85 + t * 1.6, Math.sin(a) * (0.9 - t * 0.55)));
+  const main = item.color ?? pal[0];
+  const curve = trailPath(rng);
+  const style = trailStyle(item);
+  const add = (o: THREE.Object3D) => (group.add(o), o);
+
+  if (style === 'bolt') {
+    // Cyan Ion: forked lightning bolts crackling along the path.
+    for (let b = 0; b < 3; b++) {
+      const pts: THREE.Vector3[] = [];
+      for (let k = 0; k <= 16; k++) {
+        const p = curve.getPoint(Math.min(1, b * 0.06 + k / 16 * 0.9));
+        p.add(new THREE.Vector3((rng() - 0.5) * 0.28, (rng() - 0.5) * 0.28, (rng() - 0.5) * 0.28));
+        pts.push(p);
+      }
+      const line = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0);
+      add(new THREE.Mesh(new THREE.TubeGeometry(line, 120, b ? 0.018 : 0.035, 6), basic(b ? main : '#e0ffff')));
+      add(new THREE.Mesh(new THREE.TubeGeometry(line, 120, 0.09, 6), basic(main, { transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending })));
+    }
+    for (let k = 0; k < 6; k++) {
+      // side forks
+      const p0 = curve.getPoint(rng());
+      const pts = [p0];
+      for (let q = 0; q < 3; q++) pts.push(pts[pts.length - 1].clone().add(new THREE.Vector3((rng() - 0.5) * 0.4, (rng() - 0.5) * 0.4, (rng() - 0.5) * 0.4)));
+      add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0), 20, 0.012, 4), basic(main)));
+    }
+  } else if (style === 'flame') {
+    // Phoenix Crimson: licks of fire growing along the path, embers rising off them.
+    const fl = new THREE.ConeGeometry(0.1, 0.42, 12);
+    const cols = ['#7f1d1d', main, '#f97316', '#facc15'];
+    for (let k = 0; k < 26; k++) {
+      const t = k / 25;
+      const p = curve.getPoint(t);
+      const size = 0.45 + t * 1.1;
+      cols.forEach((c, layer) => {
+        const m = new THREE.Mesh(fl, basic(c, { transparent: true, opacity: 0.85 - layer * 0.12, blending: THREE.AdditiveBlending }));
+        m.scale.set(size * (1 - layer * 0.2), size * (1 - layer * 0.15) * (0.8 + rng() * 0.5), size * (1 - layer * 0.2));
+        m.position.copy(p).add(new THREE.Vector3(0, 0.12 * size, 0));
+        m.rotation.z = (rng() - 0.5) * 0.5;
+        add(m);
+      });
+    }
+    for (let k = 0; k < 40; k++) {
+      const e = new THREE.Mesh(new THREE.SphereGeometry(0.018 + rng() * 0.02, 6, 4), basic(rng() < 0.5 ? '#facc15' : '#fb923c'));
+      e.position.copy(curve.getPoint(rng())).add(new THREE.Vector3((rng() - 0.5) * 0.4, 0.2 + rng() * 0.5, (rng() - 0.5) * 0.4));
+      add(e);
+    }
+  } else if (style === 'glitter') {
+    // Stardust Aureum: a vortex of four-point golden glints.
+    const star = new THREE.Shape();
+    star.moveTo(0, 1);
+    star.quadraticCurveTo(0.1, 0.1, 1, 0);
+    star.quadraticCurveTo(0.1, -0.1, 0, -1);
+    star.quadraticCurveTo(-0.1, -0.1, -1, 0);
+    star.quadraticCurveTo(-0.1, 0.1, 0, 1);
+    const starGeo = new THREE.ShapeGeometry(star, 4);
+    for (let k = 0; k < 120; k++) {
+      const t = rng();
+      const p = curve.getPoint(t);
+      const spin = rng() * Math.PI * 2;
+      const r = 0.05 + rng() * 0.25;
+      p.add(new THREE.Vector3(Math.cos(spin) * r, (rng() - 0.5) * 0.15, Math.sin(spin) * r));
+      const m = new THREE.Mesh(starGeo, basic(['#fde68a', main, '#fff7ed'][k % 3], { transparent: true, opacity: 0.95, side: THREE.DoubleSide }));
+      m.scale.setScalar(0.025 + rng() * 0.07 * (0.5 + t));
+      m.position.copy(p);
+      m.lookAt(0, 0, 10);
+      add(m);
+    }
+    add(new THREE.Mesh(new THREE.TubeGeometry(curve, 160, 0.03, 6), basic(main, { transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending })));
+  } else if (style === 'bubble') {
+    // Bubblepop: glossy translucent bubbles, a few mid-pop.
+    const sph = new THREE.SphereGeometry(1, 28, 18);
+    for (let k = 0; k < 22; k++) {
+      const t = k / 21;
+      const p = curve.getPoint(t);
+      p.add(new THREE.Vector3((rng() - 0.5) * 0.2, (rng() - 0.5) * 0.2, (rng() - 0.5) * 0.2));
+      const r = 0.06 + t * 0.16 + rng() * 0.05;
+      if (k % 6 === 5) {
+        // popping: a burst ring of droplets
+        for (let q = 0; q < 8; q++) {
+          const a = (q / 8) * Math.PI * 2;
+          const d = new THREE.Mesh(new THREE.SphereGeometry(0.015, 6, 4), basic(pal[1] ?? '#fbcfe8'));
+          d.position.copy(p).add(new THREE.Vector3(Math.cos(a) * r * 1.3, Math.sin(a) * r * 1.3, 0));
+          add(d);
+        }
+        continue;
+      }
+      const b = new THREE.Mesh(sph, new THREE.MeshPhysicalMaterial({ color: new THREE.Color(main), roughness: 0.05, metalness: 0, transmission: 0.6, transparent: true, opacity: 0.55, iridescence: 1, iridescenceIOR: 1.4, clearcoat: 1, emissive: new THREE.Color(main), emissiveIntensity: 0.15 }));
+      b.scale.setScalar(r);
+      b.position.copy(p);
+      add(b);
+      const hl = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), basic('#ffffff'));
+      hl.scale.setScalar(r * 0.2);
+      hl.position.copy(p).add(new THREE.Vector3(-r * 0.4, r * 0.45, r * 0.7));
+      add(hl);
+    }
+  } else if (style === 'glyph') {
+    // Matrix Rain: columns of falling green glyphs streaming off the path.
+    const tex = glyphTexture(main);
+    const mat2 = basic('#bbf7d0', { map: tex, transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false });
+    const mat = basic('#ffffff', { map: tex, transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false });
+    const plane = new THREE.PlaneGeometry(0.2, 1.6);
+    add(new THREE.Mesh(new THREE.TubeGeometry(curve, 160, 0.05, 6), basic(main, { transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending })));
+    for (let k = 0; k < 30; k++) {
+      const p = curve.getPoint(k / 29);
+      const m = new THREE.Mesh(plane, k % 2 ? mat : mat2);
+      const sc = 0.6 + rng() * 0.8;
+      m.scale.set(sc, sc, 1);
+      m.position.copy(p).add(new THREE.Vector3((rng() - 0.5) * 0.3, -0.3 * sc, (rng() - 0.5) * 0.3));
+      m.lookAt(0, m.position.y, 10);
+      add(m);
+    }
+  } else if (style === 'ribbon') {
+    // Rainbow Rush: one wide ribbon of six stacked colour bands.
+    pal.forEach((c, k) => {
+      const off = (k - (pal.length - 1) / 2) * 0.055;
+      const pts = curve.getPoints(80).map((p) => p.clone().add(new THREE.Vector3(0, off, 0)));
+      add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 160, 0.032, 6), basic(c)));
+    });
+    add(new THREE.Mesh(new THREE.TubeGeometry(curve, 160, 0.2, 8), basic('#ffffff', { transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending })));
+  } else {
+    // Void Rift: a jagged tear of darkness with crackling violet edges, shards floating out.
+    const pts: THREE.Vector3[] = [];
+    for (let k = 0; k <= 14; k++) {
+      const p = curve.getPoint(k / 14);
+      p.add(new THREE.Vector3((rng() - 0.5) * 0.18, (rng() - 0.5) * 0.18, 0));
+      pts.push(p);
+    }
+    const jag = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0);
+    add(new THREE.Mesh(new THREE.TubeGeometry(jag, 140, 0.11, 8), basic(pal[2] ?? '#0f0524')));
+    add(new THREE.Mesh(new THREE.TubeGeometry(jag, 140, 0.15, 8), basic(main, { transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending })));
+    add(new THREE.Mesh(new THREE.TubeGeometry(jag, 140, 0.24, 8), basic(pal[1] ?? '#c026d3', { transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending })));
+    const shard = new THREE.TetrahedronGeometry(0.06, 0);
+    for (let k = 0; k < 26; k++) {
+      const m = new THREE.Mesh(shard, basic(k % 2 ? main : '#e9d5ff'));
+      m.position.copy(curve.getPoint(rng())).add(new THREE.Vector3((rng() - 0.5) * 0.6, (rng() - 0.5) * 0.6, (rng() - 0.5) * 0.6));
+      m.rotation.set(rng() * 6, rng() * 6, rng() * 6);
+      m.scale.setScalar(0.5 + rng());
+      add(m);
+    }
   }
-  const curve = new THREE.CatmullRomCurve3(pts);
-  const tube = new THREE.TubeGeometry(curve, 160, 0.06, 10, false);
-  const cols = new Float32Array(tube.attributes.position.count * 3);
-  const c = new THREE.Color();
-  const rings = 11;
-  for (let i = 0; i < tube.attributes.position.count; i++) {
-    const seg = Math.floor(i / rings) / 160;
-    c.set(pal[Math.min(pal.length - 1, Math.floor(seg * pal.length))]);
-    c.multiplyScalar(0.4 + seg * 1.6);
-    c.toArray(cols, i * 3);
-  }
-  tube.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-  group.add(new THREE.Mesh(tube, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95, toneMapped: false })));
-  // comet head
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 24, 16), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffffff'), toneMapped: false }));
-  head.position.copy(pts[pts.length - 1]);
-  group.add(head);
-  const halo = new THREE.Mesh(new THREE.SphereGeometry(0.3, 24, 16), new THREE.MeshBasicMaterial({ color: new THREE.Color(pal[pal.length - 1]).multiplyScalar(1.5), transparent: true, opacity: 0.35, toneMapped: false }));
-  halo.position.copy(head.position);
-  group.add(halo);
-  // sparks along the path
-  const n = 140;
-  const sp = new Float32Array(n * 3);
-  const sc = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    const p = curve.getPoint(rng());
-    p.add(new THREE.Vector3((rng() - 0.5) * 0.35, (rng() - 0.5) * 0.35, (rng() - 0.5) * 0.35));
-    p.toArray(sp, i * 3);
-    c.set(pal[i % pal.length]).multiplyScalar(1.6).toArray(sc, i * 3);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(sp, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(sc, 3));
-  group.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 0.06, vertexColors: true, transparent: true, opacity: 0.9, toneMapped: false, blending: THREE.AdditiveBlending })));
   group.rotation.set(0.25, 0.4, -0.15);
   return group;
 }
@@ -502,7 +622,9 @@ export class ItemRenderer {
       dispose = () => t.traverse((o) => {
         const m = o as THREE.Mesh;
         m.geometry?.dispose();
-        (m.material as THREE.Material | undefined)?.dispose?.();
+        const mat = m.material as THREE.MeshBasicMaterial | undefined;
+        mat?.map?.dispose();
+        mat?.dispose?.();
       });
     } else {
       const av = create3DAvatar(modelFor(item));
@@ -519,6 +641,9 @@ export class ItemRenderer {
         av.rightArm.rotation.x = -1.2;
       }
       if (f.turn) av.group.rotation.y = f.turn;
+      // Some signatures live on the side or back: the ponytail, the backwards brim, the locs.
+      const SIDE_VIEW: Record<string, number> = { hair_high_pony: 1.35, hair_dreadlocks: 0.9, hair_waves: 0.5, headwear_snapback: 1.3, hair_cyber_undercut: -0.8 };
+      av.group.rotation.y += SIDE_VIEW[item.model ?? item.id] ?? 0;
       // Turn the mannequin slightly differently per item so a row of shots doesn't look cloned.
       av.group.rotation.y += (rng() - 0.5) * 0.35;
       scene.add(av.group);

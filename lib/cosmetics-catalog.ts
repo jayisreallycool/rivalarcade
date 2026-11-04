@@ -18,6 +18,8 @@ export const HAIR_COLORS: HairColor[] = [
   { id: 'solar_gold', name: 'Solar Gold', color: '#ffb800', highlight: '#ffea80' },
   { id: 'matrix_green', name: 'Matrix Emerald', color: '#10b981', highlight: '#6ee7b7' },
   { id: 'royal_purple', name: 'Hyper Violet', color: '#9333ea', highlight: '#c084fc' },
+  { id: 'riot_magenta', name: 'Riot Magenta', color: '#ff2bd6', highlight: '#ff8ae8' },
+  { id: 'nova_sky', name: 'Nova Sky', color: '#38bdf8', highlight: '#bae6fd' },
 ];
 
 export const COSMETICS_CATALOG: CosmeticItem[] = [
@@ -147,6 +149,8 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     description: 'Woven carbon fiber mesh with illuminated conduits.',
     color: '#18181b',
     accentColor: '#10b981',
+    pattern: 'carbon',
+    palette: ['#18181b', '#10b981'],
   },
   {
     id: 'shirt_retro_tracksuit',
@@ -158,6 +162,8 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     description: 'Color-blocked retro vaporwave zip jacket.',
     color: '#701a75',
     accentColor: '#38bdf8',
+    pattern: 'colorblock',
+    palette: ['#701a75', '#38bdf8', '#f472b6'],
   },
   {
     id: 'shirt_champion_jacket',
@@ -168,6 +174,7 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     isUnlockedDefault: false,
     unlockRequirement: 'Reach Gold Tier or 1,500 Coins',
     description: 'Embossed golden crest bomber reserved for titleholders.',
+    finish: 'gloss', // satin bomber
     color: '#ca8a04',
     accentColor: '#ffffff',
   },
@@ -182,6 +189,9 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     description: 'Living holographic nanomesh with pulsating core light.',
     color: '#4c1d95',
     accentColor: '#00f0ff',
+    pattern: 'hex',
+    finish: 'neon',
+    palette: ['#4c1d95', '#00f0ff'],
   },
 
   {
@@ -460,6 +470,8 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     description: 'Obsidian knit with molten-orange cracks glowing through.',
     color: '#1c1917',
     accentColor: '#f97316',
+    pattern: 'cracks',
+    palette: ['#1c1917', '#f97316', '#facc15'],
     finish: 'neon',
   },
   {
@@ -507,6 +519,8 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     isUnlockedDefault: false,
     description: 'Chunky ribbed knit thermal beanie.',
     color: '#334155',
+    pattern: 'knit',
+    palette: ['#334155', '#0f172a'],
   },
   {
     id: 'headwear_neon_band',
@@ -553,6 +567,8 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     color: '#7dd3fc',
     accentColor: '#f8fafc',
     model: 'headwear_beanie',
+    pattern: 'knit',
+    palette: ['#7dd3fc', '#0369a1'],
   },
   {
     id: 'headwear_lava_snapback',
@@ -565,6 +581,8 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     color: '#1c1917',
     accentColor: '#f97316',
     model: 'headwear_snapback',
+    pattern: 'flames',
+    palette: ['#1c1917', '#f97316', '#facc15', '#dc2626'],
   },
   {
     id: 'headwear_bassline_cans',
@@ -588,7 +606,6 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     description: 'Volcanic-glass crown set with blood-red gemstones.',
     color: '#1e1b2e',
     accentColor: '#ef4444',
-    model: 'headwear_crown',
     finish: 'chrome',
   },
   {
@@ -665,7 +682,6 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     isUnlockedDefault: false,
     description: 'Blocky red-lens shades with a mirrored laser glint.',
     color: '#dc2626',
-    model: 'eyewear_pixel_shades',
   },
   {
     id: 'eyewear_prism_visor',
@@ -676,7 +692,6 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     isUnlockedDefault: false,
     description: 'Wraparound holographic visor that throws rainbows on the court.',
     color: '#c4b5fd',
-    model: 'eyewear_speed_shades',
     finish: 'holo',
     palette: ['#67e8f9', '#c4b5fd', '#f9a8d4'],
   },
@@ -735,7 +750,6 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     description: 'Carved jade-hilted blade with an emerald energy edge.',
     color: '#064e3b',
     accentColor: '#34d399',
-    model: 'back_katana',
   },
   {
     id: 'back_midnight_cape',
@@ -758,7 +772,6 @@ export const COSMETICS_CATALOG: CosmeticItem[] = [
     description: 'Blazing feathered light wings that leave embers when you leap.',
     color: '#f97316',
     glowColor: '#facc15',
-    model: 'back_cyber_wings',
   },
   {
     id: 'back_rocket_pack',
@@ -939,6 +952,21 @@ export const itemFinish = (item?: CosmeticItem | null): ItemFinish => (item ? it
 export const itemImage = (id: string) => `/items/${id}.webp`;
 export const findItem = (id?: string | null) => (id && id !== 'none' ? COSMETICS_CATALOG.find((c) => c.id === id) : undefined);
 /** Items that can be shown/sold as a product (excludes the "none" placeholders). */
+/** The hair colour a hairstyle is shown (and first equipped) in. */
+export function hairColorFor(item?: CosmeticItem | null): string {
+  const hex = item?.color;
+  if (!hex) return HAIR_COLORS[0].id;
+  const rgb = (h: string) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+  const t = rgb(hex);
+  let best = HAIR_COLORS[0];
+  let d = Infinity;
+  for (const h of HAIR_COLORS) {
+    const c = rgb(h.color);
+    const dd = (c[0] - t[0]) ** 2 + (c[1] - t[1]) ** 2 + (c[2] - t[2]) ** 2;
+    if (dd < d) [d, best] = [dd, h];
+  }
+  return best.id;
+}
 export const SHOP_ITEMS = () => COSMETICS_CATALOG.filter((c) => c.id !== 'none');
 
 // Helper to construct a starter avatar

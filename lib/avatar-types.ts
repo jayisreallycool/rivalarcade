@@ -3,7 +3,7 @@ import type { GameId, MatchMode } from './game-types';
 
 export type GenderType = 'male' | 'female' | 'neutral';
 
-export type PoseType = 'ready' | 'run' | 'jump' | 'shoot' | 'victory' | 'defeat';
+export type PoseType = 'ready' | 'run' | 'jump' | 'shoot' | 'victory' | 'defeat' | 'peace';
 
 export type CosmeticCategory = 
   | 'hair'

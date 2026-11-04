@@ -1,18 +1,23 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AvatarConfig, CosmeticCategory, CosmeticItem } from '@/lib/avatar-types';
-import { COSMETICS_CATALOG, SKIN_TONES, HAIR_COLORS } from '@/lib/cosmetics-catalog';
+import { COSMETICS_CATALOG, SKIN_TONES, HAIR_COLORS, findItem } from '@/lib/cosmetics-catalog';
 import { userStore, useUserStore } from '@/lib/user-store';
 import AvatarView from '@/components/avatar/AvatarView';
 import { sound } from '@/lib/sound';
-import { Check, Lock, Sparkles, Coins, Ban } from 'lucide-react';
+import { Check, Lock, Sparkles, Coins, Ban, RotateCcw } from 'lucide-react';
+import BannerBackdrop from '@/components/avatar/BannerBackdrop';
+import { equippedIn, withItem } from '@/lib/avatar-slots';
 import ItemImage from '@/components/items/ItemImage';
 
 export default function DressingRoom() {
   const userState = useUserStore();
-  const [customAvatar, setCustomAvatar] = useState<AvatarConfig | null>(null);
-  const workingAvatar = customAvatar || userState.avatar;
+  const saved = userState.avatar;
+  // Locked items being tried on, per slot. Owned items never live here — they're equipped for real.
+  const [previews, setPreviews] = useState<Partial<Record<CosmeticCategory, string>>>({});
+  const lockedPreviews = (Object.entries(previews) as [CosmeticCategory, string][]).filter(([, id]) => !userStore.owns(id));
+  const workingAvatar = lockedPreviews.reduce((a, [category, id]) => withItem(a, { id, category }), saved);
   const [activeTab, setActiveTab] = useState<'base' | CosmeticCategory>('base');
   const [previewAction, setPreviewAction] = useState<'idle' | 'run' | 'jump' | 'shoot' | 'celebrate'>('idle');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -22,74 +27,41 @@ export default function DressingRoom() {
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  const handleGenderSwitch = (gender: 'male' | 'female' | 'neutral') => {
+  // Body & face options are free: they save the moment you pick them.
+  const updateBase = (patch: Partial<AvatarConfig>) => {
     sound.playTap();
-    setCustomAvatar((prev) => ({
-      ...(prev || userState.avatar),
-      gender,
-    }));
+    userStore.setAvatar({ ...saved, ...patch });
   };
+  const handleGenderSwitch = (gender: 'male' | 'female' | 'neutral') => updateBase({ gender });
+  const handleSkinSelect = (skinToneId: string) => updateBase({ skinToneId });
+  const handleHairColorSelect = (hairColorId: string) => updateBase({ hairColorId });
+  const handleExpressionSelect = (expression: AvatarConfig['expression']) => updateBase({ expression });
+  const handleEyeColorSelect = (eyeColor: string) => updateBase({ eyeColor });
 
-  const handleSkinSelect = (skinId: string) => {
-    sound.playTap();
-    setCustomAvatar((prev) => ({
-      ...(prev || userState.avatar),
-      skinToneId: skinId,
-    }));
-  };
-
-  const handleHairColorSelect = (hairColorId: string) => {
-    sound.playTap();
-    setCustomAvatar((prev) => ({
-      ...(prev || userState.avatar),
-      hairColorId,
-    }));
-  };
-
-  const handleExpressionSelect = (expression: AvatarConfig['expression']) => {
-    sound.playTap();
-    setCustomAvatar((prev) => ({
-      ...(prev || userState.avatar),
-      expression,
-    }));
-  };
-
-  const handleEyeColorSelect = (colorHex: string) => {
-    sound.playTap();
-    setCustomAvatar((prev) => ({
-      ...(prev || userState.avatar),
-      eyeColor: colorHex,
-    }));
-  };
-
-  const handleItemSelect = (item: CosmeticItem) => {
-    sound.playTap();
-    const isOwned = userState.inventory.includes(item.id);
-
-    // Update live preview avatar
-    setCustomAvatar((prev) => {
-      const next = { ...(prev || userState.avatar) };
-      if (item.category === 'hair') next.hairStyleId = item.id;
-      else if (item.category === 'shirt') next.shirtId = item.id;
-      else if (item.category === 'pants') next.pantsId = item.id;
-      else if (item.category === 'shoes') next.shoesId = item.id;
-      else if (item.category === 'headwear') next.headwearId = item.id;
-      else if (item.category === 'eyewear') next.eyewearId = item.id;
-      else if (item.category === 'back') next.backId = item.id;
-      else if (item.category === 'trail') next.trailId = item.id;
-      else if (item.category === 'banner') next.bannerId = item.id;
-      else if (item.category === 'pose') {
-        next.pose = item.id === 'pose_victory_flex' ? 'victory' : 'ready';
-        setPreviewAction(item.id === 'pose_victory_flex' ? 'celebrate' : 'idle');
-      }
+  const dropPreview = (category: CosmeticCategory) =>
+    setPreviews((p) => {
+      const next = { ...p };
+      delete next[category];
       return next;
     });
 
-    if (isOwned) {
-      // Auto equip to persistent store
+  const handleItemSelect = (item: CosmeticItem) => {
+    sound.playTap();
+    if (item.category === 'pose') setPreviewAction('idle'); // let the emote play
+    if (userStore.owns(item.id)) {
+      // Owned: equip for real (saved everywhere), and stop previewing anything else in this slot.
       userStore.equipCosmetic(item.category, item.id);
-      triggerToast(`Equipped ${item.name}!`);
+      dropPreview(item.category);
+      triggerToast(`Equipped ${item.name}`);
+      return;
     }
+    // Locked: try it on. Tapping the same locked item again takes it back off.
+    if (previews[item.category] === item.id) {
+      dropPreview(item.category);
+      return;
+    }
+    setPreviews((p) => ({ ...p, [item.category]: item.id }));
+    triggerToast(`Previewing ${item.name} — unlock to keep it`);
   };
 
   const handleUnlockItem = (item: CosmeticItem) => {
@@ -98,23 +70,33 @@ export default function DressingRoom() {
       triggerToast('Not enough Rival Coins!');
       return;
     }
-
-    const success = userStore.unlockCosmetic(item.id);
-    if (success) {
+    if (userStore.unlockCosmetic(item.id)) {
       sound.playPowerup();
       userStore.equipCosmetic(item.category, item.id);
+      dropPreview(item.category);
       triggerToast(`Unlocked & equipped ${item.name}!`);
     }
   };
 
-  const lockedInPreview = userStore.lockedItemsIn(workingAvatar);
-  const hasUnsaved = !!customAvatar && JSON.stringify(customAvatar) !== JSON.stringify(userState.avatar);
-
-  const handleSaveAvatar = () => {
+  const lockedItems = lockedPreviews.map(([, id]) => findItem(id)).filter((i): i is CosmeticItem => Boolean(i));
+  const lockedCost = lockedItems.reduce((a, i) => a + i.cost, 0);
+  const handleUnlockAll = () => {
+    if (userState.stats.coins < lockedCost) {
+      sound.playLose();
+      triggerToast(`Need ${lockedCost - userState.stats.coins} more coins`);
+      return;
+    }
+    lockedItems.forEach((i) => {
+      userStore.unlockCosmetic(i.id);
+      userStore.equipCosmetic(i.category, i.id);
+    });
+    setPreviews({});
     sound.playPowerup();
-    userStore.setAvatar(workingAvatar);
-    setCustomAvatar(null); // re-sync preview with what was actually saved
-    triggerToast(lockedInPreview.length ? 'Saved — locked items were skipped' : 'Appearance saved!');
+    triggerToast(`Unlocked & equipped ${lockedItems.length} item${lockedItems.length > 1 ? 's' : ''}!`);
+  };
+  const handleResetPreview = () => {
+    sound.playTap();
+    setPreviews({});
   };
 
   // Filter items for active tab
@@ -147,9 +129,10 @@ export default function DressingRoom() {
         </div>
 
         {/* 360 / Animation Test Canvas */}
-        <div className="relative w-full aspect-square bg-[#0a0b12] rounded-xl border border-[#1e202f] flex items-center justify-center overflow-hidden mb-4">
+        <div className="relative w-full aspect-square bg-[#0a0b12] rounded-xl border border-[#1e202f] flex items-center justify-center overflow-hidden mb-4" data-testid="wardrobe-preview" data-avatar={JSON.stringify(workingAvatar)}>
+          <BannerBackdrop bannerId={workingAvatar.bannerId} />
           {/* Cyber stage rings */}
-          <div className="absolute bottom-6 w-44 h-12 bg-cyan-500/10 rounded-full border border-cyan-500/30 blur-[1px]" />
+          <div className="absolute bottom-6 w-44 h-12 bg-black/30 rounded-full border border-cyan-500/30 blur-[1px]" />
           <AvatarView
             avatar={workingAvatar}
             size={220}
@@ -178,18 +161,25 @@ export default function DressingRoom() {
           ))}
         </div>
 
-        {lockedInPreview.length > 0 && (
-          <p className="w-full text-[11px] text-amber-300 bg-amber-950/30 border border-amber-700/40 rounded-lg px-2.5 py-1.5 mb-2" data-testid="locked-preview-note">
-            Previewing {lockedInPreview.length} locked item{lockedInPreview.length > 1 ? 's' : ''} — unlock to keep {lockedInPreview.length > 1 ? 'them' : 'it'}.
+        {lockedItems.length > 0 ? (
+          <div className="w-full rounded-xl border border-amber-600/40 bg-amber-950/30 p-3 space-y-2" data-testid="locked-preview-note">
+            <p className="text-[11px] text-amber-200">
+              Previewing {lockedItems.length} locked item{lockedItems.length > 1 ? 's' : ''}: {lockedItems.map((i) => i.name).join(', ')}. Unlock to equip — previews aren&apos;t saved.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={handleUnlockAll} className="flex-1 h-10 rounded-lg bg-amber-400 text-black font-black text-xs flex items-center justify-center gap-1.5" data-testid="unlock-previewed">
+                <Lock className="w-3.5 h-3.5" /> Unlock {lockedItems.length > 1 ? 'all' : ''} · {lockedCost.toLocaleString()}
+              </button>
+              <button onClick={handleResetPreview} className="h-10 px-4 rounded-lg bg-white/10 text-white font-bold text-xs flex items-center gap-1.5" data-testid="reset-preview">
+                <RotateCcw className="w-3.5 h-3.5" /> Reset
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-emerald-300 bg-emerald-950/30 border border-emerald-700/30 rounded-lg py-2.5" data-testid="look-saved">
+            <Check className="w-4 h-4" /> Your look is saved — it shows in every game and on your profile
           </p>
         )}
-        {/* Save Appearance Button */}
-        <button
-          onClick={handleSaveAvatar}
-          className="w-full py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-extrabold text-sm rounded-xl shadow-lg shadow-cyan-500/20 transition-transform active:scale-95 flex items-center justify-center gap-2"
-        >
-          <Check className="w-4 h-4 stroke-[3]" /> {hasUnsaved ? 'SAVE APPEARANCE' : 'SAVED'}
-        </button>
       </div>
 
       {/* RIGHT: Wardrobe & Customization Shelves */}
@@ -207,6 +197,7 @@ export default function DressingRoom() {
             { id: 'back', label: 'Back Gear' },
             { id: 'trail', label: 'Trails' },
             { id: 'pose', label: 'Emotes' },
+            { id: 'banner', label: 'Banners' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -353,26 +344,21 @@ export default function DressingRoom() {
         {activeTab !== 'base' && (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[560px] overflow-y-auto pr-1">
             {tabItems.map((item) => {
-              const isOwned = userState.inventory.includes(item.id);
-              const isEquipped =
-                (item.category === 'hair' && workingAvatar.hairStyleId === item.id) ||
-                (item.category === 'shirt' && workingAvatar.shirtId === item.id) ||
-                (item.category === 'pants' && workingAvatar.pantsId === item.id) ||
-                (item.category === 'shoes' && workingAvatar.shoesId === item.id) ||
-                (item.category === 'headwear' && workingAvatar.headwearId === item.id) ||
-                (item.category === 'eyewear' && workingAvatar.eyewearId === item.id) ||
-                (item.category === 'back' && workingAvatar.backId === item.id) ||
-                (item.category === 'trail' && workingAvatar.trailId === item.id) ||
-                (item.category === 'banner' && workingAvatar.bannerId === item.id) ||
-                (item.category === 'pose' && workingAvatar.pose === (item.id === 'pose_victory_flex' ? 'victory' : 'ready'));
+              const isOwned = userStore.owns(item.id);
+              const isEquipped = equippedIn(saved, item.category) === item.id;
+              const isPreviewing = !isOwned && previews[item.category] === item.id;
 
               return (
                 <div
                   key={item.id}
                   onClick={() => handleItemSelect(item)}
+                  data-testid={`wardrobe-item-${item.id}`}
+                  data-state={isEquipped ? 'equipped' : isPreviewing ? 'previewing' : isOwned ? 'owned' : 'locked'}
                   className={`relative flex flex-col p-3 rounded-xl border cursor-pointer transition-all ${
                     isEquipped
                       ? 'border-cyan-400 bg-[#161928] shadow-md shadow-cyan-500/10'
+                      : isPreviewing
+                      ? 'border-amber-400 bg-[#1a1610] shadow-md shadow-amber-500/10'
                       : isOwned
                       ? 'border-[#242738] bg-[#141522] hover:border-slate-600'
                       : 'border-[#1e202f] bg-[#0e1018] opacity-80 hover:opacity-100 hover:border-slate-700'
@@ -406,12 +392,12 @@ export default function DressingRoom() {
                       </span>
                     ) : isOwned ? (
                       <span className="text-[11px] font-bold text-slate-400 hover:text-white">
-                        Click to Equip
+                        Tap to equip
                       </span>
                     ) : (
                       <div className="w-full flex items-center justify-between">
                         <span className="flex items-center gap-1 text-xs font-bold text-amber-400">
-                          <Coins className="w-3.5 h-3.5" /> {item.cost}
+                          {isPreviewing ? <span className="text-[10px] font-black">PREVIEWING</span> : <><Coins className="w-3.5 h-3.5" /> {item.cost}</>}
                         </span>
                         <button
                           onClick={(e) => {
@@ -420,7 +406,7 @@ export default function DressingRoom() {
                           }}
                           className="flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-[10px] rounded shadow transition-colors"
                         >
-                          <Lock className="w-3 h-3" /> UNLOCK
+                          <Lock className="w-3 h-3" /> {isPreviewing ? item.cost : 'UNLOCK'}
                         </button>
                       </div>
                     )}

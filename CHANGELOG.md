@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-04 — Wardrobe and avatar always in sync
+
+- One slot map (`lib/avatar-slots.ts`) used by the wardrobe, store try-on, saving and loading, so an item always lands on the same slot and "equipped" means the same thing everywhere.
+- Owned items equip and save the moment you tap them; body & face options save instantly too (no more Save button drifting out of sync).
+- Locked items are preview-only: amber "Previewing" state, never saved, never shown as equipped; Unlock (or Unlock all) buys and equips, Reset clears previews. `equipCosmetic` refuses locked items, and a saved look containing a locked or unknown item is repaired on load.
+- Every category visibly changes the avatar: Chill Peace now has its own peace-sign pose, equipped emotes play on the avatar at rest, and banners (new Banners tab) show as the backdrop behind your avatar in the wardrobe and on your profile.
+- Store: "On you" try-on view in the item sheet, Equip now for owned items, and buying equips immediately.
+
 ## 2026-11-04 — Unique items with generated images
 
 - 33 new uniquely named cosmetics (74 total), each with its own colours, print and finish: e.g. Seraph Halo, Bassline Studio Cans, Obsidian Warlord Crown, Aurora Holo Coat, Inferno Jersey #99, Void Walkers, Rocket Jetpack MK-II, Midnight Champion Cape, Ember Phoenix Wings, Rainbow Rush and Void Rift trails.

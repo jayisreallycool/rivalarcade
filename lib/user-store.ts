@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { AvatarConfig, CosmeticCategory, MatchHistoryItem, PlayerStats } from './avatar-types';
 import { COSMETICS_CATALOG, getStarterAvatar } from './cosmetics-catalog';
 import { GAME_NAMES, GameId, MatchMode, RunStats, SCORE_BASELINE } from './game-types';
+import { equippedIn, itemsOn, withItem } from './avatar-slots';
 import { applyQuestEvent, DailyQuest, localDayKey, questsForDay } from './quests';
 import { referenceScore } from './bots';
 import {
@@ -113,6 +114,18 @@ export function getInitialState(): UserState {
 const SERVER_SNAPSHOT: UserState = getInitialState();
 
 /** Bring any saved shape (older versions, missing fields) up to the current one. */
+/** `avatar` with every slot holding an unowned (or unknown) item reset to `fallback`'s choice. */
+function keepOwned(avatar: AvatarConfig, fallback: AvatarConfig, inventory: string[]): AvatarConfig {
+  let out = { ...avatar };
+  for (const { category, id } of itemsOn(avatar)) {
+    const known = COSMETICS_CATALOG.some((c) => c.id === id && c.category === category);
+    if (known && inventory.includes(id)) continue;
+    const back = equippedIn(fallback, category);
+    out = withItem(out, { id: back === 'none' || inventory.includes(back) ? back : category === 'pose' ? 'pose_ready' : 'none', category });
+  }
+  return out;
+}
+
 function migrate(raw: unknown): UserState {
   const base = getInitialState();
   if (!raw || typeof raw !== 'object') return base;
@@ -121,13 +134,16 @@ function migrate(raw: unknown): UserState {
   stats.tier = tierForRating(stats.rating);
   stats.level = levelFor(stats.xp);
   const seasonXp = typeof p.seasonXp === 'number' ? p.seasonXp : base.seasonXp;
+  // Free starter items are always owned, including ones added to the catalog after this save.
+  const inventory = [...new Set([...(Array.isArray(p.inventory) ? p.inventory : base.inventory), ...base.inventory])];
   return {
     ...base,
     ...p,
     version: STATE_VERSION,
-    avatar: { ...base.avatar, ...(p.avatar ?? {}) },
+    // Never load a look wearing something the player doesn't own (old saves, removed items).
+    avatar: keepOwned({ ...base.avatar, ...(p.avatar ?? {}) }, base.avatar, inventory),
     stats,
-    inventory: Array.isArray(p.inventory) ? [...new Set(p.inventory)] : base.inventory,
+    inventory,
     matchHistory: Array.isArray(p.matchHistory) ? p.matchHistory : base.matchHistory,
     // v2 quests had no day stamp and shared object identity with the defaults: rebuild.
     quests: p.version === STATE_VERSION && Array.isArray(p.quests) ? p.quests : [],
@@ -237,23 +253,21 @@ class UserStore {
   // ------------------------------------------------------------- profile
 
   /** Fields that hold cosmetic item IDs (must be owned to be saved). */
-  private static readonly COSMETIC_FIELDS: (keyof AvatarConfig)[] = ['hairStyleId', 'shirtId', 'pantsId', 'shoesId', 'headwearId', 'eyewearId', 'backId', 'trailId', 'bannerId'];
+  /** Owns this item (empty slots are always "owned"). */
+  owns(itemId: string) {
+    return itemId === 'none' || this.state.inventory.includes(itemId);
+  }
 
   /** Items in `avatar` the player doesn't own (previewed but locked). */
   lockedItemsIn(avatar: AvatarConfig): string[] {
-    return UserStore.COSMETIC_FIELDS.map((f) => String(avatar[f])).filter((id) => id !== 'none' && !this.state.inventory.includes(id));
+    return itemsOn(avatar)
+      .map((s) => s.id)
+      .filter((id) => !this.owns(id));
   }
 
   /** Save appearance. Locked (unowned) items are never saved — those slots keep what was equipped. */
   setAvatar(avatar: AvatarConfig) {
-    const current = this.state.avatar;
-    const next = { ...avatar } as Record<string, unknown>;
-    for (const f of UserStore.COSMETIC_FIELDS) {
-      const id = String(avatar[f]);
-      if (id !== 'none' && !this.state.inventory.includes(id)) next[f] = current[f];
-    }
-    if (avatar.pose === 'victory' && !this.state.inventory.includes('pose_victory_flex')) next.pose = current.pose;
-    this.commit({ avatar: next as unknown as AvatarConfig });
+    this.commit({ avatar: keepOwned(avatar, this.state.avatar, this.state.inventory) });
   }
 
   setUsername(username: string) {
@@ -267,16 +281,10 @@ class UserStore {
     this.commit({ avatar: getStarterAvatar(gender) });
   }
 
+  /** Put an OWNED item on the avatar. Locked items are refused (they can only be previewed). */
   equipCosmetic(category: CosmeticCategory, itemId: string) {
-    if (itemId !== 'none' && !this.state.inventory.includes(itemId)) return false;
-    const a = { ...this.state.avatar };
-    const field: Partial<Record<CosmeticCategory, keyof AvatarConfig>> = {
-      hair: 'hairStyleId', shirt: 'shirtId', pants: 'pantsId', shoes: 'shoesId', headwear: 'headwearId',
-      eyewear: 'eyewearId', back: 'backId', trail: 'trailId', banner: 'bannerId',
-    };
-    if (category === 'pose') a.pose = itemId === 'pose_victory_flex' ? 'victory' : 'ready';
-    else if (field[category]) (a as Record<string, unknown>)[field[category]!] = itemId;
-    this.commit({ avatar: a });
+    if (!this.owns(itemId)) return false;
+    this.commit({ avatar: withItem(this.state.avatar, { id: itemId, category }) });
     return true;
   }
 

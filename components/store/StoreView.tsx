@@ -5,6 +5,9 @@ import { userStore, useUserStore, SEASON_TIERS } from '@/lib/user-store';
 import { RARITY, SHOP_ITEMS, findItem } from '@/lib/cosmetics-catalog';
 import type { CosmeticCategory, CosmeticItem, Rarity } from '@/lib/avatar-types';
 import ItemImage from '@/components/items/ItemImage';
+import AvatarView from '@/components/avatar/AvatarView';
+import BannerBackdrop from '@/components/avatar/BannerBackdrop';
+import { equippedIn, withItem } from '@/lib/avatar-slots';
 
 const CATEGORY_LABEL: Record<CosmeticCategory, string> = {
   hair: 'Hairstyle',
@@ -46,8 +49,10 @@ export default function StoreView() {
     }
     const success = userStore.unlockCosmetic(itemId);
     if (success) {
+      const item = findItem(itemId);
+      if (item) userStore.equipCosmetic(item.category, item.id);
       sound.playPowerup();
-      triggerToast(`Unlocked ${findItem(itemId)?.name ?? 'item'}!`);
+      triggerToast(`Unlocked & equipped ${item?.name ?? 'item'}!`);
     }
   };
 
@@ -58,7 +63,13 @@ export default function StoreView() {
   };
 
   const [rarity, setRarity] = useState<'all' | Rarity>('all');
-  const [detail, setDetail] = useState<CosmeticItem | null>(null);
+  const [detail, setDetailRaw] = useState<CosmeticItem | null>(null);
+  const [view, setView] = useState<'item' | 'avatar'>('item');
+  const setDetail = (item: CosmeticItem | null) => {
+    setDetailRaw(item);
+    setView('item');
+  };
+  const tryOn = detail ? withItem(userState.avatar, detail) : userState.avatar;
   // Everything you can actually buy, rarest first.
   const shopItems = SHOP_ITEMS()
     .filter((c) => !c.isUnlockedDefault)
@@ -295,7 +306,24 @@ export default function StoreView() {
       {detail && (
         <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-6" onClick={() => setDetail(null)} data-testid="item-detail">
           <div className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl bg-[#11121c] border border-white/10 p-5 pb-[max(env(safe-area-inset-bottom),20px)]" onClick={(e) => e.stopPropagation()}>
-            <ItemImage item={detail} size="lg" className="w-full max-w-[280px] mx-auto" />
+            {/* Item art, or the item on YOUR avatar (try-on — nothing is saved until you own and equip it). */}
+            <div className="relative w-full max-w-[280px] mx-auto">
+              {view === 'item' ? (
+                <ItemImage item={detail} size="lg" className="w-full" />
+              ) : (
+                <div className="relative aspect-square rounded-xl overflow-hidden flex items-center justify-center" style={{ boxShadow: `0 0 0 2px ${RARITY[detail.rarity].color}` }} data-testid="try-on">
+                  <BannerBackdrop bannerId={tryOn.bannerId} />
+                  <AvatarView avatar={tryOn} size={250} action="idle" />
+                </div>
+              )}
+              <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 flex rounded-full bg-black/80 border border-white/10 p-0.5 text-[11px] font-black">
+                {(['item', 'avatar'] as const).map((v) => (
+                  <button key={v} onClick={() => setView(v)} data-testid={`view-${v}`} className={`px-3 h-7 rounded-full ${view === v ? 'bg-white text-black' : 'text-white/70'}`}>
+                    {v === 'item' ? 'Item' : 'On you'}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="mt-4 flex items-center gap-2">
               <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase text-black" style={{ background: RARITY[detail.rarity].color }}>
                 {RARITY[detail.rarity].label}
@@ -307,9 +335,23 @@ export default function StoreView() {
             {detail.unlockRequirement && !userState.inventory.includes(detail.id) && <p className="mt-1 text-xs text-amber-300/80">{detail.unlockRequirement}</p>}
             <div className="mt-4 flex gap-2">
               {userState.inventory.includes(detail.id) ? (
-                <span className="flex-1 h-12 rounded-full bg-emerald-500/15 text-emerald-300 font-black flex items-center justify-center gap-2">
-                  <Check className="w-4 h-4" /> Owned — equip it in Wardrobe
-                </span>
+                equippedIn(userState.avatar, detail.category) === detail.id ? (
+                  <span className="flex-1 h-12 rounded-full bg-emerald-500/15 text-emerald-300 font-black flex items-center justify-center gap-2" data-testid="item-equipped">
+                    <Check className="w-4 h-4" /> Equipped
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => {
+                      userStore.equipCosmetic(detail.category, detail.id);
+                      sound.playPowerup();
+                      triggerToast(`Equipped ${detail.name}`);
+                    }}
+                    className="flex-1 h-12 rounded-full bg-cyan-400 text-black font-black flex items-center justify-center gap-2"
+                    data-testid="equip-item"
+                  >
+                    <Check className="w-4 h-4" /> Equip now
+                  </button>
+                )
               ) : (
                 <button
                   onClick={() => handleBuyCosmetic(detail.id, detail.cost)}

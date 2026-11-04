@@ -3,6 +3,7 @@
 import React, { useEffect, useRef } from 'react';
 import { AvatarConfig } from '@/lib/avatar-types';
 import { drawAvatar, DrawAvatarOptions } from '@/lib/avatar-canvas-draw';
+import { poseAction } from '@/lib/avatar-slots';
 
 interface AvatarViewProps {
   avatar: AvatarConfig;
@@ -51,7 +52,8 @@ export default function AvatarView({
       ctx.clearRect(0, 0, size, size);
       const opts: DrawAvatarOptions = {
         frame,
-        action: avatar.pose === 'victory' ? 'celebrate' : action,
+        // At rest the avatar plays its equipped emote; explicit actions (run, jump…) win.
+        action: action === 'idle' ? poseAction(avatar) ?? 'idle' : action,
         facingRight,
         scale: 1,
         showTrail,
@@ -104,7 +106,7 @@ export default function AvatarView({
     <canvas
       ref={canvasRef}
       style={{ width: `${size}px`, height: `${size}px` }}
-      className={`inline-block pointer-events-none select-none ${className}`}
+      className={`relative inline-block pointer-events-none select-none ${className}`}
       aria-hidden="true"
     />
   );

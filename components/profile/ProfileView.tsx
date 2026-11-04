@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { userStore, useUserStore } from '@/lib/user-store';
 import AvatarView from '@/components/avatar/AvatarView';
+import BannerBackdrop from '@/components/avatar/BannerBackdrop';
 import { sound, useMuted } from '@/lib/sound';
 import { formatCountdown, msUntilLocalMidnight } from '@/lib/quests';
 import { detectDeviceTier, getQualityOverride, setQualityOverride, QualityTier } from '@/lib/engine/quality';
@@ -79,6 +80,9 @@ export default function ProfileView() {
         <div className="flex flex-col md:flex-row items-center gap-6">
           {/* Avatar Showcase */}
           <div className="relative w-36 h-36 bg-[#0a0b12] rounded-2xl border border-[#242738] flex items-center justify-center shadow-lg">
+            <div className="absolute inset-0 rounded-2xl overflow-hidden">
+              <BannerBackdrop bannerId={userState.avatar.bannerId} />
+            </div>
             <AvatarView
               avatar={userState.avatar}
               size={130}

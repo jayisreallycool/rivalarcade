@@ -26,7 +26,7 @@ function fabric(ctx: CanvasRenderingContext2D, item: CosmeticItem | undefined, f
 
 export interface DrawAvatarOptions {
   frame?: number;           // Animation frame (0..60)
-  action?: 'idle' | 'run' | 'jump' | 'slide' | 'shoot' | 'celebrate' | 'hit';
+  action?: 'idle' | 'run' | 'jump' | 'slide' | 'shoot' | 'celebrate' | 'hit' | 'peace';
   facingRight?: boolean;
   scale?: number;
   highlightColor?: string;
@@ -316,6 +316,9 @@ export function drawAvatar(
   } else if (action === 'celebrate') {
     leftArmAngle = -2.4 + Math.sin(frame * 0.2) * 0.2;
     rightArmAngle = -2.4 - Math.sin(frame * 0.2) * 0.2;
+  } else if (action === 'peace') {
+    leftArmAngle = 0.1;
+    rightArmAngle = -2.75 + Math.sin(frame * 0.15) * 0.06;
   }
 
   // Draw Left Arm
@@ -336,6 +339,18 @@ export function drawAvatar(
   ctx.fillRect(-3, 0, 7, 14); // sleeve
   ctx.fillStyle = skin.color;
   ctx.fillRect(-2, 14, 5, 12); // forearm & hand
+  if (action === 'peace') {
+    // V sign: two splayed fingers past the hand.
+    ctx.save();
+    ctx.translate(0.5, 26);
+    [-0.32, 0.32].forEach((a) => {
+      ctx.save();
+      ctx.rotate(a);
+      ctx.fillRect(-1, 0, 2, 7);
+      ctx.restore();
+    });
+    ctx.restore();
+  }
   ctx.restore();
 
   // 6. Head & Face
@@ -377,7 +392,7 @@ export function drawAvatar(
 
   // Mouth
   ctx.fillStyle = '#991b1b';
-  if (action === 'celebrate' || avatar.expression === 'victory') {
+  if (action === 'celebrate' || action === 'peace' || avatar.expression === 'victory') {
     // Big open smile
     ctx.beginPath();
     ctx.arc(0, 5, 4, 0, Math.PI);

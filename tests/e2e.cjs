@@ -217,38 +217,74 @@ async function waitResults(page, timeout = 150000) {
     console.log(`      (placed #${settled.rank}/${settled.total}, +${gained} coins)`);
   }, page);
 
-  await step('wardrobe: equip owned, locked preview not saved, unlock purchase', async () => {
+  await step('wardrobe: owned items equip + save, locked items preview only, unlock equips, every slot changes the avatar', async () => {
     await nav(page, 'Wardrobe');
-    await page.getByRole('button', { name: 'Tops' }).click();
-    const lockedCard = page.locator('div.cursor-pointer', { has: page.locator('button:has-text("UNLOCK")') }).first();
+    const look = async () => JSON.parse(await page.locator('[data-testid=wardrobe-preview]').getAttribute('data-avatar'));
+    const POSES = { pose_ready: 'ready', pose_victory_flex: 'victory', pose_peace_sign: 'peace' };
+    const wears = (a, id) => (id in POSES ? a.pose === POSES[id] : Object.values(a).includes(id));
+    const tab = (name) => page.getByRole('button', { name, exact: true }).click();
+    await tab('Tops');
     const before = await state(page);
-    await lockedCard.click();
+    // Locked: previews on the avatar, never saved, can't show as equipped.
+    const locked = page.locator('[data-state=locked]').first();
+    const lockedId = (await locked.getAttribute('data-testid')).replace('wardrobe-item-', '');
+    await locked.click();
     await page.locator('[data-testid="locked-preview-note"]').waitFor({ timeout: 3000 });
-    await page.getByRole('button', { name: /SAVE APPEARANCE/ }).click();
-    await page.waitForTimeout(300);
-    const afterSave = await state(page);
-    expect(afterSave.avatar.shirtId === before.avatar.shirtId, `locked shirt saved: ${afterSave.avatar.shirtId}`);
-    const owned = page.locator('div.cursor-pointer', { hasText: 'Click to Equip' }).first();
+    expect(wears(await look(), lockedId), 'locked preview did not change the avatar');
+    expect((await page.locator(`[data-testid=wardrobe-item-${lockedId}]`).getAttribute('data-state')) === 'previewing', 'locked item not marked previewing');
+    expect((await state(page)).avatar.shirtId === before.avatar.shirtId, 'locked shirt was saved');
+    await page.locator('[data-testid=reset-preview]').click();
+    expect(!(await page.locator('[data-testid="locked-preview-note"]').count()), 'reset did not clear preview');
+    // equipCosmetic refuses locked items outright.
+    // Owned: equips and saves immediately.
+    const owned = page.locator('[data-state=owned]').first();
     if (await owned.count()) {
+      const ownedId = (await owned.getAttribute('data-testid')).replace('wardrobe-item-', '');
       await owned.click();
       await page.getByText(/Equipped /).first().waitFor({ timeout: 3000 });
+      expect((await state(page)).avatar.shirtId === ownedId, 'owned shirt not saved');
+      expect((await page.locator(`[data-testid=wardrobe-item-${ownedId}]`).getAttribute('data-state')) === 'equipped', 'owned shirt not marked equipped');
     }
-    // Buy the cheapest locked item we can afford
-    const coins = afterSave.stats.coins;
-    const cards = page.locator('div.cursor-pointer', { has: page.locator('button:has-text("UNLOCK")') });
+    // Every category: tapping a different item changes the preview.
+    for (const [label] of [['Hair'], ['Pants'], ['Shoes'], ['Headwear'], ['Eyewear'], ['Back Gear'], ['Trails'], ['Emotes'], ['Banners']]) {
+      await tab(label);
+      const card = page.locator('[data-state=owned], [data-state=locked]').last();
+      const id = (await card.getAttribute('data-testid')).replace('wardrobe-item-', '');
+      await card.click();
+      await page.waitForTimeout(150);
+      expect(wears(await look(), id), `${label}: selecting ${id} did not put it on the avatar`);
+    }
+    await page.locator('[data-testid=reset-preview]').click().catch(() => {});
+    // Unlock the cheapest affordable locked top: coins charged, equipped, saved.
+    await tab('Tops');
+    const coins = (await state(page)).stats.coins;
+    const cards = page.locator('[data-state=locked]');
     let bought = false;
     for (let i = 0; i < (await cards.count()); i++) {
       const cost = Number((await cards.nth(i).locator('span.text-amber-400').first().innerText()).replace(/\D/g, ''));
       if (cost <= coins) {
+        const id = (await cards.nth(i).getAttribute('data-testid')).replace('wardrobe-item-', '');
         await cards.nth(i).locator('button:has-text("UNLOCK")').click();
         await page.getByText(/Unlocked & equipped/).waitFor({ timeout: 3000 });
         const st = await state(page);
         expect(st.stats.coins === coins - cost, `coins ${st.stats.coins} != ${coins - cost}`);
+        expect(st.avatar.shirtId === id && st.inventory.includes(id), 'unlocked shirt not equipped');
         bought = true;
         break;
       }
     }
     expect(bought, 'could not afford any item to test purchase');
+    // A saved look with a locked item (old save / tampering) is repaired on load.
+    await page.evaluate(() => {
+      const k = 'rival_arcade_user_state_v3';
+      const st = JSON.parse(localStorage.getItem(k));
+      st.avatar.backId = 'back_cyber_wings';
+      st.inventory = st.inventory.filter((i) => i !== 'back_cyber_wings');
+      localStorage.setItem(k, JSON.stringify(st));
+    });
+    await page.reload();
+    await page.waitForTimeout(800);
+    expect((await state(page)).avatar.backId !== 'back_cyber_wings', 'locked item survived reload');
   }, page);
 
   await step('season pass: claim free tier, activate VIP, claim VIP cosmetic', async () => {

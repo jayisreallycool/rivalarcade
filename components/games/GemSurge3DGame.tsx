@@ -596,6 +596,22 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
       onExit={onExit}
       surface={surface}
       hint="Swipe a gem toward a neighbour to swap"
+      guide={{
+        goal: 'Line up 3 or more matching gems — as many as you can in 60 seconds.',
+        controls: [
+          { gesture: 'swap', label: 'Swipe a gem to swap it' },
+          { gesture: 'tap', label: 'Or tap one, then its neighbour' },
+          { gesture: 'chain', label: 'Falling gems chain cascades' },
+        ],
+        points: [
+          { label: 'Gem', value: '1' },
+          { label: 'Cascade', value: '+1 a gem', tone: 'bonus' },
+          { label: '4-match', value: '+1', tone: 'bonus' },
+          { label: '5+ MEGA', value: '+3', tone: 'gold' },
+          { label: 'Last 10s', value: '×2', tone: 'clutch' },
+        ],
+        ends: '60-second round · a hint pulses if you get stuck',
+      }}
       tutorial={[
         { icon: <Move className="w-6 h-6" />, label: 'Swipe gem to swap' },
         { icon: <Pointer className="w-6 h-6" />, label: 'Or tap, then tap neighbour' },

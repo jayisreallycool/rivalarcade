@@ -618,6 +618,23 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       onExit={onExit}
       surface={surface}
       hint="Swipe ← → to switch lanes · ↑ jump · ↓ slide"
+      guide={{
+        goal: 'Dodge everything on the road and grab crystals for 60 seconds.',
+        controls: [
+          { gesture: 'swipe-x', label: 'Swipe ← → to change lane' },
+          { gesture: 'swipe-up', label: 'Swipe up or tap to jump' },
+          { gesture: 'swipe-down', label: 'Swipe down to slide' },
+        ],
+        points: [
+          { label: 'Dodge', value: '1' },
+          { label: 'Crystal', value: '1' },
+          { label: 'Gold crystal', value: '3', tone: 'gold' },
+          { label: 'Finish', value: '+5', tone: 'jackpot' },
+          { label: '5 clean', value: '×2', tone: 'fire' },
+          { label: 'Last 10s', value: '×2', tone: 'clutch' },
+        ],
+        ends: '60 seconds · 3 shields — each hit costs one',
+      }}
       tutorial={[
         { icon: <ArrowLeftRight className="w-6 h-6" />, label: 'Swipe to change lane' },
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Swipe up / tap: jump spikes' },

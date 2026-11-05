@@ -92,8 +92,15 @@ const stats = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('rival_arc
   await p.click('[data-testid=tile-canopy-swing]');
   await p.click('[data-testid=mode-practice]');
   await p.waitForSelector('text=TAP TO PLAY', { timeout: 20000 });
+  // Controls guide on the ready card; a reminder during 3-2-1 that fades away at GO.
+  assert(await p.$('[data-testid=game-guide]'), 'controls guide on the ready card');
+  assert.strictEqual(await p.locator('[data-testid=controls-guide] > div').count(), 3, 'three controls shown');
   await p.click('text=TAP TO PLAY');
-  await p.waitForTimeout(2600);
+  await p.waitForTimeout(400);
+  assert(await p.$('[data-testid=controls-reminder][data-state=on]'), 'controls reminder during countdown');
+  // 3-2-1 (≈2s) then a 0.75s fade; gone shortly after GO.
+  await p.waitForSelector('[data-testid=controls-reminder]', { state: 'detached', timeout: 8000 });
+  await p.waitForTimeout(600);
   const surf = await (await p.$('[data-testid=game-surface]')).boundingBox();
   const t0 = Date.now();
   let vines = 0;

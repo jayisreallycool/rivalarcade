@@ -664,6 +664,23 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       onExit={onExit}
       surface={surface}
       hint="Tap to let go on the forward swing"
+      guide={{
+        goal: 'Swing from vine to vine — don’t fall in the river.',
+        controls: [
+          { gesture: 'tap', label: 'Tap to let go' },
+          { gesture: 'timing', label: 'Let go when the ring glows gold' },
+          { gesture: 'auto', label: 'You grab the next vine yourself' },
+        ],
+        points: [
+          { label: 'Vine', value: '1' },
+          { label: 'Perfect release', value: '+1', tone: 'bonus' },
+          { label: 'Banana', value: '1' },
+          { label: 'Golden idol', value: '3', tone: 'gold' },
+          { label: 'Sunstone', value: '5', tone: 'jackpot' },
+          { label: '5 perfect', value: '×2', tone: 'fire' },
+        ],
+        ends: 'Endless · one splash ends the run · gaps widen as you go',
+      }}
       tutorial={[
         { icon: <Pointer className="w-6 h-6" />, label: 'Tap to let go' },
         { icon: <Timer className="w-6 h-6" />, label: 'Let go when the ring glows' },

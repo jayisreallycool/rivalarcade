@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-04 — Controls guide before every game
+
+- Every game's ready card now opens with **HOW TO PLAY**: three animated gesture demos (a fingertip doing the flick, swipe, drag, slash, swap, tap or timing move), the goal in one line, colour-coded point chips (1 point, bonus +1, gold 3, jackpot 5, ON FIRE ×2, clutch ×2, penalties) and how the round ends. The long rules sit under "Full rules".
+- When you tap play, a compact **GET READY** controls strip stays on screen through 3-2-1 and fades away as the game starts. Respects reduced-motion settings.
+
 ## 2026-11-04 — Brick Blitz stages & lights, Canopy Swing side view
 
 - **Brick Blitz** is faster and built for 1v1 duels: four seeded stages — Easy (rows 1–6), Challenging (7–14), Hard (15–24), Extreme (25+). Each stage hardens and packs the rows, adds tough bricks, speeds the balls up (18 → 24) and shortens a new **shot clock** (9s → 5s; it fires for you at your aim when it runs out). Volleys auto fast-forward sooner, tap jumps to ×3, rows drop faster.

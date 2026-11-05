@@ -423,6 +423,23 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
       onExit={onExit}
       surface={surface}
       hint="Tap or slash nodes as the ring closes"
+      guide={{
+        goal: 'Hit each node before its ring closes.',
+        controls: [
+          { gesture: 'tap', label: 'Tap a node' },
+          { gesture: 'slash', label: 'Slash across several' },
+          { gesture: 'avoid', label: 'Never hit red nodes' },
+        ],
+        points: [
+          { label: 'Node', value: '1' },
+          { label: 'As ring closes', value: '+1', tone: 'bonus' },
+          { label: 'Gold node', value: '3', tone: 'gold' },
+          { label: 'Red node', value: '−2', tone: 'bad' },
+          { label: '5 in a row', value: '×2', tone: 'fire' },
+          { label: 'Last 10s', value: '×2', tone: 'clutch' },
+        ],
+        ends: '60-second round · more, faster nodes as it goes',
+      }}
       tutorial={[
         { icon: <Pointer className="w-6 h-6" />, label: 'Tap nodes' },
         { icon: <Hand className="w-6 h-6" />, label: 'Slash across many' },

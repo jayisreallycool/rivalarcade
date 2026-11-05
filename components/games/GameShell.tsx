@@ -125,6 +125,73 @@ export function useSwipe(handlers: {
   };
 }
 
+/* ------------------------------------------------------------------ controls guide */
+
+export type Gesture = 'tap' | 'flick-up' | 'swipe-x' | 'swipe-up' | 'swipe-down' | 'drag' | 'release' | 'slash' | 'swap' | 'timing' | 'avoid' | 'chain' | 'auto';
+export type PointTone = 'base' | 'bonus' | 'gold' | 'jackpot' | 'fire' | 'clutch' | 'bad';
+
+/** What a player needs before the first round: controls, the goal, what points are worth, how it ends. */
+export interface GameGuide {
+  goal: string;
+  controls: { gesture: Gesture; label: string }[];
+  points: { label: string; value: string; tone?: PointTone }[];
+  ends: string;
+}
+
+const TONE: Record<PointTone, string> = {
+  base: 'bg-white/10 text-white',
+  bonus: 'bg-yellow-300/15 text-yellow-200',
+  gold: 'bg-amber-400/20 text-amber-300',
+  jackpot: 'bg-pink-400/20 text-pink-300',
+  fire: 'bg-orange-500/20 text-orange-300',
+  clutch: 'bg-amber-300/20 text-amber-200',
+  bad: 'bg-rose-500/20 text-rose-300',
+};
+
+/** A tiny looping demo of a gesture: a fingertip moving the way you should move yours. */
+export function GestureDemo({ gesture, accent }: { gesture: Gesture; accent: string }) {
+  const finger = (
+    <span className={`ra-finger ra-g-${gesture}`} style={{ ['--accent' as string]: accent }}>
+      <span className="ra-finger-dot" />
+      <span className="ra-finger-trail" />
+    </span>
+  );
+  return (
+    <span className="relative block w-14 h-14 rounded-2xl bg-black/50 border border-white/10 overflow-hidden" aria-hidden>
+      {gesture === 'avoid' && <span className="absolute inset-0 flex items-center justify-center text-rose-400 text-2xl font-black">✕</span>}
+      {gesture === 'timing' && <span className="ra-g-ring absolute inset-[14px] rounded-full border-[3px]" style={{ borderColor: accent }} />}
+      {gesture === 'swap' && (
+        <>
+          <span className="ra-g-gemA absolute w-4 h-4 rounded-md bg-fuchsia-400 top-5 left-2.5" />
+          <span className="ra-g-gemB absolute w-4 h-4 rounded-md bg-cyan-300 top-5 right-2.5" />
+        </>
+      )}
+      {gesture === 'chain' && (
+        <span className="absolute inset-0 flex flex-col items-center justify-center gap-0.5">
+          {[0, 1, 2].map((i) => (
+            <span key={i} className="ra-g-chain w-6 h-2 rounded-full" style={{ background: accent, animationDelay: `${i * 0.25}s` }} />
+          ))}
+        </span>
+      )}
+      {gesture === 'auto' && <span className="absolute inset-0 flex items-center justify-center text-2xl" style={{ color: accent }}>⟳</span>}
+      {gesture !== 'avoid' && gesture !== 'chain' && gesture !== 'auto' && finger}
+    </span>
+  );
+}
+
+function ControlsRow({ guide, accent }: { guide: GameGuide; accent: string }) {
+  return (
+    <div className="grid grid-cols-3 gap-2" data-testid="controls-guide">
+      {guide.controls.map((c, i) => (
+        <div key={i} className="flex flex-col items-center gap-1.5 rounded-xl bg-white/5 border border-white/10 py-2.5 px-1 text-center">
+          <GestureDemo gesture={c.gesture} accent={accent} />
+          <span className="text-[10px] font-bold text-white/80 leading-tight">{c.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ shell */
 
 export type ShellPhase = 'ready' | 'playing' | 'over';
@@ -148,6 +215,8 @@ interface GameShellProps {
   onExit?: () => void;
   tutorial: { icon: React.ReactNode; label: string }[];
   scoring: string;
+  /** Controls guide shown before the game starts (fades away at GO). */
+  guide?: GameGuide;
   /** Pointer handlers for the play surface (from useSwipe). */
   surface: React.HTMLAttributes<HTMLDivElement>;
   /** Hint shown at the bottom for the first seconds of play. */
@@ -156,9 +225,11 @@ interface GameShellProps {
 }
 
 export default function GameShell(props: GameShellProps) {
-  const { title, accent, hostRef, popupsRef, phase, onStart, score, timeLeft, roundSeconds, chips, clutch, rival, match, onExit, tutorial, scoring, surface, hint, children } = props;
+  const { title, accent, hostRef, popupsRef, phase, onStart, score, timeLeft, roundSeconds, chips, clutch, rival, match, onExit, tutorial, scoring, surface, hint, children, guide } = props;
   const [count, setCount] = useState<number | 'GO' | null>(null);
   const [showHint, setShowHint] = useState(false);
+  // Controls reminder during the countdown: 'on' → 'fading' at GO → 'off'.
+  const [reminder, setReminder] = useState<'on' | 'fading' | 'off'>('off');
   const muted = useMuted();
   const extras = useContext(MatchExtrasContext);
   const extrasRef = useLatest(extras);
@@ -172,6 +243,7 @@ export default function GameShell(props: GameShellProps) {
     // Re-enter full screen if the player left it (Android back gesture, notification shade…).
     enterGameFullscreen();
     sound.unlock();
+    setReminder('on');
     const steps: (number | 'GO')[] = [3, 2, 1, 'GO'];
     steps.forEach((v, i) => {
       timers.current.push(
@@ -183,6 +255,8 @@ export default function GameShell(props: GameShellProps) {
             onStart();
             extrasRef.current?.onStarted?.();
             setShowHint(true);
+            setReminder('fading');
+            timers.current.push(setTimeout(() => setReminder('off'), 750));
             timers.current.push(setTimeout(() => setCount(null), 550));
             timers.current.push(setTimeout(() => setShowHint(false), 4500));
           } else {
@@ -311,6 +385,20 @@ export default function GameShell(props: GameShellProps) {
         </div>
       )}
 
+      {/* Controls reminder during 3-2-1, fading away as the game starts */}
+      {guide && reminder !== 'off' && (
+        <div
+          className={`absolute inset-x-0 bottom-0 z-30 px-4 pb-[max(env(safe-area-inset-bottom),20px)] pointer-events-none transition-all duration-700 ease-out ${reminder === 'fading' ? 'opacity-0 translate-y-6' : 'opacity-100'}`}
+          data-testid="controls-reminder"
+          data-state={reminder}
+        >
+          <div className="mx-auto max-w-sm rounded-3xl bg-black/60 backdrop-blur border border-white/10 p-3">
+            <div className="text-[10px] font-black tracking-[0.25em] text-white/60 text-center mb-2">GET READY</div>
+            <ControlsRow guide={guide} accent={accent} />
+          </div>
+        </div>
+      )}
+
       {/* Countdown */}
       {count !== null && (
         <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none" data-testid="countdown">
@@ -368,6 +456,28 @@ export default function GameShell(props: GameShellProps) {
               </div>
             )}
 
+            {guide ? (
+              <div className="mb-4 space-y-3" data-testid="game-guide">
+                <div className="text-[10px] font-black tracking-[0.25em] text-white/50 text-center">HOW TO PLAY</div>
+                <ControlsRow guide={guide} accent={accent} />
+                <p className="text-sm font-bold text-white text-center leading-snug" data-testid="guide-goal">
+                  🎯 {guide.goal}
+                </p>
+                <div className="flex flex-wrap justify-center gap-1.5" data-testid="guide-points">
+                  {guide.points.map((pt) => (
+                    <span key={pt.label} className={`px-2 py-1 rounded-lg text-[11px] font-black ${TONE[pt.tone ?? 'base']}`}>
+                      {pt.label} <span className="tabular-nums">{pt.value}</span>
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[11px] text-white/55 text-center">⏱ {guide.ends}</p>
+                <details className="text-[11px] text-white/45 text-center">
+                  <summary className="cursor-pointer select-none text-white/60 font-bold">Full rules</summary>
+                  <p className="mt-1 leading-snug">{scoring}</p>
+                </details>
+              </div>
+            ) : (
+            <>
             <div className="grid grid-cols-3 gap-2 mb-3">
               {tutorial.map((t, i) => (
                 <div key={i} className="flex flex-col items-center gap-1 rounded-xl bg-white/5 border border-white/10 py-2.5 px-1 text-center">
@@ -379,6 +489,8 @@ export default function GameShell(props: GameShellProps) {
               ))}
             </div>
             <p className="text-[11px] text-white/50 text-center mb-4 leading-snug">{scoring}</p>
+            </>
+            )}
             {iosTip && (
               <p className="text-[10px] text-cyan-200/80 text-center -mt-2 mb-3" data-testid="ios-fullscreen-tip">
                 Full screen on iPhone: tap Share → Add to Home Screen

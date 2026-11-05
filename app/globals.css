@@ -319,3 +319,122 @@ canvas {
     width: 88%;
   }
 }
+
+/* ---------------------------------------------------------------- controls guide gestures */
+.ra-finger {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+.ra-finger-dot {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 12px var(--accent);
+}
+.ra-finger-trail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4px;
+  height: 0;
+  margin-left: -2px;
+  border-radius: 4px;
+  background: linear-gradient(to top, transparent, var(--accent));
+  opacity: 0;
+}
+.ra-g-tap .ra-finger-dot { animation: ra-g-tap 1.2s ease-in-out infinite; }
+.ra-g-tap .ra-finger-trail { display: none; }
+@keyframes ra-g-tap {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  35% { transform: scale(0.7); opacity: 1; box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 25%, transparent), 0 0 14px var(--accent); }
+  60% { transform: scale(1.05); }
+}
+.ra-g-flick-up, .ra-g-swipe-up { animation: ra-g-up 1.4s cubic-bezier(0.5, 0, 0.2, 1) infinite; }
+.ra-g-flick-up .ra-finger-trail, .ra-g-swipe-up .ra-finger-trail { animation: ra-g-trail-up 1.4s ease-out infinite; }
+@keyframes ra-g-up {
+  0%, 20% { transform: translateY(16px); opacity: 0; }
+  30% { opacity: 1; }
+  60% { transform: translateY(-16px); opacity: 1; }
+  80%, 100% { transform: translateY(-16px); opacity: 0; }
+}
+@keyframes ra-g-trail-up {
+  0%, 30% { height: 0; opacity: 0; }
+  60% { height: 22px; opacity: 0.9; }
+  100% { height: 22px; opacity: 0; }
+}
+.ra-g-swipe-down { animation: ra-g-down 1.4s cubic-bezier(0.5, 0, 0.2, 1) infinite; }
+.ra-g-swipe-down .ra-finger-trail { display: none; }
+@keyframes ra-g-down {
+  0%, 20% { transform: translateY(-16px); opacity: 0; }
+  30% { opacity: 1; }
+  60% { transform: translateY(16px); opacity: 1; }
+  80%, 100% { transform: translateY(16px); opacity: 0; }
+}
+.ra-g-swipe-x { animation: ra-g-x 1.8s ease-in-out infinite; }
+.ra-g-swipe-x .ra-finger-trail { display: none; }
+@keyframes ra-g-x {
+  0%, 100% { transform: translateX(-15px); }
+  50% { transform: translateX(15px); }
+}
+.ra-g-drag { animation: ra-g-drag 2.2s ease-in-out infinite; }
+.ra-g-drag .ra-finger-trail { display: none; }
+@keyframes ra-g-drag {
+  0% { transform: translate(0, 14px) scale(1); opacity: 0; }
+  12% { opacity: 1; transform: translate(0, 14px) scale(0.8); }
+  45% { transform: translate(-12px, -8px) scale(0.8); }
+  75% { transform: translate(12px, -10px) scale(0.8); }
+  100% { transform: translate(12px, -10px) scale(0.8); opacity: 0; }
+}
+.ra-g-release { animation: ra-g-release 1.6s ease-in-out infinite; }
+.ra-g-release .ra-finger-trail { animation: ra-g-trail-up 1.6s ease-out infinite; animation-delay: 0.2s; }
+@keyframes ra-g-release {
+  0%, 40% { transform: translateY(10px) scale(0.8); opacity: 1; }
+  55% { transform: translateY(10px) scale(1.25); opacity: 0.6; }
+  70%, 100% { transform: translateY(10px) scale(1.5); opacity: 0; }
+}
+.ra-g-slash { animation: ra-g-slash 1.4s cubic-bezier(0.5, 0, 0.2, 1) infinite; }
+.ra-g-slash .ra-finger-trail { display: none; }
+@keyframes ra-g-slash {
+  0%, 15% { transform: translate(-16px, 14px); opacity: 0; }
+  25% { opacity: 1; }
+  60% { transform: translate(16px, -14px); opacity: 1; }
+  75%, 100% { transform: translate(16px, -14px); opacity: 0; }
+}
+.ra-g-swap { animation: ra-g-x-swap 1.8s ease-in-out infinite; }
+.ra-g-swap .ra-finger-dot { width: 12px; height: 12px; margin: -6px 0 0 -6px; }
+.ra-g-swap .ra-finger-trail { display: none; }
+@keyframes ra-g-x-swap {
+  0%, 15% { transform: translate(-12px, 0); opacity: 0; }
+  25% { opacity: 1; }
+  55% { transform: translate(12px, 0); opacity: 1; }
+  70%, 100% { transform: translate(12px, 0); opacity: 0; }
+}
+.ra-g-gemA { animation: ra-g-gemA 1.8s ease-in-out infinite; }
+.ra-g-gemB { animation: ra-g-gemB 1.8s ease-in-out infinite; }
+@keyframes ra-g-gemA { 0%, 25% { transform: translateX(0); } 55%, 85% { transform: translateX(22px); } 100% { transform: translateX(0); } }
+@keyframes ra-g-gemB { 0%, 25% { transform: translateX(0); } 55%, 85% { transform: translateX(-22px); } 100% { transform: translateX(0); } }
+.ra-g-timing { animation: ra-g-tap-late 1.6s ease-in-out infinite; }
+.ra-g-timing .ra-finger-trail { display: none; }
+.ra-g-timing .ra-finger-dot { width: 12px; height: 12px; margin: -6px 0 0 -6px; }
+@keyframes ra-g-tap-late {
+  0%, 55% { transform: scale(1); opacity: 0.4; }
+  65% { transform: scale(0.6); opacity: 1; }
+  85%, 100% { transform: scale(1); opacity: 0.4; }
+}
+.ra-g-ring { animation: ra-g-ring 1.6s ease-in-out infinite; }
+@keyframes ra-g-ring {
+  0% { transform: scale(1.6); opacity: 0.3; }
+  60% { transform: scale(1); opacity: 1; box-shadow: 0 0 14px currentColor; }
+  100% { transform: scale(0.8); opacity: 0; }
+}
+.ra-g-chain { animation: ra-g-chain 1.5s ease-in-out infinite; opacity: 0.25; }
+@keyframes ra-g-chain { 30% { opacity: 1; transform: scaleX(1.2); } 60% { opacity: 0.25; transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .ra-finger, .ra-finger *, .ra-g-ring, .ra-g-chain, .ra-g-gemA, .ra-g-gemB { animation: none !important; opacity: 1; }
+}

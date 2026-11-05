@@ -1308,6 +1308,23 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       onExit={onExit}
       surface={surface}
       hint="Drag to aim down the lane · release to fire"
+      guide={{
+        goal: 'Break bricks and keep the wall from reaching the red line.',
+        controls: [
+          { gesture: 'drag', label: 'Drag to aim — dots show the path' },
+          { gesture: 'release', label: 'Let go to fire the volley' },
+          { gesture: 'tap', label: 'Tap to fast-forward' },
+        ],
+        points: [
+          { label: 'Brick', value: '1' },
+          { label: 'Row survived', value: '1' },
+          { label: 'Tough brick / star', value: '3', tone: 'gold' },
+          { label: 'Power-up', value: '+1', tone: 'bonus' },
+          { label: 'Board clear', value: '5', tone: 'jackpot' },
+          { label: '5 breaks a volley', value: '×2', tone: 'fire' },
+        ],
+        ends: 'Endless · Easy → Challenging → Hard → Extreme · shot clock fires for you',
+      }}
       tutorial={[
         { icon: <Crosshair className="w-6 h-6" />, label: 'Drag to aim' },
         { icon: <Hand className="w-6 h-6" />, label: 'Release to fire' },

@@ -793,6 +793,22 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       onExit={onExit}
       surface={surface}
       hint="Flick UP from the ball to shoot"
+      guide={{
+        goal: 'Sink as many baskets as you can before the clock runs out.',
+        controls: [
+          { gesture: 'flick-up', label: 'Flick up from the ball to shoot' },
+          { gesture: 'drag', label: 'Hold & drag to see the arc' },
+          { gesture: 'swipe-x', label: 'Angle your flick to aim' },
+        ],
+        points: [
+          { label: 'Basket', value: '1' },
+          { label: 'Swish / bank', value: '+1', tone: 'bonus' },
+          { label: 'Gold ball', value: '3', tone: 'gold' },
+          { label: '5 in a row', value: '×2', tone: 'fire' },
+          { label: 'Last 10s', value: '×2', tone: 'clutch' },
+        ],
+        ends: '60-second round · the hoop starts moving as you score',
+      }}
       tutorial={[
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Flick up to shoot' },
         { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Lean to aim' },

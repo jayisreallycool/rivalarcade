@@ -33,6 +33,18 @@ export default function TournamentView() {
   const selected = cups.find((c) => c.id === selectedId) ?? cups[0];
   const fmt = (c: Cup, n: number) => (c.currency === 'usd' ? usd(n) : `${n.toLocaleString()}`);
 
+  if (userState.guest) {
+    return (
+      <div className="w-full max-w-3xl mx-auto p-4" data-testid="cups-guest">
+        <div className="rounded-2xl bg-gradient-to-r from-[#181a29] to-[#12131d] border border-[#242738] p-6 text-center">
+          <Trophy className="w-8 h-8 text-amber-400 mx-auto mb-2" />
+          <h3 className="text-white font-black text-lg">Cups are coming soon</h3>
+          <p className="text-sm text-slate-400 mt-1">Cups are played against every real player on the same seed, so they open when sign-in goes live. Sharpen up in practice until then.</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!loaded && cups.length === 0) {
     return (
       <div className="flex justify-center py-16" data-testid="cups-loading">

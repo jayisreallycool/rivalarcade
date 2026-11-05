@@ -5,7 +5,7 @@ import confetti from 'canvas-confetti';
 import type { AvatarConfig } from '@/lib/avatar-types';
 import type { MatchMode, RunStats } from '@/lib/game-types';
 import { userStore, usd, timeLeft, useUserStore, type ServerMatch } from '@/lib/user-store';
-import { TEST_AUTH } from '@/lib/client/auth';
+import { LIVE_SYNC, TEST_AUTH } from '@/lib/client/auth';
 import { findItem } from '@/lib/cosmetics-catalog';
 import AvatarView from '@/components/avatar/AvatarView';
 import { sound } from '@/lib/sound';
@@ -31,7 +31,7 @@ function useMatch(contestId: string | null) {
     };
     void poll();
     const t = setInterval(poll, TEST_AUTH ? 1500 : 8000);
-    if (!TEST_AUTH) {
+    if (LIVE_SYNC) {
       void (async () => {
         const { getApps } = await import('firebase/app');
         const { getFirestore, doc, onSnapshot } = await import('firebase/firestore');

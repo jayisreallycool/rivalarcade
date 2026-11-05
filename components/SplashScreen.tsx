@@ -10,7 +10,7 @@ import { useEffect } from 'react';
  */
 
 const TIPS = [
-  'Every basket, gem, brick and vine is worth 1 point.',
+  'Every basket, gem, brick and branch is worth 1 point.',
   'Gold items are worth 3 — jackpots are worth 5.',
   '5 in a row sets you ON FIRE: points ×2.',
   'The last 10 seconds are CLUTCH time: points ×2.',

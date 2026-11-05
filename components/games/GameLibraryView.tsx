@@ -99,6 +99,11 @@ export default function GameLibraryView() {
 
   return (
     <div className="w-full max-w-5xl mx-auto pb-6" data-testid="lobby">
+      {userState.guest && (
+        <div className="mx-4 mb-3 rounded-2xl bg-cyan-500/10 ring-1 ring-cyan-400/25 px-4 py-3 text-[12px] text-cyan-100" data-testid="guest-banner">
+          <span className="font-black">Guest mode</span> — play every game in practice, earn coins and unlock gear. Progress is saved on this device. 1v1s, arenas and cups against real players open when sign-in goes live.
+        </div>
+      )}
       {/* Category chips */}
       <div className="sticky top-16 z-30 -mt-1 pb-3 pt-1 bg-gradient-to-b from-[#0b0b10]/0 via-[#0b0b10]/0 to-transparent">
         <div className="flex gap-2 overflow-x-auto px-4 py-1 no-scrollbar" role="tablist" aria-label="Game categories">
@@ -241,7 +246,7 @@ export default function GameLibraryView() {
               <div className="space-y-2">
                 {MODES.map((m) => {
                   const stake = m.paid ? entry : 0;
-                  const locked = m.paid && (stake > balance || (currency === 'usd' && !!cashBlock));
+                  const locked = m.paid && (userState.guest || stake > balance || (currency === 'usd' && !!cashBlock));
                   return (
                     <button
                       key={m.mode}
@@ -258,7 +263,7 @@ export default function GameLibraryView() {
                           <span className="text-base font-black text-white">{m.title}</span>
                           {m.paid && <span className={`px-1.5 py-0.5 rounded bg-black/40 text-[10px] font-black ${currency === 'usd' ? 'text-emerald-300' : 'text-amber-300'}`}>{stake === 0 ? 'FREE' : `${fmt(stake)} ENTRY`}</span>}
                         </span>
-                        <span className="block text-[11px] text-white/55 leading-snug">{m.desc}</span>
+                        <span className="block text-[11px] text-white/55 leading-snug">{m.paid && userState.guest ? 'Real-player matches unlock when sign-in goes live.' : m.desc}</span>
                         <span className="block text-[11px] font-bold mt-0.5" style={{ color: m.color }}>
                           {m.paid ? m.prize(stake, fmt) : m.prize(0, fmt)}
                         </span>

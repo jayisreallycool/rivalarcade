@@ -350,9 +350,11 @@ export default function ProfileView() {
           <div className="flex items-center justify-between pt-4 border-t border-[#1e202f]">
             <div>
               <span className="text-sm font-bold text-white block">Account</span>
-              <span className="text-[11px] text-slate-500">Signed in with {userState.account.phone ?? 'your phone'}. Your progress is saved to your account.</span>
+              <span className="text-[11px] text-slate-500">{userState.guest ? 'Guest mode — progress is saved on this device only.' : `Signed in with ${userState.account.phone ?? 'your phone'}. Your progress is saved to your account.`}</span>
             </div>
-            {confirmReset ? (
+            {userState.guest ? (
+              <span className="text-[11px] font-bold text-cyan-300" data-testid="guest-account">Guest</span>
+            ) : confirmReset ? (
               <div className="flex items-center gap-2">
                 <button onClick={() => userStore.signOut()} className="px-3 py-1.5 bg-rose-500 text-white font-bold text-xs rounded-lg" data-testid="confirm-signout">
                   Sign out

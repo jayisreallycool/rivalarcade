@@ -11,7 +11,7 @@ import { GAME_NAMES, type GameId, type MatchMode } from './game-types';
 import { itemsOn, withItem } from './avatar-slots';
 import type { DailyQuest } from './quests';
 import { SEASON_TIERS, type SeasonTierReward } from './season';
-import { TEST_AUTH, authConfigured, deviceHash, onSession, signOut, type Session } from './client/auth';
+import { GUEST, LIVE_SYNC, TEST_AUTH, authConfigured, deviceHash, onSession, signOut, type Session } from './client/auth';
 
 export { SEASON_TIERS };
 export type { SeasonTierReward, DailyQuest };
@@ -96,6 +96,8 @@ export interface ServerMatch {
 
 export interface UserState {
   phase: Phase;
+  /** Playing without an account (progress on this device; no real-player matches). */
+  guest: boolean;
   error: string | null;
   session: { uid: string; phone: string | null; provider: Session['provider'] } | null;
   username: string;
@@ -130,6 +132,7 @@ const DEFAULTS = COSMETICS_CATALOG.filter((c) => c.isUnlockedDefault).map((c) =>
 function emptyState(phase: Phase): UserState {
   return {
     phase,
+    guest: GUEST,
     error: null,
     session: null,
     username: '',
@@ -194,6 +197,7 @@ export function errorText(e: unknown): string {
     phone_in_use: 'This phone number already has an account.',
     voip_not_allowed: 'Internet / VoIP and toll-free numbers can’t be used. Use your mobile number.',
     server_not_configured: 'The game server isn’t set up yet.',
+    signin_required: 'Matches against real players need an account — sign-in is coming soon.',
     network: 'Can’t reach the server. Check your connection.',
     payout_failed: 'The payout failed and your balance was returned.',
   };
@@ -294,6 +298,12 @@ class UserStore {
   /** Call the game server. */
   async call<T = Record<string, unknown>>(fn: string, args: Record<string, unknown> = {}): Promise<T> {
     if (!this.session) throw new ApiError('signed_out', 401);
+    if (GUEST) {
+      const { guestCall } = await import('./client/guest');
+      const r = await guestCall(this.session.uid, fn, args);
+      if (!r.ok) throw new ApiError(r.code, r.status);
+      return r.data as T;
+    }
     const token = await this.session.token();
     let res: Response;
     try {
@@ -355,7 +365,7 @@ class UserStore {
   }
 
   private async sendDevice() {
-    if (!this.session || this.deviceSent === this.session.uid) return;
+    if (GUEST || !this.session || this.deviceSent === this.session.uid) return;
     this.deviceSent = this.session.uid;
     try {
       await this.call('registerDevice', { hash: await deviceHash() });
@@ -366,7 +376,7 @@ class UserStore {
 
   /** Live wallet updates from Firestore (prizes landing while you're in the app). */
   private watch() {
-    if (this.unwatch || TEST_AUTH || !this.session) return;
+    if (this.unwatch || !LIVE_SYNC || !this.session) return;
     const uid = this.session.uid;
     let off = () => {};
     let dead = false;

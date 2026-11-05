@@ -13,7 +13,7 @@ export interface Session {
   phone: string | null;
   email: string | null;
   name: string | null;
-  provider: 'phone' | 'google' | 'test';
+  provider: 'phone' | 'google' | 'test' | 'guest';
   token: (refresh?: boolean) => Promise<string>;
 }
 
@@ -25,7 +25,29 @@ export const firebaseClientConfig = {
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
-export const authConfigured = () => TEST_AUTH || !!(firebaseClientConfig.apiKey && firebaseClientConfig.projectId);
+const firebaseReady = !!(firebaseClientConfig.apiKey && firebaseClientConfig.projectId);
+/**
+ * Guest mode (no sign-in): on when NEXT_PUBLIC_GUEST_MODE=1, or automatically while Firebase isn't
+ * set up yet. The game runs on this device with local progress; real-player matches need sign-in.
+ */
+export const GUEST = !TEST_AUTH && (process.env.NEXT_PUBLIC_GUEST_MODE === '1' || !firebaseReady);
+/** Live sync (Firestore listeners) only with real accounts. */
+export const LIVE_SYNC = !TEST_AUTH && !GUEST;
+export const authConfigured = () => true;
+
+function guestSession(): Session {
+  let id = '';
+  try {
+    id = localStorage.getItem('ra_guest_id') ?? '';
+    if (!id) {
+      id = `guest${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      localStorage.setItem('ra_guest_id', id);
+    }
+  } catch {
+    id = 'guestlocal';
+  }
+  return { uid: id, phone: null, email: null, name: null, provider: 'guest', token: async () => 'guest' };
+}
 
 /** Friendly messages for the errors players can actually hit. */
 export function authMessage(e: unknown): string {
@@ -108,6 +130,10 @@ const testPending = { phone: '', link: false };
 // ------------------------------------------------------------------------------- API
 
 export function onSession(cb: (s: Session | null) => void): () => void {
+  if (GUEST) {
+    cb(guestSession());
+    return () => {};
+  }
   if (TEST_AUTH) {
     testListeners.add(cb);
     cb(testSession());

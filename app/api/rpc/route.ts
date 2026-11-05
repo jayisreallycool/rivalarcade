@@ -1,18 +1,10 @@
-import { AppError, CONFIG, type ContestKind, type Currency } from '@/lib/server/engine';
+import { AppError, CONFIG } from '@/lib/server/engine';
+import { gameDispatch, int, str } from '@/lib/server/dispatch';
 import { caller, cashMode, clock, engine, errorResponse, geo, json, siteOrigin, stripe, testBackend, vetPhone } from '@/lib/server/backend';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const int = (v: unknown, name = 'value') => {
-  const n = Number(v);
-  if (!Number.isInteger(n)) throw new AppError(`bad_${name}`);
-  return n;
-};
-const str = (v: unknown, name = 'value', max = 200) => {
-  if (typeof v !== 'string' || !v || v.length > max) throw new AppError(`bad_${name}`);
-  return v;
-};
 
 /**
  * Single endpoint for everything the app does. Every call is authenticated with the player's
@@ -56,56 +48,11 @@ export async function POST(req: Request) {
           vipCost: CONFIG.vipCost,
         });
       }
-      case 'completeProfile':
-        await eng.completeProfile(uid, str(args.username, 'username', 16), str(args.dob, 'dob', 10), args.avatar);
-        return json({ ok: true });
-      case 'setUsername':
-        await eng.setUsername(uid, str(args.username, 'username', 16));
-        return json({ ok: true });
-      case 'saveAvatar':
-        await eng.saveAvatar(uid, args.avatar);
-        return json({ ok: true });
-      case 'buyItem':
-        return json({ coins: await eng.buyItem(uid, str(args.itemId, 'item', 64)) });
-      case 'registerDevice':
-        return json({ n: await eng.registerDevice(uid, str(args.hash, 'device', 128)) });
-      case 'setLimits':
-        await eng.setLimits(uid, args.dailyDepositCents == null ? null : int(args.dailyDepositCents, 'limit'), int(args.selfExcludeDays ?? 0, 'days'));
-        return json({ ok: true });
-
-      case 'startPractice':
-        return json(await eng.startPractice(uid, str(args.gameId, 'game', 32)));
-      case 'submitPractice':
-        return json(await eng.submitPractice(uid, str(args.runToken, 'run', 64), int(args.score, 'score'), args.stats));
-      case 'joinContest': {
-        const currency = (args.currency === 'usd' ? 'usd' : 'coins') as Currency;
-        return json(await eng.joinContest(uid, str(args.kind, 'kind', 8) as ContestKind, str(args.gameId, 'game', 32), currency, int(args.entry, 'entry'), cashOpts));
+      default: {
+        const out = await gameDispatch(eng, uid, fn, args, cashOpts);
+        if (out !== undefined) return json(out);
+        break;
       }
-      case 'joinCup':
-        await eng.joinCup(uid, str(args.contestId, 'contest', 80), cashOpts);
-        return json({ ok: true });
-      case 'startContestRun':
-        return json(await eng.startContestRun(uid, str(args.contestId, 'contest', 80)));
-      case 'submitContestScore':
-        return json(await eng.submitContestScore(uid, str(args.runToken, 'run', 64), int(args.score, 'score'), args.stats));
-      case 'match':
-        return json({ match: await eng.match(uid, str(args.id, 'id', 80)) });
-      case 'history':
-        return json({ matches: await eng.history(uid) });
-      case 'ledger':
-        return json({ rows: await eng.ledger(uid) });
-      case 'leaderboard':
-        return json({ rows: await eng.leaderboard() });
-      case 'cups':
-        return json({ cups: await eng.cups(uid) });
-      case 'claimQuest':
-        return json(await eng.claimQuest(uid, str(args.questId, 'quest', 40)));
-      case 'claimSeason':
-        return json(await eng.claimSeason(uid, int(args.tier, 'tier'), !!args.vip));
-      case 'activateVip':
-        await eng.activateVip(uid);
-        return json({ ok: true });
-
       // ------------------------------------------------------------- cash (Stripe)
       case 'deposit': {
         const s = stripe();
@@ -193,9 +140,8 @@ export async function POST(req: Request) {
         }
         return json({ ok: true });
       }
-      default:
-        throw new AppError('unknown_fn', 404);
     }
+    throw new AppError('unknown_fn', 404);
   } catch (e) {
     return errorResponse(e);
   }

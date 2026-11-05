@@ -9,7 +9,10 @@ const OUT = 'tests/artifacts/swing';
   const p = await (await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage();
   const errs = [];
   p.on('pageerror', (e) => errs.push(e.message));
-  await login(p, URL);
+  await p.goto(URL);
+  await p.waitForSelector('[data-testid=lobby], [data-testid=phone-input]', { timeout: 30000 });
+  if (await p.locator('[data-testid=phone-input]').count()) await login(p, URL);
+  await p.waitForTimeout(1500);
   await p.click('[data-testid=tile-canopy-swing]');
   await p.click('[data-testid=mode-practice]');
   await p.waitForSelector('text=TAP TO PLAY', { timeout: 30000 });
@@ -24,7 +27,7 @@ const OUT = 'tests/artifacts/swing';
     const st = await p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.dataset.shot);
     const stage = await p.locator('[data-testid=swing-stage]').innerText().catch(() => '');
     if (!seen.has(stage)) { seen.add(stage); await p.screenshot({ path: `${OUT}/stage-${stage}.png` }); }
-    if ((st === 'perfect' || (st === 'range' && Math.random() > greedy)) && Date.now() - lastShot > 250) {
+    if ((st === 'release' || st === 'perfect' || (st === 'range' && Math.random() > greedy)) && Date.now() - lastShot > 250) {
       await p.mouse.click(195, 500);
       shots++; lastShot = Date.now();
       if (shots === 3) await p.screenshot({ path: `${OUT}/1-shot.png` });

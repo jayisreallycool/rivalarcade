@@ -9,17 +9,19 @@ import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
 import { FIRE_STREAK, PTS, award, popStyle, ScoreBook, onFire } from '@/lib/scoring';
-import { Anchor, Body, FIRST_ANCHOR, HOOK_SPEED, MIN_ROPE, RELOAD_S, Rope, STAGES, WATER_Y, anchorPos, nextAnchor, stageAt, step } from '@/lib/grapple-physics';
+import { AIM_DIR, Anchor, Body, FIRST_ANCHOR, HOOK_SPEED, MIN_ROPE, RELOAD_S, Rope, STAGES, WATER_Y, anchorPos, hookHit, isPerfect, nextAnchor, releaseWorks, stageAt, step } from '@/lib/grapple-physics';
 import GameShell, { PopupApi, useSwipe } from './GameShell';
 import { Pointer, Crosshair, Timer } from 'lucide-react';
 
 /**
  * CANOPY SWING — side-on hook-gun swinging through a jungle canopy above a river.
- * Tap to let go and fire your hook gun at the next branch. If it's in rope range the hook bites
- * and you swing on; if not, it misses and reloads while you fall. Ropes fray, so keep moving.
+ * Tap to let go and fire your hook gun. It always fires at the same angle (up and forward) — no
+ * auto-aim — so you have to time the shot for when that line crosses the next hanging vine. Hit
+ * the vine and you swing from where the hook bit; miss and it reloads while you fall. Ropes fray,
+ * so keep moving. The aim laser fades stage by stage; in CRAZY you aim by feel.
  * Four stages — SLOW → MIDDLE → FINAL → CRAZY — so every run ends; one splash and you're out.
  *
- * Scoring (shared rules): 1 per branch · perfect shot (from the gold band) +1 · gold branch 3 ·
+ * Scoring (shared rules): 1 per vine · perfect shot (glowing middle of the vine) +1 · gold vine 3 ·
  * banana 1 · golden idol 3 · sunstone 5 · 5 perfect shots in a row = ON FIRE ×2.
  */
 
@@ -284,32 +286,26 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       const sightMat = engine.own(new THREE.MeshBasicMaterial({ color: 0xff5a5a, transparent: true, opacity: 0.55, toneMapped: false, depthWrite: false }));
       const sight = new THREE.Mesh(unitCyl, sightMat);
       scene.add(sight);
-      // range ring + PERFECT band around the target, and the fray timer round the current anchor
-      const rangeMat = engine.own(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
-      const bandMat = engine.own(new THREE.MeshBasicMaterial({ color: 0xfde047, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
+      // fray timer round the branch you hang from
       const frayMat = engine.own(new THREE.MeshBasicMaterial({ color: 0x86efac, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
-      let rangeRing = new THREE.Mesh(new THREE.RingGeometry(1, 1.05, 96), rangeMat);
-      let band = new THREE.Mesh(new THREE.RingGeometry(1, 2, 96), bandMat);
       const frayGeo = new THREE.RingGeometry(0.42, 0.56, 48, 1, Math.PI / 2, Math.PI * 2);
       const fray = new THREE.Mesh(frayGeo, frayMat);
-      for (const m of [rangeRing, band, fray]) {
-        m.rotation.y = Math.PI / 2;
-        scene.add(m);
-      }
-      let ringFor = { range: 0, s0: 0, s1: 0 };
-      const rebuildRings = (range: number, s0: number, s1: number) => {
-        if (Math.abs(range - ringFor.range) < 0.04 && s0 === ringFor.s0) return;
-        ringFor = { range, s0, s1 };
-        rangeRing.geometry.dispose();
-        band.geometry.dispose();
-        rangeRing.geometry = new THREE.RingGeometry(range - 0.06, range, 128);
-        band.geometry = new THREE.RingGeometry(s0, s1, 96);
-      };
+      fray.rotation.y = Math.PI / 2;
+      scene.add(fray);
+      // vines: the targets. The middle third glows on the vine you're aiming for (PERFECT zone).
+      const bandMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfde047).multiplyScalar(1.6), transparent: true, opacity: 0.85, toneMapped: false }));
+      const bandGeo = engine.own(new THREE.CylinderGeometry(0.075, 0.075, 1, 8));
+      const targetVineMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x9be15d, roughness: 0.7, emissive: 0x4ade80, emissiveIntensity: 0.55 }));
+      const goldVineMat = engine.own(new THREE.MeshStandardMaterial({ color: 0xffc83a, roughness: 0.4, metalness: 0.6, emissive: 0xffa600, emissiveIntensity: 0.5 }));
+      const vineLeafMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.7, side: THREE.DoubleSide }));
+      const vineLeafGeo = engine.own(new THREE.PlaneGeometry(0.26, 0.14));
+      const targetVineGeo = engine.own(new THREE.CylinderGeometry(0.05, 0.06, 1, 6));
+      targetVineGeo.translate(0, -0.5, 0);
 
       // ---------------- course
       let rng = mulberry32(1);
       let anchors: Anchor[] = [];
-      const objs: { tree: THREE.Group; ring: THREE.Mesh; ringHolder: THREE.Group }[] = [];
+      const objs: { tree: THREE.Group; ring: THREE.Mesh; ringHolder: THREE.Group; vine: THREE.Mesh; band: THREE.Mesh; len: number }[] = [];
       let fruit: Fruit[] = [];
       let t = 0;
 
@@ -344,6 +340,23 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         ring.rotation.y = Math.PI / 2;
         ringHolder.add(ring);
         ringHolder.position.set(0, a.y0, -a.f);
+        // the vine you hook: hangs from the ring, shorter every stage
+        const len = stageAt(i).vine;
+        const vine = new THREE.Mesh(targetVineGeo, a.gold ? goldVineMat : vineMat);
+        vine.scale.y = len;
+        vine.castShadow = quality.shadows;
+        ringHolder.add(vine);
+        for (let k = 0; k < 4; k++) {
+          const lf = new THREE.Mesh(vineLeafGeo, vineLeafMat);
+          lf.position.set(0.06 * (k % 2 ? 1 : -1), -len * (0.12 + k * 0.24), 0);
+          lf.rotation.set(0.4, k * 1.3 + Math.PI / 2, 0.6 * (k % 2 ? 1 : -1));
+          ringHolder.add(lf);
+        }
+        const band = new THREE.Mesh(bandGeo, bandMat);
+        band.scale.y = len * 0.34;
+        band.position.y = -len * 0.5;
+        band.visible = false;
+        ringHolder.add(band);
         // bobbing anchors hang from a little branch stub that moves with them
         if (a.bob > 0) {
           const stub = new THREE.Mesh(hangVineGeo, vineMat);
@@ -353,7 +366,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         } else tree.add(branch);
         tree.add(trunk, crown);
         world.add(tree, ringHolder);
-        objs[i] = { tree, ring, ringHolder };
+        objs[i] = { tree, ring, ringHolder, vine, band, len };
       };
 
       const placeFruit = (from: Anchor, to: Anchor, i: number) => {
@@ -419,6 +432,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       let bestStreak = 0;
       let caught = 0;
       let stageIdx = 0;
+      let frameN = 0;
+      let lastCanRelease = false;
       let book = new ScoreBook();
       const camFocus = new THREE.Vector3(0, 7, -3);
       const tmpV = new THREE.Vector3();
@@ -430,7 +445,12 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         b.f = A.f + L * Math.sin(angle);
         b.y = A.y - L * Math.cos(angle);
         b.vf = b.vy = 0;
-        line = { anchor: i, L, t: 0 };
+        line = { anchor: i, drop: 0, L, t: 0 };
+      };
+      /** The point you swing from: where your hook bit the vine (it bobs with the branch). */
+      const pivotOf = (r: Rope) => {
+        const A = anchorPos(anchors[r.anchor], t);
+        return { f: A.f, y: A.y - r.drop };
       };
 
       const clearWorld = () => {
@@ -473,13 +493,17 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         sound.startMusic(0.25);
       };
 
+      // Two-beat control: tap to LET GO (keep your momentum), tap again in the air to FIRE.
       api.current.tap = () => {
-        if (!playing || flying || reload > 0) return;
+        if (!playing) return;
         if (line) {
-          line = null; // let go…
+          line = null;
           feel.kick(0.12);
+          sound.playSwish();
+          haptic('light');
+          return;
         }
-        // …and fire at the next branch
+        if (flying || reload > 0) return;
         flying = { f: b.f, y: b.y, state: 'out', t: 0 };
         sound.playLaser();
         haptic('light');
@@ -501,19 +525,20 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         setTimeout(() => onFinishRef.current(book.score, { vines: caught, maxCombo: bestStreak, distance: Math.round(b.f), breakdown: book.breakdown() }), 1200);
       };
 
-      const onHook = (i: number, dist: number) => {
+      const onHook = (i: number, dist: number, drop: number) => {
         const st = stageAt(i);
         caught += 1;
-        const perfect = shots === 0 && dist >= st.sweet[0] && dist <= st.sweet[1];
+        const perfect = shots === 0 && isPerfect(drop, st.vine);
         streak = perfect ? streak + 1 : 0;
         bestStreak = Math.max(bestStreak, streak);
         const a0 = anchors[i];
         const base = a0.gold ? PTS.gold : PTS.base;
-        const parts: Record<string, number> = { [a0.gold ? 'Gold branches' : 'Branches']: base };
+        const parts: Record<string, number> = { [a0.gold ? 'Gold vines' : 'Vines']: base };
         if (perfect) parts['Perfect shots'] = PTS.bonus;
         const a = award(base + (perfect ? PTS.bonus : 0), { streak });
         book.record(a, parts);
-        const A = anchorPos(a0, t);
+        const A0 = anchorPos(a0, t);
+        const A = { f: A0.f, y: A0.y - drop };
         popAtWorld(A.f, A.y + 0.7, `+${a.total}`, popStyle(a.total, a0.gold ? 'gold' : perfect ? 'bonus' : undefined));
         if (perfect) popAtWorld(A.f, A.y + 1.2, 'PERFECT', { color: '#fde047', size: 'sm' });
         if (streak === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
@@ -529,7 +554,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         haptic(perfect ? 'score' : 'light');
         feel.kick(perfect ? 0.35 : 0.22);
         particles.emit(tmpV.set(0, A.y, -A.f), a0.gold ? 0xffc83a : 0x9be15d, { count: perfect ? 22 : 12, speed: 3, life: 0.6, gravity: 5 });
-        line = { anchor: i, L: Math.max(MIN_ROPE, dist), t: 0 };
+        line = { anchor: i, drop, L: Math.max(MIN_ROPE, dist), t: 0 };
         target = i + 1;
         shots = 0;
         ensureAhead(i);
@@ -562,7 +587,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         const sub = 4;
         const h = dt / sub;
         for (let k = 0; k < sub && !over; k++) {
-          const A = line ? anchorPos(anchors[line.anchor], t) : null;
+          const A = line ? pivotOf(line) : null;
           step(b, line, A, h);
           if (!playing && line) line.t = 0; // menu: never frays
           if (playing) {
@@ -577,29 +602,32 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
               flying.t += h;
               const T = anchorPos(anchors[target], t);
               if (flying.state === 'out') {
-                const df = T.f - flying.f;
-                const dy = T.y - flying.y;
-                const d = Math.hypot(df, dy);
+                // straight out along the gun's fixed angle; bites if it crosses the target vine
                 const stepLen = HOOK_SPEED * h;
-                const dist = Math.hypot(T.f - b.f, T.y - b.y);
-                const travelled = Math.hypot(flying.f - b.f, flying.y - b.y);
-                if (travelled > st.range + 0.3) {
-                  // ran out of rope: miss
-                  flying.state = 'back';
-                  shots += 1;
-                  streak = 0;
-                  popAtWorld(flying.f, flying.y + 0.4, 'MISS', { color: '#fca5a5', size: 'sm' });
-                } else if (d <= stepLen) {
-                  if (dist <= st.range) {
+                const nf = flying.f + AIM_DIR.f * stepLen;
+                const ny = flying.y + AIM_DIR.y * stepLen;
+                const len = objs[target]?.len ?? st.vine;
+                if (nf >= T.f) {
+                  const yAt = flying.y + ((T.f - flying.f) / AIM_DIR.f) * AIM_DIR.y;
+                  const drop = T.y - yAt;
+                  if (drop >= 0.15 && drop <= len) {
+                    const P = { f: T.f, y: yAt };
                     flying = null;
-                    onHook(target, dist);
+                    onHook(target, Math.hypot(P.f - b.f, P.y - b.y), drop);
                   } else {
                     flying.state = 'back';
                     shots += 1;
+                    streak = 0;
+                    popAtWorld(T.f, yAt, 'MISS', { color: '#fca5a5', size: 'sm' });
                   }
+                } else if (Math.hypot(nf - b.f, ny - b.y) > st.range) {
+                  flying.state = 'back';
+                  shots += 1;
+                  streak = 0;
+                  popAtWorld(nf, ny + 0.3, 'TOO FAR', { color: '#fca5a5', size: 'sm' });
                 } else {
-                  flying.f += (df / d) * stepLen;
-                  flying.y += (dy / d) * stepLen;
+                  flying.f = nf;
+                  flying.y = ny;
                 }
               } else {
                 const df = b.f - flying.f;
@@ -644,6 +672,9 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           const isT = i === target && playing;
           o.ring.material = isT ? targetRingMat : anchors[i].gold ? goldRingMat : ringMat;
           o.ring.scale.setScalar(isT ? 1.3 + Math.sin(time * 6) * 0.12 : 1);
+          o.vine.material = anchors[i].gold ? goldVineMat : isT ? targetVineMat : vineMat;
+          o.band.visible = isT;
+          o.vine.rotation.z = 0;
         }
         fruit.forEach((fr, k) => {
           fr.mesh.rotation.y += dt * 2.2;
@@ -654,8 +685,9 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         body.position.set(0, b.y, -b.f);
         me.updateAnimation(time, 'idle', dt);
         const T = anchorPos(anchors[Math.min(target, anchors.length - 1)], t);
-        const aimF = (line ? anchorPos(anchors[line.anchor], t).f : T.f) - b.f;
-        const aimY = (line ? anchorPos(anchors[line.anchor], t).y : T.y) - b.y;
+        const PV = line ? pivotOf(line) : null;
+        const aimF = PV ? PV.f - b.f : AIM_DIR.f;
+        const aimY = PV ? PV.y - b.y : AIM_DIR.y;
         const aim = Math.atan2(aimF, aimY); // 0 = straight up, + = forward
         if (line) {
           body.rotation.x += (aim - body.rotation.x) * Math.min(1, dt * 18);
@@ -681,7 +713,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         // rope + hook
         const hand = tmpA.set(0.18, b.y + 0.3, -b.f);
         if (line) {
-          const A = anchorPos(anchors[line.anchor], t);
+          const A = pivotOf(line);
           rope.visible = true;
           span(rope, hand, tmpB.set(0, A.y, -A.f));
           rope.scale.x = rope.scale.z = 0.028;
@@ -695,34 +727,30 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           rope.scale.x = rope.scale.z = 0.022;
           hook.visible = true;
           hook.position.set(0, flying.y, -flying.f);
-          hook.quaternion.setFromUnitVectors(UP, tmpV.set(0, T.y - flying.y, -(T.f - flying.f)).normalize());
+          hook.quaternion.setFromUnitVectors(UP, tmpV.set(0, AIM_DIR.y, -AIM_DIR.f));
         } else {
           rope.visible = false;
           hook.visible = false;
         }
 
-        // sights: range ring + perfect band round the target, laser to it, fray timer
+        // aim laser along the gun's fixed angle: green when firing now would hit the vine, gold in
+        // the PERFECT zone, red otherwise. It shortens every stage (none in CRAZY).
         const range = st.range;
-        rebuildRings(range, st.sweet[0], st.sweet[1]);
-        const dist = Math.hypot(T.f - b.f, T.y - b.y);
-        const inRange = dist <= range;
-        const inSweet = dist >= st.sweet[0] && dist <= st.sweet[1];
-        const show = playing && !flying;
-        rangeRing.position.set(0, T.y, -T.f);
-        band.position.set(0, T.y, -T.f);
-        rangeMat.color.setHex(inRange ? 0x86efac : 0xffffff);
-        rangeMat.opacity += ((show ? (inRange ? 0.4 : 0.16) : 0) - rangeMat.opacity) * Math.min(1, dt * 10);
-        bandMat.opacity += ((show ? (inSweet ? 0.32 : 0.1) : 0) - bandMat.opacity) * Math.min(1, dt * 10);
-        sight.visible = show && reload <= 0;
+        const vineLen = objs[target]?.len ?? st.vine;
+        const hit = hookHit(b, T, vineLen, range);
+        const inRange = !!hit;
+        const inSweet = !!hit && isPerfect(hit.drop, vineLen);
+        const show = playing && !flying && !line;
+        sight.visible = show && reload <= 0 && st.sight > 0;
         if (sight.visible) {
           const from = tmpA.set(0.2, b.y + 0.3, -b.f);
-          const dir = tmpB.set(0, T.y - b.y, -(T.f - b.f)).normalize().multiplyScalar(Math.min(dist, range));
-          span(sight, from, dir.add(from));
-          sight.scale.x = sight.scale.z = 0.012;
-          sightMat.color.setHex(inSweet && inRange ? 0xfde047 : inRange ? 0x4ade80 : 0xff5a5a).multiplyScalar(1.6);
+          const L = range * st.sight;
+          span(sight, from, tmpB.set(0.2, b.y + 0.3 + AIM_DIR.y * L, -(b.f + AIM_DIR.f * L)));
+          sight.scale.x = sight.scale.z = 0.014;
+          sightMat.color.setHex(inSweet ? 0xfde047 : inRange ? 0x4ade80 : 0xff5a5a).multiplyScalar(1.6);
         }
         if (line && playing) {
-          const A = anchorPos(anchors[line.anchor], t);
+          const A = pivotOf(line);
           const left = 1 - line.t / stageAt(line.anchor).hold;
           fray.visible = true;
           fray.position.set(0.05, A.y, -A.f);
@@ -730,12 +758,14 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           frayMat.color.setHex(left < 0.3 ? 0xf87171 : left < 0.6 ? 0xfacc15 : 0x86efac);
         } else fray.visible = false;
         // (read by automated play-tests)
-        engine.renderer.domElement.dataset.shot = !playing ? 'none' : flying ? 'flying' : inSweet && inRange ? 'perfect' : inRange ? 'range' : 'out';
+        // Would letting go right now work? (drives the early LET GO cue and automated play-tests)
+        const canRelease = playing && !!line && (caught < 2 || frameN++ % 2 === 0 ? (lastCanRelease = releaseWorks(b, anchors[target], vineLen, range, t)) : lastCanRelease);
+        engine.renderer.domElement.dataset.shot = !playing ? 'none' : line ? (canRelease ? 'release' : 'hang') : flying ? 'flying' : inSweet && inRange ? 'perfect' : inRange ? 'range' : 'out';
 
         // first branches: a TAP cue when the shot is perfect
-        if (playing && caught < 2 && line && inSweet && inRange && Math.floor(time * 4) % 4 === 0) {
+        if (playing && caught < 2 && Math.floor(time * 4) % 4 === 0 && ((line && canRelease) || (!line && !flying && inSweet))) {
           const p = engine.toScreen(tmpV.set(0, b.y + 1, -b.f));
-          popups.current?.pop('TAP!', p.x, p.y, { color: '#fde047', size: 'sm' });
+          popups.current?.pop(line ? 'LET GO!' : 'FIRE!', p.x, p.y, { color: '#fde047', size: 'sm' });
         }
 
         // ---- camera: travel runs left → right; keep you ~30% from the left
@@ -770,8 +800,6 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
 
       return () => {
         me.dispose();
-        rangeRing.geometry.dispose();
-        band.geometry.dispose();
         frayGeo.dispose();
         api.current = { tap: () => {}, start: () => {} };
       };
@@ -787,7 +815,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         {stage.name}
       </span>
       <span className="px-2 py-0.5 rounded-full bg-black/50 text-emerald-300 text-[11px] font-black tabular-nums" data-testid="swing-vines">
-        {hud.vines} branches
+        {hud.vines} vines
       </span>
       {hud.streak > 0 && (
         <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${fire ? 'bg-orange-500 text-black' : 'bg-black/50 text-amber-300'}`}>
@@ -812,30 +840,30 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       match={match}
       onExit={onExit}
       surface={surface}
-      hint="Tap to let go and fire your hook at the next branch"
+      hint="Tap to let go · tap again to fire when the line crosses the vine"
       guide={{
-        goal: 'Hook-swing branch to branch across the river. Don’t fall in.',
+        goal: 'Hook-swing vine to vine across the river. Don’t fall in.',
         controls: [
-          { gesture: 'tap', label: 'Tap: let go + fire the hook gun' },
-          { gesture: 'timing', label: 'Fire when the laser is green — gold = PERFECT' },
-          { gesture: 'avoid', label: 'Ropes fray — don’t hang around' },
+          { gesture: 'release', label: 'Tap to let go on the up-swing' },
+          { gesture: 'tap', label: 'Tap again in the air to fire the hook' },
+          { gesture: 'timing', label: 'The gun fires at a fixed angle — time it to cross the vine' },
         ],
         points: [
-          { label: 'Branch', value: '1' },
-          { label: 'Perfect shot', value: '+1', tone: 'bonus' },
-          { label: 'Gold branch', value: '3', tone: 'gold' },
+          { label: 'Vine', value: '1' },
+          { label: 'Hit the glowing middle', value: '+1', tone: 'bonus' },
+          { label: 'Gold vine', value: '3', tone: 'gold' },
           { label: 'Banana', value: '1' },
           { label: 'Idol / Sunstone', value: '3 / 5', tone: 'jackpot' },
           { label: '5 perfect', value: '×2', tone: 'fire' },
         ],
-        ends: 'Slow → Middle → Final → Crazy · one splash ends the run',
+        ends: 'Slow → Middle → Final → Crazy · vines shorten, the aim laser fades · one splash ends it',
       }}
       tutorial={[
-        { icon: <Pointer className="w-6 h-6" />, label: 'Tap to fire the hook' },
-        { icon: <Crosshair className="w-6 h-6" />, label: 'Green laser = in range' },
+        { icon: <Pointer className="w-6 h-6" />, label: 'Tap: let go · tap: fire' },
+        { icon: <Crosshair className="w-6 h-6" />, label: 'Fire when the line meets the vine' },
         { icon: <Timer className="w-6 h-6" />, label: 'Ropes fray — keep moving' },
       ]}
-      scoring="One splash ends the run. 1 point per branch hooked · perfect shot from the gold band +1 · gold branch 3 · banana 1 · golden idol 3 · sunstone 5 · 5 perfect shots in a row = ON FIRE ×2. Four stages — Slow, Middle, Final, Crazy: gaps widen, ropes get shorter, branches start to bob and ropes fray faster. Same jungle for every player."
+      scoring="One splash ends the run. 1 point per vine hooked · hit the glowing middle of the vine +1 · gold vine 3 · banana 1 · golden idol 3 · sunstone 5 · 5 perfect shots in a row = ON FIRE ×2. The hook gun fires at a fixed angle — no auto-aim — so timing is everything. Four stages — Slow, Middle, Final, Crazy: gaps widen, vines get shorter, the aim laser fades, branches bob and ropes fray faster. Same jungle for every player."
     />
   );
 }

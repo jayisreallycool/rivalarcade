@@ -144,7 +144,7 @@ ok('canopy swing hook course: deterministic, every gap makeable, four stages tha
   for (let i = 1; i < as.length; i++) {
     const st = P.stageAt(i);
     const b = as[i];
-    assert(P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 + b.bob }, st.range) && P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 - b.bob }, st.range), `gap ${i} not makeable`);
+    assert(P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 + b.bob }, st.range, st.vine) && P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 - b.bob }, st.range, st.vine), `gap ${i} not makeable`);
   }
   const gap = (x, y) => as.slice(x, y).reduce((s, a, k) => s + a.f - as[x + k - 1 < 0 ? 0 : x + k - 1].f, 0) / (y - x);
   assert(gap(60, 90) > gap(1, 12) + 2, `crazy gaps (${gap(60, 90)}) should be much wider than slow (${gap(1, 12)})`);
@@ -155,7 +155,7 @@ ok('canopy swing hook course: deterministic, every gap makeable, four stages tha
   assert.deepStrictEqual(gen(77, 30).map((a) => a.f), gen(77, 30).map((a) => a.f));
   // Rope physics: hanging still, you swing down and the rope keeps its length.
   const b = { f: 3, y: 10.5 - 1, vf: 0, vy: 0 };
-  const rope = { anchor: 0, L: 3.2, t: 0 };
+  const rope = { anchor: 0, drop: 0, L: 3.2, t: 0 };
   let maxD = 0;
   for (let k = 0; k < 600; k++) {
     P.step(b, rope, { f: 0, y: 10.5 }, 1 / 120);
@@ -164,7 +164,11 @@ ok('canopy swing hook course: deterministic, every gap makeable, four stages tha
   assert(maxD <= 3.21, `rope stretched to ${maxD}`);
   assert(rope.t > 4.9, 'hold timer runs');
   // Letting go on the back-swing never reaches a far anchor.
-  assert(!P.reachable(P.FIRST_ANCHOR, { ...P.FIRST_ANCHOR, f: 14 }, 6.6));
+  assert(!P.reachable(P.FIRST_ANCHOR, { ...P.FIRST_ANCHOR, f: 14 }, 6.6, 2));
+  // The hook fires at a fixed angle: it only bites if that line really crosses the vine.
+  assert(P.hookHit({ f: 0, y: 8 }, { f: 2, y: 11 }, 3, 8), "line crosses vine");
+  assert(!P.hookHit({ f: 0, y: 8 }, { f: 5, y: 11 }, 3, 8), "line passes above the vine");
+  assert(!P.hookHit({ f: 0, y: 4 }, { f: 1, y: 11 }, 3, 8), "line passes below the vine");
 });
 
 ok('scoring: 1 point per action, specials and multipliers', () => {

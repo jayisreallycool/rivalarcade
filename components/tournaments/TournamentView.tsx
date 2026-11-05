@@ -1,198 +1,109 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { userStore, useUserStore } from '@/lib/user-store';
-import { botRowAvatar, formatTimeLeft, gameNameOf, participantsCount, standings, Tournament, tournamentStatus } from '@/lib/tournaments-data';
-import { COSMETICS_CATALOG, findItem } from '@/lib/cosmetics-catalog';
-import ItemImage from '@/components/items/ItemImage';
+import React, { useEffect, useState } from 'react';
+import { userStore, useUserStore, timeLeft, usd, type Cup } from '@/lib/user-store';
+import { GAME_NAMES } from '@/lib/game-types';
+import { findItem } from '@/lib/cosmetics-catalog';
+import { sound } from '@/lib/sound';
 import AvatarView from '@/components/avatar/AvatarView';
 import GameModal from '@/components/games/GameModal';
-import { sound } from '@/lib/sound';
-import { Trophy, Clock, Users, Coins, Sparkles, CheckCircle2, Gift, AlertCircle } from 'lucide-react';
+import { Trophy, Clock, Users, Coins, CheckCircle2, Gift, Loader2 } from 'lucide-react';
 
-const cosmeticName = (id?: string) => COSMETICS_CATALOG.find((c) => c.id === id)?.name ?? 'Exclusive Cosmetic';
-
-function StatusPill({ t, now }: { t: Tournament; now: number }) {
-  const st = tournamentStatus(t, now);
-  const cls =
-    st === 'live' ? 'bg-rose-500/20 text-rose-300 border-rose-500/50' : st === 'registering' ? 'bg-cyan-950/80 text-cyan-300 border-cyan-800' : 'bg-slate-800 text-slate-400 border-slate-700';
-  return (
-    <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded border flex items-center gap-1 ${cls}`}>
-      {st === 'live' && <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />}
-      {st === 'live' ? 'Live' : st === 'registering' ? 'Registering' : 'Ended'}
-    </span>
-  );
-}
-
-function timeLabel(t: Tournament, now: number) {
-  const st = tournamentStatus(t, now);
-  if (st === 'registering') return `Starts in ${formatTimeLeft(t.startsAt - now)}`;
-  if (st === 'live') return `Ends in ${formatTimeLeft(t.endsAt - now)}`;
-  return 'Ended';
-}
-
+/** Scheduled cups against every real player in the field: same seed, one run, best scores paid. */
 export default function TournamentView() {
   const userState = useUserStore();
-  const [now, setNow] = useState(() => Date.now());
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeGame, setActiveGame] = useState<Tournament | null>(null);
-  const [notice, setNotice] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+  const [playing, setPlaying] = useState<Cup | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
-  // Clock tick: drives countdowns, live bracket fills, settlement and rotation.
   useEffect(() => {
-    userStore.syncTournaments();
-    const id = setInterval(() => {
+    void userStore.refreshCups().then(() => setLoaded(true));
+    const t = setInterval(() => {
       setNow(Date.now());
-      userStore.syncTournaments();
     }, 1000);
-    return () => clearInterval(id);
+    const r = setInterval(() => void userStore.refreshCups(), 30_000);
+    return () => {
+      clearInterval(t);
+      clearInterval(r);
+    };
   }, []);
 
-  useEffect(() => {
-    if (!notice) return;
-    const id = setTimeout(() => setNotice(null), 3500);
-    return () => clearTimeout(id);
-  }, [notice]);
+  const cups = userState.cups;
+  const selected = cups.find((c) => c.id === selectedId) ?? cups[0];
+  const fmt = (c: Cup, n: number) => (c.currency === 'usd' ? usd(n) : `${n.toLocaleString()}`);
 
-  const tournaments = userState.tournaments;
-  const selected = tournaments.find((t) => t.id === selectedId) ?? tournaments.find((t) => tournamentStatus(t, now) === 'live') ?? tournaments[0];
-  const user = { name: userState.username, avatar: userState.avatar };
-  const table = useMemo(() => (selected ? standings(selected, now, user) : []), [selected, now, user.name, user.avatar]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (!selected) {
-    return <div className="w-full max-w-5xl mx-auto p-4 text-slate-400 text-sm">Loading tournaments…</div>;
+  if (!loaded && cups.length === 0) {
+    return (
+      <div className="flex justify-center py-16" data-testid="cups-loading">
+        <Loader2 className="w-7 h-7 text-cyan-300 animate-spin" />
+      </div>
+    );
   }
 
-  const status = tournamentStatus(selected, now);
-  const myRow = table.find((r) => r.isUser);
-  const visibleRows = table.slice(0, 10);
-  if (myRow && myRow.rank > 10) visibleRows.push(myRow);
-
-  const handleAction = () => {
-    sound.playTap();
-    if (!selected.entered) {
-      const res = userStore.enterTournament(selected.id);
-      if (!res.ok) {
-        sound.playLose();
-        setNotice({ kind: 'error', text: res.reason });
-        return;
-      }
-      sound.playPowerup();
-      setNotice({ kind: 'success', text: selected.entryFee ? `Entered! ${selected.entryFee} coins paid.` : 'Entered — good luck!' });
-      if (status !== 'live') return;
-    }
-    if (status === 'live') setActiveGame(selected);
-  };
-
-  const handleClaim = () => {
-    const r = userStore.claimTournament(selected.id);
-    if (!r) return;
-    sound.playWin();
-    const extra = r.cosmetic ? ` + ${cosmeticName(r.cosmetic)}` : r.cosmeticAsCoins ? ` + ${r.cosmeticAsCoins} (duplicate prize)` : '';
-    setNotice({ kind: 'success', text: `Claimed ${r.coins + (r.cosmeticAsCoins ?? 0)} coins${extra}!` });
-    setSelectedId(null);
-  };
-
-  let actionLabel = '';
-  let actionDisabled = false;
-  if (status === 'completed') {
-    actionLabel = 'CUP ENDED';
-    actionDisabled = true;
-  } else if (!selected.entered) {
-    actionLabel = `${status === 'live' ? 'ENTER & PLAY' : 'REGISTER'} · ${selected.entryFee === 0 ? 'FREE' : `${selected.entryFee} COINS`}`;
-  } else if (status === 'registering') {
-    actionLabel = `REGISTERED · STARTS IN ${formatTimeLeft(selected.startsAt - now)}`;
-    actionDisabled = true;
-  } else {
-    actionLabel = selected.attempts ? `PLAY ANOTHER RUN (${selected.attempts} so far)` : 'PLAY TOURNAMENT SEED';
-  }
+  const canAfford = selected ? (selected.currency === 'usd' ? userState.cashCents : userState.stats.coins) >= selected.entry : false;
 
   return (
-    <div className="w-full max-w-5xl mx-auto p-4 space-y-6">
-      {notice && (
-        <div
-          role="status"
-          className={`fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl font-bold text-sm flex items-center gap-2 ${
-            notice.kind === 'error' ? 'bg-rose-500 text-white' : 'bg-emerald-400 text-black'
-          }`}
-        >
-          {notice.kind === 'error' ? <AlertCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />} {notice.text}
+    <div className="w-full max-w-5xl mx-auto p-4 space-y-5" data-testid="cups">
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#181a29] to-[#12131d] border border-[#242738] p-5">
+        <div className="flex items-center gap-2 mb-2 text-xs font-black uppercase tracking-widest text-amber-400">
+          <Trophy className="w-4 h-4" /> LIVE CUPS
         </div>
-      )}
-
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#181a29] to-[#12131d] border border-[#242738] p-6 shadow-xl">
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-2 text-xs font-black uppercase tracking-widest text-amber-400">
-              <Trophy className="w-4 h-4" /> AUTOMATED COMPETITIONS
-            </div>
-            <h1 className="text-2xl md:text-3xl font-black text-white italic">ARENA TOURNAMENTS</h1>
-            <p className="text-xs md:text-sm text-slate-300 max-w-xl mt-1">
-              Everyone plays the same seed. Submit as many runs as you like while a cup is live — your best counts. Top 3 split the prize pool; 1st takes the exclusive cosmetic.
-            </p>
-          </div>
-          <div className="flex items-center gap-4 bg-[#0a0b12] px-4 py-3 rounded-xl border border-[#242738]">
-            <div className="text-center">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold">Trophies</span>
-              <div className="text-base font-black text-amber-400">{userState.stats.trophies}</div>
-            </div>
-            <div className="h-6 w-px bg-slate-800" />
-            <div className="text-center">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold">Tournaments Won</span>
-              <div className="text-base font-black text-cyan-400" data-testid="tournaments-won">{userState.stats.tournamentsWon}</div>
-            </div>
-          </div>
+        <p className="text-xs md:text-sm text-slate-300">Every real player in a cup plays the same seed, once. When the cup closes, the top 7 split the pool and 1st takes the exclusive item.</p>
+        <div className="mt-3 flex gap-4 text-xs">
+          <span className="text-slate-400">
+            Cups won <span className="font-black text-cyan-300" data-testid="tournaments-won">{userState.stats.tournamentsWon}</span>
+          </span>
+          <span className="text-slate-400">
+            Crowns <span className="font-black text-amber-300">{userState.stats.crowns}</span>
+          </span>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-3">
-          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">ACTIVE & SCHEDULED CUPS</span>
-          {tournaments.map((t) => {
-            const isSelected = selected.id === t.id;
-            const unclaimed = t.result && !t.result.claimed;
+          {cups.map((c) => {
+            const on = selected?.id === c.id;
             return (
               <button
-                key={t.id}
-                data-testid={`cup-${t.templateId}`}
+                key={c.id}
+                data-testid={`cup-${c.id.split('-').slice(1, -1).join('-')}`}
                 onClick={() => {
                   sound.playTap();
-                  setSelectedId(t.id);
+                  setSelectedId(c.id);
                 }}
-                className={`relative w-full text-left p-4 rounded-xl border transition-all ${
-                  isSelected ? 'border-cyan-400 bg-[#161928] shadow-lg shadow-cyan-500/10' : 'border-[#242738] bg-[#12131d] hover:border-slate-600'
-                }`}
+                className={`relative w-full text-left p-4 rounded-xl border transition-all ${on ? 'border-cyan-400 bg-[#161928]' : 'border-[#242738] bg-[#12131d]'}`}
               >
                 <div className="flex items-center justify-between mb-2 gap-2">
                   <div className="flex items-center gap-2 min-w-0">
-                    <StatusPill t={t} now={now} />
-                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-[#1a1c2b] text-slate-300 border border-[#2b2e45] hidden sm:inline">{t.badge}</span>
-                    <span className="text-xs text-slate-400 truncate">{gameNameOf(t)}</span>
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-[10px] font-black">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> LIVE
+                    </span>
+                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded bg-[#1a1c2b] text-slate-300 border border-[#2b2e45] hidden sm:inline">{c.badge}</span>
+                    <span className="text-xs text-slate-400 truncate">{GAME_NAMES[c.gameId]}</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs text-amber-400 font-mono shrink-0">
-                    <Clock className="w-3.5 h-3.5" /> {timeLabel(t, now)}
-                  </div>
+                  <span className="flex items-center gap-1.5 text-xs text-amber-400 font-mono shrink-0">
+                    <Clock className="w-3.5 h-3.5" /> {timeLeft(c.closesAt, now)}
+                  </span>
                 </div>
-                <h3 className="font-bold text-base text-white mb-2">{t.title}</h3>
+                <h3 className="font-bold text-base text-white mb-2">{c.title}</h3>
                 <div className="flex items-center justify-between text-xs pt-2 border-t border-[#1e202f]">
                   <div className="flex items-center gap-4">
                     <span className="flex items-center gap-1 text-slate-400">
-                      <Users className="w-3.5 h-3.5" /> {participantsCount(t)}/{t.maxParticipants}
+                      <Users className="w-3.5 h-3.5" /> {c.count}/{c.size}
                     </span>
                     <span className="flex items-center gap-1 text-amber-400 font-bold">
-                      <Coins className="w-3.5 h-3.5" /> {t.prizePoolCoins.toLocaleString()} Pool
+                      <Coins className="w-3.5 h-3.5" /> {fmt(c, c.pool)} pool
                     </span>
                   </div>
-                  {unclaimed ? (
-                    <span className="flex items-center gap-1 text-amber-300 font-extrabold text-[11px] animate-pulse">
-                      <Gift className="w-3.5 h-3.5" /> PRIZE READY
-                    </span>
-                  ) : t.entered ? (
+                  {c.mine?.played ? (
                     <span className="flex items-center gap-1 text-emerald-400 font-extrabold text-[11px]">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> {t.userBest !== null ? `BEST ${t.userBest}` : 'REGISTERED'}
+                      <CheckCircle2 className="w-3.5 h-3.5" /> SCORE {c.mine.score ?? 0}
                     </span>
+                  ) : c.mine?.joined ? (
+                    <span className="text-[11px] font-extrabold text-cyan-300">ENTERED · PLAY NOW</span>
                   ) : (
-                    <span className="text-[11px] font-bold text-slate-300">{t.entryFee === 0 ? 'FREE ENTRY' : `${t.entryFee} COINS`}</span>
+                    <span className="text-[11px] font-bold text-slate-300">{c.entry === 0 ? 'FREE ENTRY' : `${fmt(c, c.entry)} ENTRY`}</span>
                   )}
                 </div>
               </button>
@@ -200,82 +111,63 @@ export default function TournamentView() {
           })}
         </div>
 
-        <div className="flex flex-col bg-[#12131d] border border-[#242738] rounded-2xl p-5 shadow-xl" data-testid="cup-details">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">STANDINGS & REWARDS</span>
-            <span className="text-xs text-slate-400 font-mono">{timeLabel(selected, now)}</span>
-          </div>
-          <h2 className="text-lg font-black text-white mb-1">{selected.title}</h2>
-          <p className="text-xs text-slate-400 mb-4">{selected.description}</p>
-
-          <div className="p-3 bg-[#0a0b12] rounded-xl border border-[#1e202f] mb-4 space-y-1.5 text-xs">
-            <span className="text-[10px] uppercase font-bold text-slate-400 block">PRIZES</span>
-            <div className="flex items-center justify-between">
-              <span className="text-amber-400 font-black flex items-center gap-1.5">🥇 {Math.round(selected.prizePoolCoins * 0.5).toLocaleString()} coins</span>
-              {selected.prizeCosmetic && (
-                <span className="font-bold text-cyan-400 flex items-center gap-2">
-                  {findItem(selected.prizeCosmetic) && <ItemImage item={findItem(selected.prizeCosmetic)!} size="sm" className="w-10" />}
-                  <Sparkles className="w-3.5 h-3.5" /> {cosmeticName(selected.prizeCosmetic)}
-                </span>
+        {selected && (
+          <div className="rounded-xl border border-[#242738] bg-[#12131d] p-4 space-y-4 h-fit" data-testid="cup-detail">
+            <div>
+              <h3 className="font-black text-white text-lg">{selected.title}</h3>
+              <p className="text-xs text-slate-400 mt-1">{selected.description}</p>
+            </div>
+            {selected.prizeItem && (
+              <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                <Gift className="w-4 h-4" /> 1st place: {findItem(selected.prizeItem)?.name ?? selected.prizeItem}
+              </div>
+            )}
+            <div className="text-[11px] text-slate-400">
+              Pays {selected.payoutBps.map((b, i) => `${i + 1}${['st', 'nd', 'rd'][i] ?? 'th'} ${b / 100}%`).join(' · ')}
+            </div>
+            <div>
+              <div className="text-[10px] font-black tracking-widest text-slate-500 mb-1.5">STANDINGS</div>
+              {selected.top.filter((r) => r.score !== null).length === 0 ? (
+                <p className="text-xs text-slate-500">No scores yet — be the first.</p>
+              ) : (
+                selected.top
+                  .filter((r) => r.score !== null)
+                  .map((r, i) => (
+                    <div key={r.uid} className={`flex items-center gap-2 py-1 text-sm ${r.uid === userState.session?.uid ? 'text-cyan-200 font-black' : 'text-slate-300'}`}>
+                      <span className={`w-5 text-center font-black ${i < 3 ? 'text-amber-400' : 'text-slate-600'}`}>{i + 1}</span>
+                      {r.avatar && <AvatarView avatar={r.avatar} size={24} animate={false} />}
+                      <span className="flex-1 truncate">{r.username}</span>
+                      <span className="font-mono tabular-nums">{r.score}</span>
+                    </div>
+                  ))
               )}
             </div>
-            <div className="flex items-center justify-between text-slate-300">
-              <span>🥈 {Math.round(selected.prizePoolCoins * 0.25).toLocaleString()}</span>
-              <span>🥉 {Math.round(selected.prizePoolCoins * 0.12).toLocaleString()}</span>
-              <span className="text-slate-500">Top half: {Math.max(40, Math.round(selected.entryFee * 1.5))}</span>
-            </div>
+            <button
+              disabled={!!selected.mine?.played || (!selected.mine?.joined && !canAfford)}
+              onClick={() => {
+                sound.playTap();
+                setPlaying(selected);
+              }}
+              className="w-full h-12 rounded-xl bg-amber-400 text-black font-black disabled:opacity-40"
+              data-testid="cup-action"
+            >
+              {selected.mine?.played ? 'RUN SUBMITTED · RESULTS AT CLOSE' : selected.mine?.joined ? 'PLAY YOUR RUN' : `ENTER & PLAY · ${selected.entry === 0 ? 'FREE' : `${fmt(selected, selected.entry)}${selected.currency === 'coins' ? ' COINS' : ''}`}`}
+            </button>
           </div>
-
-          {selected.result && !selected.result.claimed && (
-            <div className="p-3 mb-4 rounded-xl border border-amber-500/50 bg-amber-950/30 text-center" data-testid="cup-result">
-              <div className="text-xs uppercase font-bold text-amber-300 mb-1">Final placement</div>
-              <div className="text-2xl font-black text-white mb-1">
-                #{selected.result.rank} <span className="text-sm text-slate-400">of {selected.result.total}</span>
-              </div>
-              <div className="text-xs text-slate-300 mb-3">
-                +{selected.result.coins + (selected.result.cosmeticAsCoins ?? 0)} coins
-                {selected.result.cosmetic ? ` + ${cosmeticName(selected.result.cosmetic)}` : ''}
-              </div>
-              <button onClick={handleClaim} className="w-full py-2.5 bg-amber-400 hover:bg-amber-300 text-black font-extrabold text-sm rounded-lg flex items-center justify-center gap-2">
-                <Gift className="w-4 h-4" /> CLAIM PRIZE
-              </button>
-            </div>
-          )}
-
-          <span className="text-[11px] font-bold uppercase text-slate-400 mb-2">
-            {status === 'registering' ? 'Bracket opens when the cup starts' : `Live Bracket · ${table.length} posted`}
-          </span>
-          <div className="space-y-2 mb-5 flex-1 overflow-y-auto max-h-64 pr-1">
-            {visibleRows.map((s) => (
-              <div
-                key={`${s.name}-${s.rank}`}
-                className={`flex items-center justify-between p-2 rounded-lg border text-xs ${
-                  s.isUser ? 'border-cyan-500/50 bg-cyan-950/20 text-cyan-300 font-bold' : 'border-[#1e202f] bg-[#161826] text-slate-300'
-                }`}
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <span className={`w-6 font-mono text-center font-black ${s.rank === 1 ? 'text-amber-400' : 'text-slate-500'}`}>#{s.rank}</span>
-                  <AvatarView avatar={botRowAvatar(s)} size={28} animate={false} />
-                  <span className="truncate max-w-[120px]">{s.name}</span>
-                </div>
-                <span className="font-mono font-bold text-white">{s.score} PTS</span>
-              </div>
-            ))}
-            {status !== 'registering' && table.length === 0 && <p className="text-xs text-slate-500">No runs posted yet — be the first.</p>}
-          </div>
-
-          <button
-            onClick={handleAction}
-            disabled={actionDisabled}
-            data-testid="cup-action"
-            className="w-full py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-black font-extrabold text-sm rounded-xl shadow-lg shadow-cyan-500/20 transition-transform active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:active:scale-100"
-          >
-            <Trophy className="w-4 h-4" /> {actionLabel}
-          </button>
-        </div>
+        )}
       </div>
 
-      {activeGame && <GameModal gameId={activeGame.gameId} mode="tournament" tournamentId={activeGame.id} onClose={() => setActiveGame(null)} />}
+      {playing && (
+        <GameModal
+          gameId={playing.gameId}
+          mode="tournament"
+          contestId={playing.id}
+          onClose={() => {
+            setPlaying(null);
+            void userStore.refreshCups();
+          }}
+        />
+      )}
     </div>
   );
 }

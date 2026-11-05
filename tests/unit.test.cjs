@@ -1,8 +1,6 @@
 const assert = require('assert');
 const { mulberry32, hashSeed, seedCode } = require('../.test-build/rng');
 const { questsForDay, applyQuestEvent, msUntilLocalMidnight, localDayKey } = require('../.test-build/quests');
-const T = require('../.test-build/tournaments-data');
-const { referenceScore, botScore, botAvatar } = require('../.test-build/bots');
 let n = 0; const ok = (name, fn) => { fn(); n++; console.log('  ✓', name); };
 
 ok('same seed → identical sequence', () => {
@@ -44,68 +42,18 @@ ok('midnight countdown', () => {
   assert.strictEqual(localDayKey(d), '2026-10-27');
 });
 
-const tpl = T.TOURNAMENT_TEMPLATES[0];
-const now = Date.UTC(2026, 9, 27, 12);
-ok('tournament lifecycle', () => {
-  const t = T.createTournament(tpl, now, 1, 2000, { startDelayMin: 5 });
-  assert.strictEqual(T.tournamentStatus(t, now), 'registering');
-  assert.strictEqual(T.tournamentStatus(t, t.startsAt + 1), 'live');
-  assert.strictEqual(T.tournamentStatus(t, t.endsAt), 'completed');
-  assert(t.bots.length < tpl.maxParticipants);
-  assert(t.bots.every((b) => b.submitAt >= t.startsAt && b.submitAt < t.endsAt));
-  const mid = T.submittedBots(t, (t.startsAt + t.endsAt) / 2).length;
-  assert(mid > 0 && mid < t.bots.length, 'bracket fills progressively');
-  assert.strictEqual(T.submittedBots(t, t.endsAt).length, t.bots.length);
-});
-ok('standings rank user correctly; ties favour earlier poster', () => {
-  const t = T.createTournament(tpl, now, 2, 2000, { progress: 0.5 });
-  const sorted = [...t.bots].sort((a, b) => b.score - a.score);
-  t.entered = true; t.userBest = sorted[2].score; // tie with 3rd bot
-  const rows = T.standings(t, t.endsAt, { name: 'Me', avatar: {} });
-  const me = rows.find((r) => r.isUser);
-  assert.strictEqual(me.rank, 4);
-  rows.forEach((r, i) => assert.strictEqual(r.rank, i + 1));
-});
-ok('settlement payouts', () => {
-  const t = T.createTournament(tpl, now, 3, 2000, { progress: 0.5 });
-  t.entered = true; t.userBest = Math.max(...t.bots.map((b) => b.score)) + 1;
-  let r = T.settle(t, []);
-  assert.strictEqual(r.rank, 1); assert.strictEqual(r.coins, Math.round(tpl.prizePoolCoins * 0.5)); assert.strictEqual(r.cosmetic, tpl.prizeCosmetic);
-  r = T.settle(t, [tpl.prizeCosmetic]);
-  assert.strictEqual(r.cosmetic, undefined); assert.strictEqual(r.cosmeticAsCoins, 400);
-  t.userBest = 0; r = T.settle(t, []);
-  assert.strictEqual(r.rank, t.bots.length + 1); assert.strictEqual(r.coins, 15);
-});
-ok('rival reference adapts to player form', () => {
-  assert.strictEqual(referenceScore('neon-dash', []), 70);
-  const strong = referenceScore('neon-dash', [160, 170, 180, 165, 175]);
-  assert(strong > 140, strong);
-  const weak = referenceScore('neon-dash', [25, 28, 24, 27, 26]);
-  assert(weak < 35, weak);
-  const r = mulberry32(1); const scores = Array.from({ length: 500 }, () => botScore(r, 1000, 0.8, 1.2));
-  assert(Math.min(...scores) >= 800 && Math.max(...scores) <= 1200);
-  const avg = scores.reduce((a, b) => a + b) / scores.length; assert(avg > 960 && avg < 1040, avg);
-});
-ok('bot avatars deterministic and valid', () => {
-  assert.deepStrictEqual(botAvatar(5), botAvatar(5));
-  const a = botAvatar(99); ['hairStyleId','shirtId','pantsId','shoesId'].forEach((k) => assert(a[k] && a[k] !== 'none'));
-});
 const G = require('../.test-build/game-types');
-ok('stakes & payouts: house edge, caps, free tiers', () => {
+ok('stakes & payouts mirror the server: 10% fee, arena pays at most the pot', () => {
   for (const e of G.STAKES) {
     if (e === 0) continue;
-    assert(G.duelPrize(e) < 2 * e && G.duelPrize(e) > e, 'duel prize between stake and pot');
+    assert.strictEqual(G.duelPrize(e), Math.floor(e * 2 * 0.9));
     const p = G.arenaPrizes(e);
     assert(p[0] > p[1] && p[1] > p[2]);
-    assert(p.reduce((a, b) => a + b, 0) <= G.ARENA_SIZE * e, 'arena pays out at most the pot');
-    assert.strictEqual(G.streakPrize(e), e * 5);
-    assert(G.blitzPayout(1e9, e, 2000) === e * 8, 'blitz capped at 8x');
-    // A typical score roughly returns the stake
-    const typical = G.blitzPayout(2000, e, 2000);
-    assert(typical >= e && typical <= e * 1.2, `blitz typical ${typical} for ${e}`);
+    assert(p.reduce((a, b) => a + b, 0) <= G.ARENA_SIZE * e * 0.9, 'arena pays out at most the pot minus fee');
   }
-  assert(G.duelPrize(0) > 0 && G.arenaPrizes(0)[0] > 0 && G.blitzPayout(5000, 0, 2000) <= 120);
-  assert.deepStrictEqual(G.STREAK_TARGETS.slice().sort((a, b) => a - b), G.STREAK_TARGETS, 'streak targets rise');
+  assert.strictEqual(G.duelPrize(0), 40);
+  assert.deepStrictEqual(G.arenaPrizes(0), [60, 36, 24]);
+  assert.deepStrictEqual(G.arenaPrizes(100), [225, 135, 90]);
 });
 ok('leagues by crowns', () => {
   assert.strictEqual(G.leagueFor(0).name, 'Bronze');

@@ -1,13 +1,12 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useUserStore } from '@/lib/user-store';
+import { useUserStore, userStore, usd } from '@/lib/user-store';
 import GameArt from './GameArt';
-import { tournamentStatus } from '@/lib/tournaments-data';
 import GameModal from './GameModal';
 import { sound } from '@/lib/sound';
-import { ARENA_SIZE, GameId, MatchMode, STAKES, arenaPrizes, duelPrize, streakPrize } from '@/lib/game-types';
-import { Swords, Coins, Zap, Flame, Users, Target, X, ChevronRight, Lock, Sparkles } from 'lucide-react';
+import { ARENA_SIZE, GameId, MatchMode, arenaPrizes, duelPrize } from '@/lib/game-types';
+import { Swords, Coins, Users, Target, X, ChevronRight, Lock, Sparkles, DollarSign } from 'lucide-react';
 
 interface GameTile {
   id: GameId;
@@ -41,34 +40,41 @@ export const TILES: Record<GameId, GameTile> = {
 const ORDER: GameId[] = ['dunk-rush', 'canopy-swing', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
 
 interface ModeCard {
-  mode: Exclude<MatchMode, 'tournament'>;
+  mode: Exclude<MatchMode, 'tournament' | 'blitz' | 'streak'>;
   title: string;
   icon: React.ReactNode;
   color: string;
   desc: string;
-  prize: (entry: number) => string;
+  prize: (entry: number, fmt: (n: number) => string) => string;
   paid: boolean;
 }
 
 const MODES: ModeCard[] = [
-  { mode: 'duel', title: '1v1', icon: <Swords className="w-5 h-5" />, color: '#22d3ee', desc: 'Same seed as a skill-matched rival. Higher score takes the pot.', prize: (e) => `Win ${duelPrize(e)} · +1 crown`, paid: true },
-  { mode: 'arena', title: 'Live Arena', icon: <Users className="w-5 h-5" />, color: '#f472b6', desc: `${ARENA_SIZE} players, one seed, live leaderboard. Top 3 paid.`, prize: (e) => `1st ${arenaPrizes(e)[0]} · 2nd ${arenaPrizes(e)[1]} · 3rd ${arenaPrizes(e)[2]}`, paid: true },
-  { mode: 'streak', title: 'Streak', icon: <Flame className="w-5 h-5" />, color: '#f59e0b', desc: 'Beat 3 rising targets in a row. Miss once and the streak ends.', prize: (e) => `Clear all 3 → ${streakPrize(e)} · +3 crowns`, paid: true },
-  { mode: 'blitz', title: 'Blitz', icon: <Zap className="w-5 h-5" />, color: '#a3e635', desc: 'No opponent. Every point you score pays coins instantly.', prize: (e) => (e === 0 ? 'Up to 120 coins' : `Up to ${e * 8} coins`), paid: true },
-  { mode: 'practice', title: 'Practice', icon: <Target className="w-5 h-5" />, color: '#94a3b8', desc: 'Free warm-up on a random seed. No stakes.', prize: () => 'Free · small XP', paid: false },
+  { mode: 'duel', title: '1v1', icon: <Swords className="w-5 h-5" />, color: '#22d3ee', desc: 'A real player, the same seed, one run each. Higher score takes the pot.', prize: (e, f) => `Winner takes ${f(duelPrize(e))} · +1 crown`, paid: true },
+  { mode: 'arena', title: 'Live Arena', icon: <Users className="w-5 h-5" />, color: '#f472b6', desc: `Up to ${ARENA_SIZE} real players on one seed. Top 3 paid.`, prize: (e, f) => `1st ${f(arenaPrizes(e)[0])} · 2nd ${f(arenaPrizes(e)[1])} · 3rd ${f(arenaPrizes(e)[2])}`, paid: true },
+  { mode: 'practice', title: 'Practice', icon: <Target className="w-5 h-5" />, color: '#94a3b8', desc: 'Solo and free on a random seed. No opponent, no stakes.', prize: () => 'Earn a few coins & XP', paid: false },
 ];
 
 export default function GameLibraryView() {
   const userState = useUserStore();
   const [sheet, setSheet] = useState<GameId | null>(null);
+  const [currency, setCurrency] = useState<'coins' | 'usd'>('coins');
   const [entry, setEntry] = useState<number>(25);
   const [chip, setChip] = useState<(typeof CHIPS)[number]['id']>('all');
-  const [activeGame, setActiveGame] = useState<{ gameId: GameId; mode: MatchMode; entry: number } | null>(null);
-  const [now] = useState(() => Date.now());
+  const [activeGame, setActiveGame] = useState<{ gameId: GameId; mode: MatchMode; entry: number; currency: 'coins' | 'usd' } | null>(null);
   const coins = userState.stats.coins;
+  const cash = userState.cash;
+  const cashOn = cash.mode !== 'off';
+  const cashBlock = !cash.allowed ? 'Cash games aren’t available in your location.' : !userState.account.adult ? 'Cash games are 18+.' : userState.account.underReview ? 'Your account is under review.' : null;
+  const balance = currency === 'usd' ? userState.cashCents : coins;
+  const tiers = currency === 'usd' ? cash.entries : userState.coinEntries;
+  const fmt = (n: number) => (currency === 'usd' ? usd(n) : n.toLocaleString());
 
   // Games with a cup running right now get a LIVE badge (and the Live filter).
-  const liveGames = new Set(userState.tournaments.filter((t) => tournamentStatus(t, now) === 'live').map((t) => t.gameId));
+  useEffect(() => {
+    void userStore.refreshCups();
+  }, []);
+  const liveGames = new Set(userState.cups.map((c) => c.gameId));
 
   useEffect(() => {
     if (!sheet) return;
@@ -80,7 +86,12 @@ export default function GameLibraryView() {
   const launch = (gameId: GameId, mode: MatchMode, stake: number) => {
     sound.playTap();
     setSheet(null);
-    setActiveGame({ gameId, mode, entry: mode === 'practice' ? 0 : stake });
+    setActiveGame({ gameId, mode, entry: mode === 'practice' ? 0 : stake, currency: mode === 'practice' ? 'coins' : currency });
+  };
+  const pickCurrency = (c: 'coins' | 'usd') => {
+    sound.playTap();
+    setCurrency(c);
+    setEntry(c === 'usd' ? cash.entries[0] ?? 100 : 25);
   };
 
   const visible = ORDER.filter((id) => chip === 'all' || (chip === 'live' ? liveGames.has(id) : TILES[id].tags.includes(chip)));
@@ -185,15 +196,25 @@ export default function GameLibraryView() {
             </div>
 
             <div className="p-4">
+              {cashOn && (
+                <div className="grid grid-cols-2 gap-1 p-1 mb-3 rounded-2xl bg-white/[0.06]" role="tablist" aria-label="Play for">
+                  {(['coins', 'usd'] as const).map((c) => (
+                    <button key={c} role="tab" aria-selected={currency === c} onClick={() => pickCurrency(c)} className={`h-10 rounded-xl text-sm font-black flex items-center justify-center gap-1.5 ${currency === c ? (c === 'usd' ? 'bg-emerald-400 text-black' : 'bg-amber-400 text-black') : 'text-white/60'}`} data-testid={`currency-${c}`}>
+                      {c === 'usd' ? <DollarSign className="w-4 h-4" /> : <Coins className="w-4 h-4" />} {c === 'usd' ? 'Cash' : 'Coins'}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {currency === 'usd' && cashBlock && <p className="mb-3 text-xs font-bold text-rose-300 text-center" data-testid="cash-blocked">{cashBlock}</p>}
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[11px] font-black tracking-widest text-white/50">ENTRY</span>
-                <span className="flex items-center gap-1 text-xs font-black text-amber-300" suppressHydrationWarning>
-                  <Coins className="w-3.5 h-3.5" /> {coins.toLocaleString()}
+                <span className={`flex items-center gap-1 text-xs font-black ${currency === 'usd' ? 'text-emerald-300' : 'text-amber-300'}`} suppressHydrationWarning>
+                  {currency === 'usd' ? usd(balance) : <><Coins className="w-3.5 h-3.5" /> {coins.toLocaleString()}</>}
                 </span>
               </div>
               <div className="grid grid-cols-5 gap-1.5 mb-4" role="radiogroup" aria-label="Entry fee">
-                {STAKES.map((s) => {
-                  const afford = coins >= s;
+                {tiers.map((s) => {
+                  const afford = balance >= s;
                   const on = entry === s;
                   return (
                     <button
@@ -206,20 +227,21 @@ export default function GameLibraryView() {
                         setEntry(s);
                       }}
                       className={`h-11 rounded-xl text-sm font-black border transition-colors ${
-                        on ? 'bg-amber-400 text-black border-amber-300' : afford ? 'bg-white/5 text-white border-white/10' : 'bg-white/5 text-white/25 border-white/5'
+                        on ? (currency === 'usd' ? 'bg-emerald-400 text-black border-emerald-300' : 'bg-amber-400 text-black border-amber-300') : afford ? 'bg-white/5 text-white border-white/10' : 'bg-white/5 text-white/25 border-white/5'
                       }`}
                       data-testid={`stake-${s}`}
                     >
-                      {s === 0 ? 'FREE' : s}
+                      {s === 0 ? 'FREE' : currency === 'usd' ? usd(s) : s}
                     </button>
                   );
                 })}
               </div>
+              {currency === 'usd' && userState.cashCents < (cash.entries[0] ?? 100) && !cashBlock && <p className="-mt-2 mb-3 text-[11px] text-white/50 text-center">Add cash in Profile → Wallet to play for real money.</p>}
 
               <div className="space-y-2">
                 {MODES.map((m) => {
                   const stake = m.paid ? entry : 0;
-                  const locked = stake > coins;
+                  const locked = m.paid && (stake > balance || (currency === 'usd' && !!cashBlock));
                   return (
                     <button
                       key={m.mode}
@@ -234,11 +256,11 @@ export default function GameLibraryView() {
                       <span className="flex-1 min-w-0">
                         <span className="flex items-center gap-2">
                           <span className="text-base font-black text-white">{m.title}</span>
-                          {m.paid && <span className="px-1.5 py-0.5 rounded bg-black/40 text-[10px] font-black text-amber-300">{stake === 0 ? 'FREE' : `${stake} ENTRY`}</span>}
+                          {m.paid && <span className={`px-1.5 py-0.5 rounded bg-black/40 text-[10px] font-black ${currency === 'usd' ? 'text-emerald-300' : 'text-amber-300'}`}>{stake === 0 ? 'FREE' : `${fmt(stake)} ENTRY`}</span>}
                         </span>
                         <span className="block text-[11px] text-white/55 leading-snug">{m.desc}</span>
                         <span className="block text-[11px] font-bold mt-0.5" style={{ color: m.color }}>
-                          {m.prize(stake)}
+                          {m.paid ? m.prize(stake, fmt) : m.prize(0, fmt)}
                         </span>
                       </span>
                       {locked ? <Lock className="w-4 h-4 text-white/40" /> : <ChevronRight className="w-5 h-5 text-white/40" />}
@@ -246,13 +268,15 @@ export default function GameLibraryView() {
                   );
                 })}
               </div>
-              <p className="mt-3 text-[10px] text-white/35 text-center">Rival Coins are a virtual in-game currency with no cash value.</p>
+              <p className="mt-3 text-[10px] text-white/35 text-center">
+                {currency === 'usd' ? 'Skill contests between real players. 10% service fee on paid pots. 18+, void where prohibited.' : 'Rival Coins are a virtual in-game currency with no cash value.'}
+              </p>
             </div>
           </div>
         </div>
       )}
 
-      {activeGame && <GameModal gameId={activeGame.gameId} mode={activeGame.mode} entry={activeGame.entry} onClose={() => setActiveGame(null)} />}
+      {activeGame && <GameModal gameId={activeGame.gameId} mode={activeGame.mode} entry={activeGame.entry} currency={activeGame.currency} onClose={() => setActiveGame(null)} />}
     </div>
   );
 }

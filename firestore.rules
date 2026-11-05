@@ -1,0 +1,19 @@
+rules_version = '2';
+// Players can read only their own account data. Every write goes through the app's server
+// (Firebase Admin), so balances, results and inventory can't be changed from a browser.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      match /matches/{id} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+      }
+      match /ledger/{id} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

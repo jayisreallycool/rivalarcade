@@ -64,13 +64,13 @@ export default function DressingRoom() {
     triggerToast(`Previewing ${item.name} — unlock to keep it`);
   };
 
-  const handleUnlockItem = (item: CosmeticItem) => {
+  const handleUnlockItem = async (item: CosmeticItem) => {
     if (userState.stats.coins < item.cost) {
       sound.playLose();
       triggerToast('Not enough Rival Coins!');
       return;
     }
-    if (userStore.unlockCosmetic(item.id)) {
+    if (await userStore.unlockCosmetic(item.id)) {
       sound.playPowerup();
       userStore.equipCosmetic(item.category, item.id);
       dropPreview(item.category);
@@ -80,16 +80,15 @@ export default function DressingRoom() {
 
   const lockedItems = lockedPreviews.map(([, id]) => findItem(id)).filter((i): i is CosmeticItem => Boolean(i));
   const lockedCost = lockedItems.reduce((a, i) => a + i.cost, 0);
-  const handleUnlockAll = () => {
+  const handleUnlockAll = async () => {
     if (userState.stats.coins < lockedCost) {
       sound.playLose();
       triggerToast(`Need ${lockedCost - userState.stats.coins} more coins`);
       return;
     }
-    lockedItems.forEach((i) => {
-      userStore.unlockCosmetic(i.id);
-      userStore.equipCosmetic(i.category, i.id);
-    });
+    for (const i of lockedItems) {
+      if (await userStore.unlockCosmetic(i.id)) userStore.equipCosmetic(i.category, i.id);
+    }
     setPreviews({});
     sound.playPowerup();
     triggerToast(`Unlocked & equipped ${lockedItems.length} item${lockedItems.length > 1 ? 's' : ''}!`);

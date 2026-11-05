@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
-import { SEASON_TIERS, useUserStore } from '@/lib/user-store';
+import React, { useEffect, useState } from 'react';
+import { SEASON_TIERS, useUserStore, userStore, usd } from '@/lib/user-store';
+import AuthGate from '@/components/auth/AuthGate';
+import WalletView from '@/components/wallet/WalletView';
 import { leagueFor, LEAGUES } from '@/lib/game-types';
 import { sound } from '@/lib/sound';
 import GameLibraryView from '@/components/games/GameLibraryView';
@@ -78,12 +80,30 @@ function Segments<T extends string>({ value, onChange, items }: { value: T; onCh
 }
 
 export default function Home() {
+  return (
+    <AuthGate>
+      <App />
+    </AuthGate>
+  );
+}
+
+function App() {
   const [tab, setTab] = useState<Tab>('play');
   const [leagueSeg, setLeagueSeg] = useState<'cups' | 'rankings'>('cups');
-  const [profileSeg, setProfileSeg] = useState<'profile' | 'wardrobe'>('profile');
+  const [profileSeg, setProfileSeg] = useState<'profile' | 'wallet' | 'wardrobe'>('profile');
   const userState = useUserStore();
   const crowns = userState.stats.crowns ?? 0;
   const league = leagueFor(crowns);
+
+  // Back from Stripe (deposit / ID check / payout setup): open the wallet and refresh.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('wallet');
+    if (!q) return;
+    setTab('profile');
+    setProfileSeg('wallet');
+    void userStore.refresh({ refreshPayouts: q === 'payouts' });
+    window.history.replaceState(null, '', window.location.pathname);
+  }, []);
 
   const go = (t: Tab) => {
     sound.playTap();
@@ -91,12 +111,13 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const cupBadge = userState.tournaments.some((t) => t.result && !t.result.claimed);
+  const cupBadge = false;
+  const resultsBadge = userState.serverMatches.some((m) => m.status === 'settled' && m.kind !== 'practice' && Date.now() - m.at < 3_600_000);
   const passBadge = SEASON_TIERS.some((t) => userState.seasonXp >= t.xpRequired && !userState.claimedFreeTiers.includes(t.tier));
   const questBadge = userState.quests.some((q) => q.completed && !q.claimed);
 
   const NAV: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }>; badge?: boolean }[] = [
-    { id: 'results', label: 'Results', icon: Trophy },
+    { id: 'results', label: 'Results', icon: Trophy, badge: resultsBadge },
     { id: 'leagues', label: 'Leagues', icon: Crown, badge: cupBadge },
     { id: 'play', label: 'Play', icon: Gamepad2 },
     { id: 'rewards', label: 'Rewards', icon: Gift, badge: passBadge },
@@ -119,15 +140,31 @@ export default function Home() {
             {crowns}
           </span>
         </button>
-        <button onClick={() => go('rewards')} className="flex items-center gap-1.5 h-11 pl-1.5 pr-2 rounded-full bg-black/45 ring-1 ring-white/10" aria-label="Rival Coins balance" data-testid="hdr-coins">
-          <CoinStack />
-          <span className="text-lg font-black text-white tabular-nums px-1" suppressHydrationWarning>
-            {userState.stats.coins.toLocaleString()}
-          </span>
-          <span className="w-7 h-7 rounded-full flex items-center justify-center text-emerald-400">
-            <Plus className="w-5 h-5 stroke-[3]" />
-          </span>
-        </button>
+        <div className="flex items-center gap-2">
+          {userState.cash.mode !== 'off' && (
+            <button
+              onClick={() => {
+                go('profile');
+                setProfileSeg('wallet');
+              }}
+              className="flex items-center gap-1 h-11 px-3 rounded-full bg-emerald-500/15 ring-1 ring-emerald-400/30"
+              aria-label="Cash balance"
+              data-testid="hdr-cash"
+            >
+              <span className="text-emerald-300 font-black">$</span>
+              <span className="text-base font-black text-white tabular-nums">{usd(userState.cashCents).slice(1)}</span>
+            </button>
+          )}
+          <button onClick={() => go('rewards')} className="flex items-center gap-1.5 h-11 pl-1.5 pr-2 rounded-full bg-black/45 ring-1 ring-white/10" aria-label="Rival Coins balance" data-testid="hdr-coins">
+            <CoinStack />
+            <span className="text-lg font-black text-white tabular-nums px-1" suppressHydrationWarning>
+              {userState.stats.coins.toLocaleString()}
+            </span>
+            <span className="w-7 h-7 rounded-full flex items-center justify-center text-emerald-400">
+              <Plus className="w-5 h-5 stroke-[3]" />
+            </span>
+          </button>
+        </div>
       </header>
 
       <main className="relative flex-1 w-full max-w-5xl mx-auto pt-2">
@@ -162,7 +199,7 @@ export default function Home() {
                   </div>
                 ))}
               </div>
-              <p className="mt-3 text-[11px] text-white/50">Earn crowns by winning 1v1s (+1), placing 1st/2nd in Live Arenas (+2/+1) and completing Streaks (+3).</p>
+              <p className="mt-3 text-[11px] text-white/50">Earn crowns against real players: win 1v1s (+1), place 1st/2nd in Live Arenas (+2/+1), and finish top 3 in cups (+3/+2/+1).</p>
             </div>
             <Segments
               value={leagueSeg}
@@ -186,12 +223,14 @@ export default function Home() {
               onChange={setProfileSeg}
               items={[
                 { id: 'profile', label: 'Profile' },
+                { id: 'wallet', label: 'Wallet' },
                 { id: 'wardrobe', label: 'Wardrobe' },
               ]}
             />
           </div>
         )}
         {tab === 'profile' && profileSeg === 'profile' && <ProfileView />}
+        {tab === 'profile' && profileSeg === 'wallet' && <WalletView />}
         {tab === 'profile' && profileSeg === 'wardrobe' && <DressingRoom />}
       </main>
 

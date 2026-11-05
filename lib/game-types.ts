@@ -25,31 +25,31 @@ export const GAME_NAMES: Record<GameId, string> = {
 export const MODE_LABEL: Record<MatchMode, string> = {
   practice: 'Practice',
   duel: '1v1',
-  tournament: 'Tournament',
+  tournament: 'Cup',
   blitz: 'Blitz',
   streak: 'Streak',
   arena: 'Live Arena',
 };
 
-/* ------------------------------------------------------------------ stakes & payouts (virtual coins) */
+/* ------------------------------------------------------------------ stakes & payouts (mirrors the server) */
 
-/** Entry tiers offered for paid modes. 0 = free entry. */
+/** Coin entry tiers. 0 = free entry. */
 export const STAKES = [0, 25, 50, 100, 250] as const;
+/** Pots pay out after a 10% service fee. */
+export const RAKE = 0.1;
 
-/** 1v1: winner takes the pot minus a 10% house cut; free 1v1 still pays a small prize. */
-export const duelPrize = (entry: number) => (entry === 0 ? 40 : Math.round(entry * 1.8));
+/** 1v1: winner takes both entries minus the fee; free 1v1s pay 40 coins. Cash amounts are in cents. */
+export const duelPrize = (entry: number) => (entry === 0 ? 40 : Math.floor(entry * 2 * (1 - RAKE)));
 
-/** Live Arena: 5 players, top 3 split 90% of the pot. Free arenas pay small fixed prizes. */
+/** Live Arena: 5 players, 1st/2nd/3rd share the pot 50/30/20. Free arenas share 120 coins. */
 export const ARENA_SIZE = 5;
-export const arenaPrizes = (entry: number) => (entry === 0 ? [60, 30, 10] : [Math.round(entry * 2.5), Math.round(entry * 1.4), Math.round(entry * 0.6)]);
+export const arenaPrizes = (entry: number) => {
+  const pool = entry === 0 ? 120 : Math.floor(entry * ARENA_SIZE * (1 - RAKE));
+  return [0.5, 0.3, 0.2].map((f) => Math.floor(pool * f));
+};
 
-/** Streak: beat 3 rising targets in a row. Targets are fractions of the player's typical score. */
+/** Legacy solo-target modes (no longer offered: solo play is free practice). */
 export const STREAK_TARGETS = [0.7, 0.95, 1.2];
-export const streakPrize = (entry: number) => (entry === 0 ? 100 : entry * 5);
-
-/** Blitz: coins per point, set so a typical score roughly returns the entry (better play profits). Capped at 8× entry. */
-export const blitzRate = (entry: number, reference: number) => (entry === 0 ? 30 / reference : entry / (0.9 * reference));
-export const blitzPayout = (score: number, entry: number, reference: number) => Math.min(Math.floor(score * blitzRate(entry, reference)), entry === 0 ? 120 : entry * 8);
 
 /* ------------------------------------------------------------------ leagues (crowns) */
 

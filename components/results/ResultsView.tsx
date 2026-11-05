@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
-import { timeAgo, useUserStore } from '@/lib/user-store';
+import React, { useEffect, useState } from 'react';
+import { timeAgo, useUserStore, userStore, usd, type ServerMatch } from '@/lib/user-store';
+import GameModal from '@/components/games/GameModal';
 import { MODE_LABEL } from '@/lib/game-types';
 import GameArt from '@/components/games/GameArt';
 import { Coins, Trophy } from 'lucide-react';
@@ -12,7 +13,22 @@ type Filter = 'all' | 'wins' | 'paid';
 export default function ResultsView({ onPlay }: { onPlay: () => void }) {
   const userState = useUserStore();
   const [filter, setFilter] = useState<Filter>('all');
-  const [now] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  const [resume, setResume] = useState<ServerMatch | null>(null);
+  const waiting = userState.serverMatches.some((m) => m.status !== 'settled' && m.status !== 'cancelled' && m.kind !== 'practice');
+  useEffect(() => {
+    void userStore.refreshHistory();
+  }, []);
+  // While results are pending, keep checking (settlement happens on the server).
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => {
+      setNow(Date.now());
+      void userStore.refreshHistory();
+    }, 10_000);
+    return () => clearInterval(t);
+  }, [waiting]);
+  const unplayed = (id: string) => userState.serverMatches.find((m) => m.id === id && m.status === 'joined' && m.kind !== 'cup' && (m.closesAt ?? 0) > now);
   const s = userState.stats;
   const rows = userState.matchHistory.filter((m) => (filter === 'wins' ? m.result === 'win' : filter === 'paid' ? (m.entry ?? 0) > 0 : true));
   const winRate = s.totalMatches ? Math.round((s.wins / s.totalMatches) * 100) : 0;
@@ -61,12 +77,25 @@ export default function ResultsView({ onPlay }: { onPlay: () => void }) {
       ) : (
         <div className="space-y-2.5" data-testid="results-list">
           {rows.map((m) => {
-            const net = m.entry ? m.coinsEarned - m.entry : m.coinsEarned;
+            const usdMatch = m.currency === 'usd';
+            const net = m.result === 'pending' ? 0 : m.result === 'cancelled' ? 0 : usdMatch ? (m.payout ?? 0) - (m.entry ?? 0) : m.entry ? m.coinsEarned - m.entry : m.coinsEarned;
+            const open = unplayed(m.id);
             const tone =
-              m.result === 'win' ? { label: 'WON', cls: 'bg-emerald-400 text-black' } : m.result === 'loss' ? { label: 'LOST', cls: 'bg-rose-500 text-white' } : m.result === 'tie' ? { label: 'TIE', cls: 'bg-slate-500 text-white' } : m.mode === 'tournament' ? { label: 'CUP', cls: 'bg-amber-400 text-black' } : { label: 'PRACTICE', cls: 'bg-white/15 text-white/80' };
+              m.result === 'pending'
+                ? { label: open ? 'PLAY NOW' : 'PENDING', cls: 'bg-cyan-400 text-black' }
+                : m.result === 'cancelled'
+                  ? { label: 'REFUNDED', cls: 'bg-slate-500 text-white' }
+                  : m.result === 'win' ? { label: 'WON', cls: 'bg-emerald-400 text-black' } : m.result === 'loss' ? { label: 'LOST', cls: 'bg-rose-500 text-white' } : m.result === 'tie' ? { label: 'TIE', cls: 'bg-slate-500 text-white' } : m.mode === 'tournament' ? { label: 'CUP', cls: 'bg-amber-400 text-black' } : { label: 'PRACTICE', cls: 'bg-white/15 text-white/80' };
             const sub = m.detail ?? (m.mode === 'duel' ? `vs ${m.opponentName}` : m.mode === 'tournament' ? m.opponentName.replace(/ #\d+$/, '') : MODE_LABEL[m.mode]);
             return (
-              <div key={m.id} className="flex items-center gap-3 p-2.5 rounded-2xl bg-white/[0.05] ring-1 ring-white/5">
+              <div
+                key={m.id}
+                onClick={() => open && setResume(open)}
+                role={open ? 'button' : undefined}
+                className={`flex items-center gap-3 p-2.5 rounded-2xl bg-white/[0.05] ring-1 ${open ? 'ring-cyan-400/50 cursor-pointer' : 'ring-white/5'}`}
+                data-testid="result-row"
+                data-result={m.result}
+              >
                 <div className="w-14 h-[72px] shrink-0 rounded-xl overflow-hidden ring-1 ring-white/10">
                   <GameArt id={m.gameId} />
                 </div>
@@ -83,17 +112,36 @@ export default function ResultsView({ onPlay }: { onPlay: () => void }) {
                 <div className="text-right shrink-0">
                   <div className="font-black text-white tabular-nums">
                     {m.playerScore.toLocaleString()}
-                    {m.mode === 'duel' && <span className="text-white/40 text-xs font-bold"> / {m.opponentScore.toLocaleString()}</span>}
+                    {m.mode === 'duel' && m.result !== 'pending' && m.result !== 'cancelled' && <span className="text-white/40 text-xs font-bold"> / {m.opponentScore.toLocaleString()}</span>}
                   </div>
-                  <div className={`flex items-center justify-end gap-1 text-xs font-black ${net < 0 ? 'text-rose-400' : 'text-amber-300'}`}>
-                    <Coins className="w-3.5 h-3.5" />
-                    {net >= 0 ? `+${net}` : net}
-                  </div>
+                  {m.result === 'pending' ? (
+                    <div className="text-xs font-black text-cyan-300">{open ? 'Tap to play' : '…'}</div>
+                  ) : usdMatch ? (
+                    <div className={`text-xs font-black ${net < 0 ? 'text-rose-400' : 'text-emerald-300'}`}>{`${net >= 0 ? '+' : '−'}${usd(Math.abs(net))}`}</div>
+                  ) : (
+                    <div className={`flex items-center justify-end gap-1 text-xs font-black ${net < 0 ? 'text-rose-400' : 'text-amber-300'}`}>
+                      <Coins className="w-3.5 h-3.5" />
+                      {net >= 0 ? `+${net}` : net}
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+      {resume && (
+        <GameModal
+          gameId={resume.gameId}
+          mode={resume.kind === 'h2h' ? 'duel' : 'arena'}
+          entry={resume.entry}
+          currency={resume.currency}
+          contestId={resume.contestId ?? undefined}
+          onClose={() => {
+            setResume(null);
+            void userStore.refreshHistory();
+          }}
+        />
       )}
     </div>
   );

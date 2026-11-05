@@ -1,9 +1,10 @@
 // Mobile compatibility: every 3D game starts on each quality tier and in safe mode,
-// a lost GPU context rebuilds the arena in 3D compatibility mode with the stake refunded
+// a lost GPU context rebuilds the arena in 3D compatibility mode (same run, same seed)
 // (repeatedly — there is no 2D edition), and devices without WebGL get a clear explanation.
 // Usage: APP_URL=http://localhost:3000 node tests/e2e-compat.cjs
 const { chromium } = require('playwright');
 const assert = require('assert');
+const { login } = require('./helpers.cjs');
 const URL = process.env.APP_URL || 'http://localhost:3000';
 const OUT = 'tests/artifacts/compat';
 const GAMES = ['dunk-rush', 'neon-dash', 'cyber-reflex', 'gem-surge', 'brick-blitz', 'canopy-swing'];
@@ -39,8 +40,7 @@ async function startGame(p, id, mode = 'practice', stake) {
     const errs = [];
     p.on('pageerror', (e) => errs.push(e.message));
     p.on('console', (m) => /error|failure/i.test(m.type() + m.text()) && m.type() !== 'log' && errs.push(m.text()));
-    await p.goto(URL);
-    await p.waitForTimeout(800);
+    await login(p, URL);
     for (const g of GAMES) {
       await startGame(p, g);
       const ok = (await p.locator('[data-testid=game-shell]').count()) > 0 && !(await p.locator('[data-testid=game-error]').count());
@@ -57,17 +57,12 @@ async function startGame(p, id, mode = 'practice', stake) {
   {
     const ctx = await b.newContext(phone);
     const p = await ctx.newPage();
-    await p.goto(URL);
-    await p.waitForTimeout(800);
-    const coins = () => p.evaluate(() => JSON.parse(localStorage.getItem('rival_arcade_user_state_v3')).stats.coins);
-    const before = await coins();
-    await startGame(p, 'dunk-rush', 'blitz', 25);
-    check((await coins()) === before - 25, 'stake charged at GO');
+    await login(p, URL);
+    await startGame(p, 'dunk-rush');
     const lose = () => p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext());
     await lose();
     await p.waitForSelector('[data-testid=compat-notice]', { timeout: 8000 }).catch(() => {});
     check(await p.evaluate(() => sessionStorage.getItem('ra.safe3d') === '1'), 'context loss → 3D compatibility mode');
-    check((await coins()) === before, 'stake refunded after GPU failure');
     await p.waitForSelector('text=TAP TO PLAY', { timeout: 20000 });
     check((await p.locator('[data-testid=game-surface] canvas').count()) > 0, 'game rebuilt in 3D');
     await p.click('text=TAP TO PLAY');
@@ -94,8 +89,7 @@ async function startGame(p, id, mode = 'practice', stake) {
     const p = await ctx.newPage();
     const errs = [];
     p.on('pageerror', (e) => errs.push(e.message));
-    await p.goto(URL);
-    await p.waitForTimeout(800);
+    await login(p, URL);
     await startGame(p, 'neon-dash');
     check((await p.locator('[data-testid=game-shell]').count()) > 0 && !(await p.locator('[data-testid=no-3d]').count()), 'picky driver: game still starts in 3D');
     check(errs.length === 0, 'picky driver: no page errors');
@@ -108,8 +102,7 @@ async function startGame(p, id, mode = 'practice', stake) {
     const p = await (await nb.newContext(phone)).newPage();
     const errs = [];
     p.on('pageerror', (e) => errs.push(e.message));
-    await p.goto(URL);
-    await p.waitForTimeout(800);
+    await login(p, URL);
     for (const g of ['neon-dash', 'brick-blitz']) {
       await p.click(`[data-testid=tile-${g}]`);
       await p.click('[data-testid=mode-practice]');

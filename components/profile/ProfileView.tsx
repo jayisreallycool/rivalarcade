@@ -1,11 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { userStore, useUserStore } from '@/lib/user-store';
+import { userStore, useUserStore, errorText } from '@/lib/user-store';
 import Avatar3DView from '@/components/avatar/Avatar3DView';
 import BannerBackdrop from '@/components/avatar/BannerBackdrop';
 import { sound, useMuted } from '@/lib/sound';
-import { formatCountdown, msUntilLocalMidnight } from '@/lib/quests';
+import { formatCountdown } from '@/lib/quests';
 import { detectDeviceTier, getQualityOverride, setQualityOverride, QualityTier } from '@/lib/engine/quality';
 import { Trophy, Flame, Coins, Edit2, Check, Settings, Volume2, VolumeX, MonitorSmartphone, RotateCcw, X } from 'lucide-react';
 
@@ -25,9 +25,15 @@ export default function ProfileView() {
 
   // Daily quest reset countdown; also rolls quests over at local midnight while open.
   useEffect(() => {
+    let day = new Date().toISOString().slice(0, 10);
     const tick = () => {
-      setResetLeft(msUntilLocalMidnight(Date.now()));
-      userStore.ensureDaily();
+      const now = Date.now();
+      setResetLeft(86_400_000 - (now % 86_400_000)); // quests reset at 00:00 UTC (server day)
+      const d = new Date(now).toISOString().slice(0, 10);
+      if (d !== day) {
+        day = d;
+        void userStore.refresh();
+      }
     };
     tick();
     const id = setInterval(tick, 1000);
@@ -46,21 +52,26 @@ export default function ProfileView() {
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  const handleSaveName = () => {
-    if (userStore.setUsername(nameInput)) {
+  const handleSaveName = async () => {
+    const err = await userStore.setUsername(nameInput.trim());
+    if (!err) {
       sound.playTap();
       setIsEditingName(false);
       triggerToast('Player handle updated!');
     } else {
       sound.playLose();
-      triggerToast('Use letters, numbers, spaces, - _ or .');
+      triggerToast(err);
     }
   };
 
-  const handleClaimQuest = (questId: string) => {
-    sound.playPowerup();
-    userStore.claimQuest(questId);
-    triggerToast('Quest reward claimed!');
+  const handleClaimQuest = async (questId: string) => {
+    try {
+      await userStore.claimQuest(questId);
+      sound.playPowerup();
+      triggerToast('Quest reward claimed!');
+    } catch (e) {
+      triggerToast(errorText(e));
+    }
   };
 
   const totalMatches = userState.stats.wins + userState.stats.losses;
@@ -337,28 +348,21 @@ export default function ProfileView() {
 
           <div className="flex items-center justify-between pt-4 border-t border-[#1e202f]">
             <div>
-              <span className="text-sm font-bold text-white block">Reset progress</span>
-              <span className="text-[11px] text-slate-500">Clears coins, cosmetics, rating and history on this device.</span>
+              <span className="text-sm font-bold text-white block">Account</span>
+              <span className="text-[11px] text-slate-500">Signed in with {userState.account.phone ?? 'your phone'}. Your progress is saved to your account.</span>
             </div>
             {confirmReset ? (
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    userStore.resetProgress();
-                    setConfirmReset(false);
-                    triggerToast('Progress reset');
-                  }}
-                  className="px-3 py-1.5 bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs rounded-lg"
-                >
-                  Yes, reset
+                <button onClick={() => userStore.signOut()} className="px-3 py-1.5 bg-rose-500 text-white font-bold text-xs rounded-lg" data-testid="confirm-signout">
+                  Sign out
                 </button>
-                <button onClick={() => setConfirmReset(false)} aria-label="Cancel reset" className="p-1.5 text-slate-400 hover:text-white">
+                <button onClick={() => setConfirmReset(false)} aria-label="Cancel" className="p-1.5 text-slate-400 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
             ) : (
-              <button onClick={() => setConfirmReset(true)} className="px-3 py-1.5 border border-rose-500/50 text-rose-300 hover:bg-rose-950/40 font-bold text-xs rounded-lg flex items-center gap-1.5">
-                <RotateCcw className="w-3.5 h-3.5" /> Reset
+              <button onClick={() => setConfirmReset(true)} className="px-3 py-1.5 border border-white/15 text-slate-200 font-bold text-xs rounded-lg flex items-center gap-1.5" data-testid="signout">
+                <RotateCcw className="w-3.5 h-3.5" /> Sign out
               </button>
             )}
           </div>

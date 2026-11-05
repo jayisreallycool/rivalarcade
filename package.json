@@ -8,8 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "clean": "next clean",
-    "test:unit": "tsc lib/rng.ts lib/quests.ts lib/tournaments-data.ts lib/bots.ts lib/game-types.ts lib/cosmetics-catalog.ts lib/item-looks.ts lib/swing-physics.ts lib/scoring.ts --outDir .test-build --module commonjs --target es2020 --skipLibCheck --esModuleInterop --moduleResolution node && node tests/unit.test.cjs",
-    "test:e2e": "node tests/e2e.cjs && node tests/e2e-extra.cjs && node tests/e2e-modes.cjs && node tests/e2e-compat.cjs",
+    "test:unit": "sh scripts/build-tests.sh && node tests/unit.test.cjs && node tests/engine.test.cjs",
+    "test:e2e": "node tests/e2e-auth.cjs && node tests/e2e.cjs && node tests/e2e-extra.cjs && node tests/e2e-modes.cjs && node tests/e2e-compat.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -21,12 +21,15 @@
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "firebase": "^11.6.0",
+    "firebase-admin": "^13.2.0",
     "lucide-react": "^0.553.0",
     "motion": "^12.23.24",
     "next": "^15.4.9",
     "postcss": "^8.5.6",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
+    "stripe": "^17.7.0",
     "tailwind-merge": "^3.3.1",
     "three": "^0.186.1"
   },

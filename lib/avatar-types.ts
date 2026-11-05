@@ -110,9 +110,15 @@ export interface MatchHistoryItem {
   opponentScore: number;
   opponentName: string;
   opponentAvatar: AvatarConfig;
-  result: 'win' | 'loss' | 'tie' | 'practice';
+  result: 'win' | 'loss' | 'tie' | 'practice' | 'pending' | 'cancelled';
   ratingDelta: number;
   coinsEarned: number;
+  /** Cash contests: entry and payout are in US cents. */
+  currency?: 'coins' | 'usd';
+  payout?: number;
+  contestId?: string | null;
+  /** Held for review by the anti-cheat checks. */
+  flagged?: string | null;
   /** Coins staked to enter (paid modes). */
   entry?: number;
   /** Arena placement / streak rounds cleared, for the history label. */

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { userStore, useUserStore, SEASON_TIERS } from '@/lib/user-store';
+import { userStore, useUserStore, SEASON_TIERS, errorText } from '@/lib/user-store';
 import { RARITY, SHOP_ITEMS, findItem } from '@/lib/cosmetics-catalog';
 import type { CosmeticCategory, CosmeticItem, Rarity } from '@/lib/avatar-types';
 import ItemImage from '@/components/items/ItemImage';
@@ -35,19 +35,24 @@ export default function StoreView() {
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  const handleClaimTier = (tier: number, isVip: boolean) => {
-    sound.playPowerup();
-    userStore.claimSeasonReward(tier, isVip);
-    triggerToast('Reward claimed to inventory!');
+  const handleClaimTier = async (tier: number, isVip: boolean) => {
+    try {
+      await userStore.claimSeasonReward(tier, isVip);
+      sound.playPowerup();
+      triggerToast('Reward claimed to inventory!');
+    } catch (e) {
+      triggerToast(errorText(e));
+    }
   };
 
-  const handleBuyCosmetic = (itemId: string, cost: number) => {
+  const handleBuyCosmetic = async (itemId: string, cost: number) => {
     if (userState.stats.coins < cost) {
       sound.playLose();
       triggerToast('Insufficient Rival Coins!');
       return;
     }
-    const success = userStore.unlockCosmetic(itemId);
+    const success = await userStore.unlockCosmetic(itemId);
+    if (!success) triggerToast('Purchase failed. Try again.');
     if (success) {
       const item = findItem(itemId);
       if (item) userStore.equipCosmetic(item.category, item.id);
@@ -56,10 +61,14 @@ export default function StoreView() {
     }
   };
 
-  const handleActivateVip = () => {
-    sound.playWin();
-    userStore.activateVip();
-    triggerToast('VIP Season Pass Activated!');
+  const handleActivateVip = async () => {
+    try {
+      await userStore.activateVip();
+      sound.playWin();
+      triggerToast('VIP Season Pass Activated!');
+    } catch (e) {
+      triggerToast(errorText(e));
+    }
   };
 
   const [rarity, setRarity] = useState<'all' | Rarity>('all');
@@ -119,9 +128,11 @@ export default function StoreView() {
             {!userState.isVip ? (
               <button
                 onClick={handleActivateVip}
-                className="px-6 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition-transform active:scale-95 flex items-center gap-2"
+                disabled={userState.stats.coins < userState.vipCost}
+                data-testid="vip-activate"
+                className="disabled:opacity-40 px-6 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition-transform active:scale-95 flex items-center gap-2"
               >
-                <Crown className="w-4 h-4 fill-black" /> UNLOCK VIP PASS (FREE PROMO)
+                <Crown className="w-4 h-4 fill-black" /> UNLOCK VIP PASS · {userState.vipCost.toLocaleString()} COINS
               </button>
             ) : (
               <span className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-black">

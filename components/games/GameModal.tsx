@@ -2,50 +2,28 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AvatarConfig } from '@/lib/avatar-types';
-import { userStore, useUserStore } from '@/lib/user-store';
-import { getStarterAvatar } from '@/lib/cosmetics-catalog';
-import {
-  ARENA_SIZE,
-  GAME_NAMES,
-  GameId,
-  GameProps,
-  MatchExtras,
-  MatchMode,
-  MODE_LABEL,
-  RivalInfo,
-  RunStats,
-  STREAK_TARGETS,
-  arenaPrizes,
-  blitzPayout,
-  blitzRate,
-  duelPrize,
-  streakPrize,
-} from '@/lib/game-types';
-import { botAvatar, botName, botScore } from '@/lib/bots';
-import { mulberry32, randomSeed, seedCode } from '@/lib/rng';
-import { standings, tournamentStatus } from '@/lib/tournaments-data';
+import { userStore, useUserStore, errorText, ApiError, usd, type ServerMatch } from '@/lib/user-store';
+import { ARENA_SIZE, GAME_NAMES, GameId, GameProps, MatchExtras, MatchMode, RunStats, arenaPrizes, duelPrize } from '@/lib/game-types';
+import { seedCode } from '@/lib/rng';
 import { enableSafeMode, gpuInfo, isSafeMode } from '@/lib/engine/quality';
 import { ENGINE_FAILURE_EVENT, type EngineFailureDetail } from '@/lib/engine/GameEngine';
-import { isIOS } from '@/lib/fullscreen';
-import { enterGameFullscreen, exitGameFullscreen } from '@/lib/fullscreen';
-import MatchResultsModal, { ResultData } from './MatchResultsModal';
+import { isIOS, enterGameFullscreen, exitGameFullscreen } from '@/lib/fullscreen';
+import { TEST_AUTH } from '@/lib/client/auth';
 import { MatchExtrasContext } from './GameShell';
-import AvatarView from '@/components/avatar/AvatarView';
-import { X, Swords, Users } from 'lucide-react';
+import ResultScreen from './ResultScreen';
+import { X, Swords, Users, Trophy, Loader2 } from 'lucide-react';
 
 /**
  * Catches anything that blows up while loading or running a game (a stale code chunk after a
  * new deploy, a GPU error thrown during render…) so the player gets a retry, not a blank page.
  */
-class GameErrorBoundary extends React.Component<{ onCrash: () => void; onRetry: () => void; onClose: () => void; children: React.ReactNode }, { error: Error | null }> {
+class GameErrorBoundary extends React.Component<{ onRetry: () => void; onClose: () => void; children: React.ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
   componentDidCatch(error: Error) {
     console.warn('[RivalArcade] game crashed', error);
-    this.props.onCrash();
   }
   render() {
     const { error } = this.state;
@@ -54,24 +32,22 @@ class GameErrorBoundary extends React.Component<{ onCrash: () => void; onRetry: 
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center bg-[#070810]" data-testid="game-error">
         <h3 className="text-lg font-black text-white">{stale ? 'A new version is available' : 'This game hit a snag'}</h3>
-        <p className="text-xs text-slate-400 max-w-xs">{stale ? 'Reload to get the latest update, then jump back in.' : 'Your stake was not lost. Tap Try again to reload the 3D arena.'}</p>
+        <p className="text-xs text-slate-400 max-w-xs">{stale ? 'Reload to get the latest update, then jump back in.' : 'Tap Try again to reload the 3D arena. Your match stays open.'}</p>
         <div className="flex flex-wrap justify-center gap-2 mt-2">
           {stale ? (
             <button onClick={() => window.location.reload()} className="h-11 px-5 rounded-full bg-cyan-400 text-black font-black">
               Reload
             </button>
           ) : (
-            <>
-              <button
-                onClick={() => {
-                  this.setState({ error: null });
-                  this.props.onRetry();
-                }}
-                className="h-11 px-5 rounded-full bg-cyan-400 text-black font-black"
-              >
-                Try again
-              </button>
-            </>
+            <button
+              onClick={() => {
+                this.setState({ error: null });
+                this.props.onRetry();
+              }}
+              className="h-11 px-5 rounded-full bg-cyan-400 text-black font-black"
+            >
+              Try again
+            </button>
           )}
           <button onClick={this.props.onClose} className="h-11 px-5 rounded-full bg-white/5 text-white/70 font-bold">
             Back
@@ -101,80 +77,82 @@ const GAMES_3D: Record<GameId, React.ComponentType<GameProps>> = {
   'canopy-swing': dynamic(() => import('./CanopySwing3DGame'), { ssr: false, loading: GameLoading }),
 };
 
-
-interface GameModalProps {
+export interface GameModalProps {
   gameId: GameId;
+  /** practice = solo & free · duel = async 1v1 · arena = 5 players · tournament = a cup. */
   mode: MatchMode;
-  /** Coins staked per match (paid modes). */
   entry?: number;
-  tournamentId?: string;
+  currency?: 'coins' | 'usd';
+  /** Cup to play, or an already-joined contest to play now. */
+  contestId?: string;
   onClose: () => void;
 }
 
-interface Opponent {
-  name: string;
-  avatar: AvatarConfig;
-  rating: number;
+export interface PracticeResult {
   score: number;
+  coins: number;
+  xp: number;
+  flagged: string | null;
+  breakdown?: RunStats['breakdown'];
 }
 
-/** Skill-matched rival: rating near yours, target score near your recent form, all from the seed. */
-function makeOpponent(gameId: GameId, seed: number, rating: number): Opponent {
-  const rng = mulberry32(seed ^ 0x9e3779b9);
-  const oppRating = Math.round(rating + (rng() - 0.5) * 160);
-  const reference = userStore.referenceFor(gameId) * (1 + (oppRating - rating) / 1000);
-  return { name: botName(rng), avatar: botAvatar(Math.floor(rng() * 1e9)), rating: oppRating, score: botScore(rng, reference, 0.8, 1.2) };
-}
+type Phase = { k: 'entering' } | { k: 'error'; msg: string } | { k: 'play'; runToken: string; seed: number; contestId: string | null } | { k: 'submitting'; score: number } | { k: 'done' };
 
-/** Arena field: 4 others on the same seed, spread from a bit weaker to a bit stronger than you. */
-function makeField(gameId: GameId, seed: number): (Opponent & { score: number })[] {
-  const rng = mulberry32(seed ^ 0x51ed27);
-  const ref = userStore.referenceFor(gameId);
-  const taken = new Set<string>();
-  const bands: [number, number][] = [
-    [1.08, 1.3],
-    [0.95, 1.12],
-    [0.82, 1.0],
-    [0.65, 0.88],
-  ];
-  return bands.map(([lo, hi]) => ({ name: botName(rng, taken), avatar: botAvatar(Math.floor(rng() * 1e9)), rating: 0, score: botScore(rng, ref, lo, hi) }));
-}
+const kindOf = (mode: MatchMode) => (mode === 'duel' ? 'h2h' : mode === 'arena' ? 'arena' : 'cup');
 
-const ordinal = (n: number) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`;
-
-export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClose }: GameModalProps) {
+/** Runs one match against the game server: enter → play (server-timed, secret seed) → submit → results. */
+export default function GameModal({ gameId, mode, entry = 0, currency = 'coins', contestId: givenContest, onClose }: GameModalProps) {
   const userState = useUserStore();
+  const [phase, setPhase] = useState<Phase>({ k: 'entering' });
   const [runKey, setRunKey] = useState(0);
-  const [seed, setSeed] = useState(() => randomSeed());
-  const [matchmaking, setMatchmaking] = useState(mode === 'duel' || mode === 'arena');
-  const [result, setResult] = useState<ResultData | null>(null);
-  // No up-front "is WebGL supported?" gate: the probe can misfire on real phones, so the game
-  // always tries to start and only an actual failure (after retries) shows the help screen.
+  const [attempt, setAttempt] = useState(0);
+  const [practice, setPractice] = useState<PracticeResult | null>(null);
+  const [contestResult, setContestResult] = useState<{ contestId: string; score: number; flagged: string | null; breakdown?: RunStats['breakdown'] } | null>(null);
   const [failed, setFailed] = useState(false);
   const [no3D, setNo3D] = useState(false);
   const [diag, setDiag] = useState('');
-  const inAppBrowser = typeof navigator !== 'undefined' && /Instagram|FBAN|FBAV|TikTok|musical_ly|Bytedance|Snapchat|Line\//i.test(navigator.userAgent);
-  const failures = useRef(0);
   const [notice, setNotice] = useState<string | null>(null);
-  // Wall-clock time the current run opened (a snapshot, so render stays pure).
-  const [runStartedAt, setRunStartedAt] = useState(() => Date.now());
-  // Streak: current round (0-based). The stake is charged once, on round 1.
-  const [round, setRound] = useState(0);
-  const charged = useRef(false);
-  const entryRef = useRef(entry);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const failures = useRef(0);
+  const inAppBrowser = typeof navigator !== 'undefined' && /Instagram|FBAN|FBAV|TikTok|musical_ly|Bytedance|Snapchat|Line\//i.test(navigator.userAgent);
+  const isPractice = mode === 'practice';
 
-  // GPU trouble (shader limits, lost context, out of memory): rebuild the 3D arena with the
-  // compatibility renderer (still full 3D — lighter shaders, lower resolution) and try again.
-  // Any stake already taken for the failed run is returned.
+  // Enter the match on the server (charges the entry, returns the secret seed).
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      try {
+        if (isPractice) {
+          const r = await userStore.call<{ runToken: string; seed: number }>('startPractice', { gameId });
+          if (!dead) setPhase({ k: 'play', runToken: r.runToken, seed: r.seed, contestId: null });
+          return;
+        }
+        let cid = givenContest ?? null;
+        if (mode === 'tournament' && cid) {
+          await userStore.call('joinCup', { contestId: cid }).catch((e) => {
+            if (!(e instanceof ApiError && e.code === 'already_joined')) throw e;
+          });
+        } else if (!cid) {
+          cid = (await userStore.call<{ contestId: string }>('joinContest', { kind: kindOf(mode), gameId, currency, entry })).contestId;
+        }
+        void userStore.refresh();
+        const r = await userStore.call<{ runToken: string; seed: number }>('startContestRun', { contestId: cid });
+        if (!dead) setPhase({ k: 'play', runToken: r.runToken, seed: r.seed, contestId: cid });
+      } catch (e) {
+        if (!dead) setPhase({ k: 'error', msg: errorText(e) });
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [attempt, gameId, mode, entry, currency, givenContest, isPractice]);
+
+  // GPU trouble: rebuild the 3D arena with the compatibility renderer and try again (same run).
   useEffect(() => {
     const onFail = (e: Event) => {
       const d = (e as CustomEvent<EngineFailureDetail>).detail;
       const gpu = gpuInfo();
       setDiag(`${d?.reason ?? 'unknown'} · ${gpu.renderer} · webgl2 ${gpu.webgl2 ? 'yes' : 'no'}${gpu.webgl2 ? '' : ` · webgl1 ${gpu.webgl1 ? 'yes' : 'no'}`}${isSafeMode() ? ' · safe' : ''}${d?.message ? ` · ${d.message}` : ''}`);
-      if (charged.current) {
-        userStore.refundEntry(entryRef.current);
-        charged.current = false;
-      }
       failures.current += 1;
       enableSafeMode();
       if (failures.current <= 3) {
@@ -193,58 +171,20 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
     const t = setTimeout(() => setNotice(null), 4000);
     return () => clearTimeout(t);
   }, [notice]);
-  // Reference score frozen for the whole streak / blitz so targets don't move between rounds.
-  const [reference] = useState(() => userStore.referenceFor(gameId));
 
-  const tournament = mode === 'tournament' ? userState.tournaments.find((t) => t.id === tournamentId) : undefined;
-  const matchSeed = tournament ? tournament.seed : seed;
-
-  const opponent = useMemo<Opponent | null>(
-    () => (mode === 'duel' && !matchmaking ? makeOpponent(gameId, seed, userState.stats.rating) : null),
-    // Opponent is fixed for the whole match; rating changes after it don't regenerate them.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, matchmaking, gameId, seed],
-  );
-  const field = useMemo(() => (mode === 'arena' && !matchmaking ? makeField(gameId, seed) : null), [mode, matchmaking, gameId, seed]);
-  const streakTarget = mode === 'streak' ? Math.max(1, Math.round(reference * STREAK_TARGETS[round])) : 0;
-
-  const rival: RivalInfo | null = useMemo(() => {
-    if (opponent) return { name: opponent.name, score: opponent.score };
-    if (mode === 'streak') return { name: `Round ${round + 1}`, score: streakTarget, label: 'TARGET' };
-    if (tournament) {
-      const leader = standings(tournament, runStartedAt, { name: userState.username, avatar: userState.avatar }).find((r) => !r.isUser);
-      return leader ? { name: leader.name, score: leader.score, label: '#1' } : null;
-    }
-    return null;
-    // Leader snapshot taken when the run starts.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opponent, mode, round, streakTarget, tournament?.id, runKey, runStartedAt]);
-
-  // Simulated matchmaking (1v1 ~1.5s, arena fills seat by seat)
-  const [seats, setSeats] = useState(1);
-  useEffect(() => {
-    if (!matchmaking) return;
-    if (mode === 'arena') {
-      const timers = [1, 2, 3, 4].map((i) => setTimeout(() => setSeats(1 + i), i * 450));
-      const done = setTimeout(() => setMatchmaking(false), 2200);
-      return () => {
-        timers.forEach(clearTimeout);
-        clearTimeout(done);
-      };
-    }
-    const timer = setTimeout(() => setMatchmaking(false), 1500);
-    return () => clearTimeout(timer);
-  }, [matchmaking, mode]);
-
-  // Matches play full screen on phones (the tap that opened the match is the required gesture).
   useEffect(() => {
     enterGameFullscreen();
     return () => exitGameFullscreen();
   }, []);
 
-  // Esc closes; page behind doesn't scroll while a match is open.
+  const playing = phase.k === 'play';
+  const leave = useCallback(() => {
+    if (playing && !isPractice) return setConfirmLeave(true);
+    onClose();
+  }, [playing, isPractice, onClose]);
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !result && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && phase.k !== 'done' && leave();
     window.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -252,271 +192,117 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
       window.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
-  }, [onClose, result]);
+  }, [leave, phase.k]);
 
-  const onStarted = useCallback(() => {
-    if (charged.current || entry <= 0) return;
-    if (mode === 'practice' || mode === 'tournament') return;
-    charged.current = userStore.chargeEntry(entry);
-  }, [entry, mode]);
-
-  const handleGameFinish = useCallback(
-    (finalScore: number, stats: RunStats = {}) => {
-      const breakdown = stats.breakdown;
-      const base = { userScore: finalScore, breakdown, entry: mode === 'practice' || mode === 'tournament' ? 0 : entry };
-
-      if (mode === 'tournament' && tournamentId) {
-        const out = userStore.submitTournamentRun(tournamentId, finalScore, stats);
-        if (out) {
-          setResult({
-            ...base,
-            opponentScore: out.leader?.score ?? 0,
-            opponentName: out.leader?.name ?? 'Field',
-            opponentAvatar: getStarterAvatar('neutral'),
-            ratingDelta: 0,
-            coinsEarned: out.coinsEarned,
-            xpEarned: out.xpEarned,
-            tournament: { rank: out.rank, total: out.total, improved: out.improved, best: out.best, title: tournament?.title ?? 'Tournament' },
-          });
+  const submit = useCallback(
+    async (score: number, stats: RunStats = {}) => {
+      if (phase.k !== 'play') return;
+      const { runToken, contestId } = phase;
+      setPhase({ k: 'submitting', score });
+      const { breakdown, ...numbers } = stats;
+      for (let i = 0; i < 4; i++) {
+        try {
+          if (!contestId) {
+            const r = await userStore.call<{ score: number; coins: number; xp: number; flagged: string | null }>('submitPractice', { runToken, score, stats: numbers });
+            setPractice({ ...r, breakdown });
+          } else {
+            const r = await userStore.call<{ score: number; flagged: string | null }>('submitContestScore', { runToken, score, stats: numbers });
+            setContestResult({ contestId, score: r.score, flagged: r.flagged, breakdown });
+          }
+          setPhase({ k: 'done' });
+          void userStore.refresh();
           return;
+        } catch (e) {
+          if (e instanceof ApiError && e.code !== 'network' && e.status < 500) {
+            setPhase({ k: 'error', msg: errorText(e) });
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
         }
-        // Cup closed mid-run: keep the rewards of a practice run rather than losing it.
-        const fallback = userStore.recordMatchResult({ gameId, mode: 'practice', playerScore: finalScore, stats, opponentScore: 0 });
-        setResult({ ...base, opponentScore: 0, opponentName: 'Cup closed', opponentAvatar: getStarterAvatar('neutral'), ...fallback, note: 'This cup ended before your run finished, so it was saved as practice.' });
-        return;
       }
-
-      if (mode === 'duel' && opponent) {
-        const won = finalScore > opponent.score;
-        const tie = finalScore === opponent.score;
-        const prize = won ? duelPrize(entry) : tie ? entry : 0;
-        const out = userStore.recordMatchResult({
-          gameId,
-          mode: 'duel',
-          playerScore: finalScore,
-          stats,
-          opponentScore: opponent.score,
-          opponentName: opponent.name,
-          opponentAvatar: opponent.avatar,
-          opponentRating: opponent.rating,
-          settlement: { entry, prize, crowns: won ? 1 : 0, won, tie },
-        });
-        setResult({ ...base, opponentScore: opponent.score, opponentName: opponent.name, opponentAvatar: opponent.avatar, ...out });
-        return;
-      }
-
-      if (mode === 'arena' && field) {
-        const table = [...field.map((f) => ({ name: f.name, score: f.score, you: false })), { name: userState.username, score: finalScore, you: true }].sort((a, b) => b.score - a.score);
-        const place = table.findIndex((r) => r.you) + 1;
-        const prize = arenaPrizes(entry)[place - 1] ?? 0;
-        const crowns = place === 1 ? 2 : place === 2 ? 1 : 0;
-        const winner = table[0];
-        const out = userStore.recordMatchResult({
-          gameId,
-          mode: 'arena',
-          playerScore: finalScore,
-          stats,
-          opponentScore: winner.you ? table[1].score : winner.score,
-          opponentName: winner.you ? table[1].name : winner.name,
-          opponentAvatar: getStarterAvatar('neutral'),
-          settlement: { entry, prize, crowns, won: place <= 3, detail: `${ordinal(place)} of ${ARENA_SIZE}` },
-        });
-        setResult({
-          ...base,
-          opponentScore: winner.score,
-          opponentName: winner.name,
-          opponentAvatar: getStarterAvatar('neutral'),
-          ...out,
-          headline: place === 1 ? { text: '👑 1ST PLACE', tone: 'win' } : place <= 3 ? { text: `${ordinal(place).toUpperCase()} PLACE · IN THE MONEY`, tone: 'win' } : { text: `${ordinal(place).toUpperCase()} PLACE`, tone: 'loss' },
-          arena: { rows: table, place, prizes: arenaPrizes(entry) },
-        });
-        return;
-      }
-
-      if (mode === 'streak') {
-        const cleared = finalScore >= streakTarget;
-        const last = round === STREAK_TARGETS.length - 1;
-        if (cleared && !last) {
-          // Mid-streak: no settlement yet; just show the round result.
-          setResult({
-            ...base,
-            opponentScore: streakTarget,
-            opponentName: 'Target',
-            opponentAvatar: getStarterAvatar('neutral'),
-            ratingDelta: 0,
-            coinsEarned: 0,
-            xpEarned: 0,
-            headline: { text: `ROUND ${round + 1} CLEARED`, tone: 'win' },
-            streak: { round, total: STREAK_TARGETS.length, target: streakTarget, cleared: true, prize: streakPrize(entry) },
-            rematchLabel: `ROUND ${round + 2} →`,
-            pending: true,
-          });
-          return;
-        }
-        const roundsCleared = round + (cleared ? 1 : 0);
-        const complete = cleared && last;
-        // Two of three gives the stake back.
-        const prize = complete ? streakPrize(entry) : roundsCleared === 2 ? entry : 0;
-        const out = userStore.recordMatchResult({
-          gameId,
-          mode: 'streak',
-          playerScore: finalScore,
-          stats,
-          opponentScore: streakTarget,
-          opponentName: `Target ${round + 1}`,
-          opponentAvatar: getStarterAvatar('neutral'),
-          settlement: { entry, prize, crowns: complete ? 3 : 0, won: complete, detail: `${roundsCleared}/${STREAK_TARGETS.length} targets` },
-        });
-        setResult({
-          ...base,
-          opponentScore: streakTarget,
-          opponentName: 'Target',
-          opponentAvatar: getStarterAvatar('neutral'),
-          ...out,
-          headline: complete ? { text: '🔥 STREAK COMPLETE', tone: 'win' } : { text: `STREAK ENDED · ${roundsCleared}/${STREAK_TARGETS.length}`, tone: 'loss' },
-          streak: { round, total: STREAK_TARGETS.length, target: streakTarget, cleared, prize: streakPrize(entry) },
-          rematchLabel: 'NEW STREAK',
-        });
-        return;
-      }
-
-      if (mode === 'blitz') {
-        const prize = blitzPayout(finalScore, entry, reference);
-        const out = userStore.recordMatchResult({
-          gameId,
-          mode: 'blitz',
-          playerScore: finalScore,
-          stats,
-          opponentScore: 0,
-          opponentName: 'Blitz',
-          settlement: { entry, prize, crowns: 0, won: prize > entry, detail: `${prize} coins` },
-        });
-        setResult({
-          ...base,
-          opponentScore: 0,
-          opponentName: 'Blitz',
-          opponentAvatar: getStarterAvatar('neutral'),
-          ...out,
-          headline: prize > entry ? { text: `⚡ +${prize - entry} PROFIT`, tone: 'win' } : { text: `BLITZ · ${prize} COINS`, tone: 'neutral' },
-        });
-        return;
-      }
-
-      const out = userStore.recordMatchResult({ gameId, mode: 'practice', playerScore: finalScore, stats, opponentScore: 0 });
-      setResult({ ...base, opponentScore: 0, opponentName: 'Target Practice', opponentAvatar: getStarterAvatar('neutral'), ...out });
+      setPhase({ k: 'error', msg: 'Couldn’t reach the server to submit your score. Your match stays open — check History in a moment.' });
     },
-    [mode, entry, tournamentId, gameId, opponent, field, streakTarget, round, reference, userState.username, tournament?.title],
+    [phase],
   );
 
-  const handleRematch = () => {
-    const advancing = mode === 'streak' && result?.pending;
-    setResult(null);
-    setRunKey((k) => k + 1); // remount the game → fresh ready screen
-    setRunStartedAt(Date.now());
-    if (advancing) {
-      setRound((r) => r + 1);
-      setSeed(randomSeed());
-      return;
-    }
-    // A new paid match needs a new stake.
-    if (entry > 0 && mode !== 'practice' && mode !== 'tournament') {
-      if (userStore.getState().stats.coins < entry) {
-        onClose();
-        return;
-      }
-      charged.current = false;
-    }
-    if (mode === 'streak') setRound(0);
-    if (mode === 'duel' || mode === 'arena') {
-      setSeed(randomSeed());
-      setSeats(1);
-      setMatchmaking(true);
-    } else if (mode !== 'tournament') {
-      setSeed(randomSeed());
-    }
+  const playAgain = () => {
+    setPractice(null);
+    setContestResult(null);
+    failures.current = 0;
+    setPhase({ k: 'entering' });
+    setRunKey((k) => k + 1);
+    setAttempt((a) => a + 1);
   };
 
-  const tournamentClosed = tournament && tournamentStatus(tournament, runStartedAt) !== 'live';
-  const Game3D = GAMES_3D[gameId];
-  const modeLabel = mode === 'duel' ? (entry ? `1v1 · ${entry} entry` : '1v1 Ranked') : MODE_LABEL[mode];
-
+  const entryLabel = entry ? (currency === 'usd' ? usd(entry) : `${entry} coins`) : 'Free';
+  const prize = (n: number) => (currency === 'usd' ? usd(n) : `${n}`);
+  const modeLabel = mode === 'practice' ? 'Practice' : mode === 'duel' ? `1v1 · ${entryLabel}` : mode === 'arena' ? `Live Arena · ${entryLabel}` : 'Cup';
   const extras: MatchExtras = useMemo(() => {
-    const e: MatchExtras = { mode, entry, onStarted };
-    if (mode === 'duel') e.stakeLine = entry ? `Entry ${entry} · Winner takes ${duelPrize(entry)}` : `Free entry · Win ${duelPrize(0)} coins`;
+    const e: MatchExtras = { mode, entry: currency === 'usd' ? 0 : entry };
+    if (mode === 'duel') e.stakeLine = `${entry ? `Entry ${entryLabel} · ` : ''}Winner takes ${prize(duelPrize(entry))}`;
     if (mode === 'arena') {
       const p = arenaPrizes(entry);
-      e.stakeLine = `${entry ? `Entry ${entry} · ` : ''}1st ${p[0]} · 2nd ${p[1]} · 3rd ${p[2]}`;
-      if (field) e.field = field.map((f) => ({ name: f.name, score: f.score }));
+      e.stakeLine = `${entry ? `Entry ${entryLabel} · ` : ''}1st ${prize(p[0])} · 2nd ${prize(p[1])} · 3rd ${prize(p[2])}`;
     }
-    if (mode === 'streak') {
-      e.round = { index: round, total: STREAK_TARGETS.length };
-      e.stakeLine = round === 0 ? `${entry ? `Entry ${entry} · ` : ''}Beat 3 targets → ${streakPrize(entry)}` : `Round ${round + 1} · Prize ${streakPrize(entry)}`;
-    }
-    if (mode === 'blitz') {
-      e.coinRate = blitzRate(entry, reference);
-      const cap = entry === 0 ? 120 : entry * 8;
-      e.coinCap = cap;
-      e.stakeLine = `${entry ? `Entry ${entry} · ` : ''}Every point pays · up to ${cap}`;
-    }
+    if (mode === 'practice') e.stakeLine = 'Solo practice · earn coins & XP';
+    if (mode === 'tournament') e.stakeLine = 'One run counts · best score wins the cup';
     return e;
-  }, [mode, entry, onStarted, field, round, reference]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, entry, currency]);
 
-  const matchInfo = {
-    modeLabel,
-    seedCode: mode === 'practice' || mode === 'blitz' ? undefined : seedCode(matchSeed),
-    playerName: userState.username,
-    playerRating: mode === 'duel' ? userState.stats.rating : undefined,
-    rivalName: opponent?.name ?? rival?.name,
-    rivalAvatar: opponent?.avatar,
-    rivalRating: opponent?.rating,
-  };
-
+  const Game3D = GAMES_3D[gameId];
   const closeBtn = (
-    <button onClick={onClose} aria-label="Close match" className="absolute top-[max(env(safe-area-inset-top),10px)] left-3 z-50 w-10 h-10 rounded-full bg-black/50 border border-white/10 flex items-center justify-center text-white/80">
+    <button onClick={leave} aria-label="Close match" className="absolute top-[max(env(safe-area-inset-top),10px)] left-3 z-50 w-10 h-10 rounded-full bg-black/50 border border-white/10 flex items-center justify-center text-white/80">
       <X className="w-5 h-5" />
     </button>
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-black h-[100dvh] w-screen overflow-hidden overscroll-none" data-testid="game-modal">
-      {matchmaking ? (
-        <div className="relative h-full flex flex-col items-center justify-center px-6 text-center bg-[radial-gradient(ellipse_at_center,#12203a_0%,#05060b_70%)]">
-          {closeBtn}
-          <div className="relative w-36 h-36 flex items-center justify-center mb-6">
+    <div className="fixed inset-0 z-50 bg-black h-[100dvh] w-screen overflow-hidden overscroll-none" data-testid="game-modal" data-phase={phase.k}>
+      {phase.k === 'entering' || phase.k === 'submitting' ? (
+        <div className="relative h-full flex flex-col items-center justify-center px-6 text-center bg-[radial-gradient(ellipse_at_center,#12203a_0%,#05060b_70%)]" data-testid="matchmaking">
+          {phase.k === 'entering' && closeBtn}
+          <div className="relative w-32 h-32 flex items-center justify-center mb-6">
             <div className="absolute inset-0 rounded-full border-2 border-cyan-500/40 animate-ping" />
-            <div className="absolute inset-2 rounded-full border border-cyan-500/20" />
-            <div className="w-20 h-20 rounded-full bg-[#161826] flex items-center justify-center border border-cyan-500/60 shadow-lg shadow-cyan-500/20">
-              {mode === 'arena' ? <Users className="w-8 h-8 text-pink-400 animate-pulse" /> : <Swords className="w-8 h-8 text-cyan-400 animate-pulse" />}
+            <div className="w-20 h-20 rounded-full bg-[#161826] flex items-center justify-center border border-cyan-500/60">
+              {phase.k === 'submitting' ? <Loader2 className="w-8 h-8 text-cyan-300 animate-spin" /> : mode === 'arena' ? <Users className="w-8 h-8 text-pink-400" /> : mode === 'tournament' ? <Trophy className="w-8 h-8 text-amber-400" /> : <Swords className="w-8 h-8 text-cyan-400" />}
             </div>
           </div>
-          <h3 className="text-xl font-black text-white mb-1">{mode === 'arena' ? 'FILLING THE ARENA' : 'FINDING YOUR RIVAL'}</h3>
-          <p className="text-xs text-slate-400 max-w-xs mb-4">
-            {mode === 'arena' ? (
-              <>
-                <span className="text-pink-300 font-black text-base tabular-nums">
-                  {seats}/{ARENA_SIZE}
-                </span>{' '}
-                players on seed <span className="font-mono text-slate-300">{seedCode(seed)}</span>
-              </>
-            ) : (
-              <>
-                Matching by skill ({userState.stats.rating} Elo) on certified seed <span className="font-mono text-slate-300">{seedCode(seed)}</span>
-              </>
-            )}
+          <h3 className="text-xl font-black text-white mb-1">{phase.k === 'submitting' ? 'SUBMITTING YOUR SCORE' : isPractice ? 'SETTING UP PRACTICE' : 'ENTERING MATCH'}</h3>
+          <p className="text-xs text-slate-400 max-w-xs">
+            {phase.k === 'submitting'
+              ? 'Verifying your run with the server…'
+              : isPractice
+                ? 'Solo, free, no opponent.'
+                : mode === 'arena'
+                  ? `Up to ${ARENA_SIZE} real players, same seed. Play now — results land when everyone has played.`
+                  : mode === 'tournament'
+                    ? 'Everyone in the cup plays the same seed.'
+                    : 'You’ll play now; your rival plays the same seed. Results land when they finish.'}
           </p>
-          {entry > 0 && <p className="text-xs font-black text-amber-300 mb-3">{entry} coin entry</p>}
-          <div className="flex items-center gap-3">
-            <AvatarView avatar={userState.avatar} size={50} />
-            <span className="text-sm font-bold text-cyan-400">{userState.username}</span>
-          </div>
+          {!isPractice && entry > 0 && <p className="mt-3 text-xs font-black text-amber-300">{entryLabel} entry</p>}
         </div>
-      ) : tournamentClosed ? (
-        <div className="relative h-full flex flex-col items-center justify-center px-6 text-center">
+      ) : phase.k === 'error' ? (
+        <div className="relative h-full flex flex-col items-center justify-center px-6 text-center bg-[#070810]" data-testid="match-error">
           {closeBtn}
-          <h3 className="text-lg font-bold text-white mb-2">This cup isn’t live</h3>
-          <p className="text-xs text-slate-400 mb-6">Runs can be submitted only while the tournament is live.</p>
-          <button onClick={onClose} className="px-5 py-2.5 bg-cyan-500 text-black font-bold text-sm rounded-lg">Back to Arena</button>
+          <h3 className="text-lg font-black text-white mb-2">Couldn’t start this match</h3>
+          <p className="text-sm text-slate-300 max-w-xs mb-6">{phase.msg}</p>
+          <button onClick={onClose} className="h-11 px-6 rounded-full bg-cyan-400 text-black font-black">
+            Back
+          </button>
         </div>
+      ) : phase.k === 'done' ? (
+        <ResultScreen
+          gameName={GAME_NAMES[gameId]}
+          mode={mode}
+          practice={practice}
+          contest={contestResult}
+          avatar={userState.avatar}
+          username={userState.username}
+          best={userState.stats.highScores[gameId] ?? 0}
+          onAgain={mode === 'tournament' ? onClose : playAgain}
+          onClose={onClose}
+        />
       ) : no3D || failed ? (
         <div className="relative h-full flex flex-col items-center justify-center gap-3 px-6 text-center bg-[#070810]" data-testid="no-3d">
           {closeBtn}
@@ -528,7 +314,7 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
                 : isIOS()
                   ? 'Update iOS to 15 or later. If you’re up to date, check Settings → Apps → Safari → Advanced → Feature Flags and make sure WebGL 2.0 is on.'
                   : 'Update Chrome, then open chrome://flags and make sure WebGL is not disabled. Turning on “Use graphics acceleration” in Chrome settings also helps.'
-              : 'Close other apps or tabs to free up graphics memory, then try again. No coins were lost.'}
+              : 'Close other apps or tabs to free up graphics memory, then try again.'}
           </p>
           <div className="flex gap-2 mt-2">
             <button
@@ -542,7 +328,7 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
             >
               Try again
             </button>
-            <button onClick={onClose} className="h-11 px-5 rounded-full bg-white/10 text-white font-bold">
+            <button onClick={leave} className="h-11 px-5 rounded-full bg-white/10 text-white font-bold">
               Back
             </button>
           </div>
@@ -553,21 +339,49 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
           )}
         </div>
       ) : (
-        <GameErrorBoundary
-          key={`b${runKey}`}
-          onCrash={() => {
-            if (charged.current) {
-              userStore.refundEntry(entryRef.current);
-              charged.current = false;
-            }
-          }}
-          onRetry={() => setRunKey((k) => k + 1)}
-          onClose={onClose}
-        >
+        <GameErrorBoundary key={`b${runKey}`} onRetry={() => setRunKey((k) => k + 1)} onClose={leave}>
           <MatchExtrasContext.Provider value={extras}>
-            <Game3D key={runKey} avatar={userState.avatar} onFinish={handleGameFinish} modeName={modeLabel} seed={matchSeed} rival={rival} match={matchInfo} onExit={onClose} />
+            <Game3D
+              key={runKey}
+              avatar={userState.avatar}
+              onFinish={submit}
+              modeName={modeLabel}
+              seed={phase.seed}
+              rival={null}
+              match={{ modeLabel, seedCode: isPractice ? undefined : seedCode(phase.seed), playerName: userState.username, playerRating: mode === 'duel' ? userState.stats.rating : undefined, rivalName: isPractice ? undefined : mode === 'duel' ? 'Mystery rival' : 'Live field' }}
+              onExit={leave}
+            />
           </MatchExtrasContext.Provider>
         </GameErrorBoundary>
+      )}
+
+      {TEST_AUTH && playing && (
+        <button data-testid="test-finish" onClick={() => submit(Number(localStorage.getItem('ra_test_score') ?? '10'), { baskets: 3 })} className="absolute bottom-2 right-2 z-[70] text-[10px] text-white/30">
+          test-finish
+        </button>
+      )}
+
+      {confirmLeave && (
+        <div className="absolute inset-0 z-[80] bg-black/70 backdrop-blur-sm flex items-center justify-center px-6" data-testid="confirm-leave">
+          <div className="w-full max-w-xs rounded-2xl bg-[#121423] border border-white/10 p-5 text-center">
+            <h3 className="text-white font-black text-lg">Leave this match?</h3>
+            <p className="text-xs text-slate-400 mt-2">You get one run per match. If you leave now, your run ends and scores 0.</p>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setConfirmLeave(false)} className="flex-1 h-11 rounded-full bg-cyan-400 text-black font-black">
+                Keep playing
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmLeave(false);
+                  void submit(0, {});
+                }}
+                className="flex-1 h-11 rounded-full bg-white/10 text-white font-bold"
+              >
+                Forfeit
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {notice && !failed && (
@@ -575,33 +389,8 @@ export default function GameModal({ gameId, mode, entry = 0, tournamentId, onClo
           <span className="px-4 py-2 rounded-full bg-black/75 backdrop-blur text-xs font-bold text-cyan-200">{notice}</span>
         </div>
       )}
-
-      {result && (
-        <MatchResultsModal
-          gameName={GAME_NAMES[gameId]}
-          mode={mode}
-          userAvatar={userState.avatar}
-          userName={userState.username}
-          data={result}
-          onRematch={handleRematch}
-          onClose={() => {
-            // Leaving mid-streak banks the rounds already cleared (2/3 refunds the stake).
-            if (mode === 'streak' && result.pending) {
-              const cleared = round + 1;
-              userStore.recordMatchResult({
-                gameId,
-                mode: 'streak',
-                playerScore: result.userScore,
-                opponentScore: streakTarget,
-                opponentName: `Target ${round + 1}`,
-                settlement: { entry, prize: cleared === 2 ? entry : 0, crowns: 0, won: false, detail: `${cleared}/${STREAK_TARGETS.length} targets (left)` },
-              });
-            }
-            setResult(null);
-            onClose();
-          }}
-        />
-      )}
     </div>
   );
 }
+
+export type { ServerMatch };

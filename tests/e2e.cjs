@@ -76,7 +76,7 @@ async function waitResults(page, timeout = 150000) {
     const st = await state(page);
     expect(st && st.stats.coins === 850, `coins ${st?.stats.coins}`);
     expect(st.quests.length === 4, `quests ${st.quests.length}`);
-    expect(st.tournaments.length === 4, `tournaments ${st.tournaments.length}`);
+    expect(st.tournaments.length === 5, `tournaments ${st.tournaments.length}`);
     expect(await page.locator('[data-testid="hdr-crowns"]').isVisible() && await page.locator('[data-testid="tile-brick-blitz"]').isVisible(), 'lobby missing');
   }, page);
 
@@ -265,7 +265,7 @@ async function waitResults(page, timeout = 150000) {
       if (cost <= coins) {
         const id = (await cards.nth(i).getAttribute('data-testid')).replace('wardrobe-item-', '');
         await cards.nth(i).locator('button:has-text("UNLOCK")').click();
-        await page.getByText(/Unlocked & equipped/).waitFor({ timeout: 3000 });
+        await page.getByText(/Unlocked & equipped/).waitFor({ timeout: 8000 });
         const st = await state(page);
         expect(st.stats.coins === coins - cost, `coins ${st.stats.coins} != ${coins - cost}`);
         expect(st.avatar.shirtId === id && st.inventory.includes(id), 'unlocked shirt not equipped');

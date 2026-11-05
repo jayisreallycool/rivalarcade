@@ -406,12 +406,92 @@ function GemArt() {
   );
 }
 
+/* ---------------------------------------------------------------- Canopy Swing */
+function SwingArt() {
+  const leaf = (x: number, y: number, s: number, r: number, c: string) => (
+    <path d="M0 0 Q26 -22 56 0 Q26 22 0 0Z" fill={c} stroke="#0b2a17" strokeWidth="3" transform={`translate(${x} ${y}) rotate(${r}) scale(${s})`} />
+  );
+  return (
+    <svg viewBox="0 0 300 430" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="cs-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#bef264" />
+          <stop offset="0.45" stopColor="#22c55e" />
+          <stop offset="1" stopColor="#065f46" />
+        </linearGradient>
+        <linearGradient id="cs-frog" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#86efac" />
+          <stop offset="1" stopColor="#16a34a" />
+        </linearGradient>
+        <linearGradient id="cs-river" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#2dd4bf" />
+          <stop offset="1" stopColor="#0f766e" />
+        </linearGradient>
+      </defs>
+      <rect width="300" height="430" fill="url(#cs-bg)" />
+      {/* sun shafts */}
+      {[40, 120, 210].map((x, i) => (
+        <path key={i} d={`M${x} -10 L${x + 40} -10 L${x + 110} 430 L${x + 60} 430Z`} fill="#fefce8" opacity="0.13" />
+      ))}
+      {/* trunks */}
+      <rect x="-14" y="0" width="54" height="430" fill="#5b3a24" stroke="#2b190e" strokeWidth="4" />
+      <rect x="262" y="0" width="56" height="430" fill="#5b3a24" stroke="#2b190e" strokeWidth="4" />
+      {/* river */}
+      <path d="M0 360 Q150 340 300 360 V430 H0Z" fill="url(#cs-river)" />
+      <path d="M30 380 Q60 374 90 380 M180 392 Q210 386 240 392" stroke="#ccfbf1" strokeWidth="4" fill="none" strokeLinecap="round" />
+      {/* canopy */}
+      {leaf(-10, 30, 1.6, 20, '#15803d')}
+      {leaf(60, 10, 1.4, -10, '#16a34a')}
+      {leaf(150, 22, 1.5, 15, '#15803d')}
+      {leaf(230, 6, 1.5, -20, '#166534')}
+      {/* far vine */}
+      <path d="M230 30 Q236 130 222 196" stroke="#365314" strokeWidth="7" fill="none" strokeLinecap="round" />
+      <circle cx="222" cy="200" r="9" fill="#a16207" stroke="#2b190e" strokeWidth="3" />
+      {/* banana arc */}
+      {[[176, 150], [196, 170]].map(([x, y], i) => (
+        <path key={i} d={`M${x - 12} ${y} Q${x} ${y + 14} ${x + 12} ${y - 2}`} stroke="#1b1030" strokeWidth="10" fill="none" strokeLinecap="round" />
+      ))}
+      {[[176, 150], [196, 170]].map(([x, y], i) => (
+        <path key={`b${i}`} d={`M${x - 12} ${y} Q${x} ${y + 14} ${x + 12} ${y - 2}`} stroke="#facc15" strokeWidth="6" fill="none" strokeLinecap="round" />
+      ))}
+      {/* main vine + mascot: Hopper the tree frog */}
+      <path d="M96 0 Q110 80 132 150" stroke="#1b1030" strokeWidth="11" fill="none" strokeLinecap="round" />
+      <path d="M96 0 Q110 80 132 150" stroke="#4d7c0f" strokeWidth="7" fill="none" strokeLinecap="round" />
+      {leaf(104, 60, 0.4, 40, '#65a30d')}
+      <g transform="translate(140 196) rotate(-14)">
+        <ellipse cx="0" cy="8" rx="62" ry="54" fill="#1b1030" transform="translate(0 6)" />
+        <ellipse cx="0" cy="8" rx="62" ry="54" fill="url(#cs-frog)" stroke="#1b1030" strokeWidth="5" />
+        <ellipse cx="0" cy="26" rx="38" ry="26" fill="#dcfce7" />
+        {/* eyes on top */}
+        <circle cx="-30" cy="-40" r="20" fill="#4ade80" stroke="#1b1030" strokeWidth="5" />
+        <circle cx="30" cy="-40" r="20" fill="#4ade80" stroke="#1b1030" strokeWidth="5" />
+        <circle cx="-28" cy="-40" r="11" fill="#fff" />
+        <circle cx="32" cy="-40" r="11" fill="#fff" />
+        <circle cx="-25" cy="-38" r="6" fill="#1b1030" />
+        <circle cx="35" cy="-38" r="6" fill="#1b1030" />
+        <path d="M-30 6 Q0 32 30 6" stroke="#1b1030" strokeWidth="5" fill="#be123c" strokeLinejoin="round" />
+        {/* arms up on the vine */}
+        <path d="M-40 -10 Q-40 -60 -14 -66" stroke="#1b1030" strokeWidth="16" fill="none" strokeLinecap="round" />
+        <path d="M-40 -10 Q-40 -60 -14 -66" stroke="#22c55e" strokeWidth="9" fill="none" strokeLinecap="round" />
+        <circle cx="-10" cy="-68" r="10" fill="#86efac" stroke="#1b1030" strokeWidth="4" />
+        <path d="M40 0 Q70 10 84 40" stroke="#1b1030" strokeWidth="16" fill="none" strokeLinecap="round" />
+        <path d="M40 0 Q70 10 84 40" stroke="#22c55e" strokeWidth="9" fill="none" strokeLinecap="round" />
+        <circle cx="86" cy="44" r="10" fill="#86efac" stroke="#1b1030" strokeWidth="4" />
+      </g>
+      <Sparkle x={70} y={110} s={0.8} c="#fef08a" />
+      <Sparkle x={250} y={120} s={0.7} c="#fef08a" />
+      <Title lines={['CANOPY', 'SWING']} y={318} fill={['#fef08a', '#f59e0b']} size={56} tilt={-5} />
+    </svg>
+  );
+}
+
 const ART: Record<GameId, () => React.ReactElement> = {
   'dunk-rush': DunkArt,
   'neon-dash': DashArt,
   'brick-blitz': BrickArt,
   'cyber-reflex': ReflexArt,
   'gem-surge': GemArt,
+  'canopy-swing': SwingArt,
 };
 
 export default function GameArt({ id }: { id: GameId }) {

@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from 'react';
 import { AvatarConfig, CosmeticCategory, MatchHistoryItem, PlayerStats } from './avatar-types';
 import { COSMETICS_CATALOG, getStarterAvatar } from './cosmetics-catalog';
-import { GAME_NAMES, GameId, MatchMode, RunStats, SCORE_BASELINE } from './game-types';
+import { GAME_NAMES, GameId, LEGACY_SCORE_BASELINE, MatchMode, RunStats, SCORE_BASELINE, SCORE_SCALE } from './game-types';
 import { equippedIn, itemsOn, withItem } from './avatar-slots';
-import { applyQuestEvent, DailyQuest, localDayKey, questsForDay } from './quests';
+import { applyQuestEvent, DailyQuest, localDayKey, questsForDay, syncQuests } from './quests';
 import { referenceScore } from './bots';
 import {
   createTournament,
@@ -25,6 +25,8 @@ export interface SeasonTierReward {
 
 export interface UserState {
   version: number;
+  /** Scoring scale the saved scores are in (see SCORE_SCALE). */
+  scoreScale?: number;
   username: string;
   tagline: string;
   avatar: AvatarConfig;
@@ -73,6 +75,7 @@ export function getInitialState(): UserState {
   const t0 = 0;
   return {
     version: STATE_VERSION,
+    scoreScale: SCORE_SCALE,
     username: 'ApexRival',
     tagline: 'Cyber Contender',
     avatar: starter,
@@ -89,14 +92,14 @@ export function getInitialState(): UserState {
       trophies: 420,
       xp: 320,
       level: levelFor(320),
-      highScores: { 'neon-dash': 2450, 'dunk-rush': 1800, 'cyber-reflex': 3120, 'gem-surge': 4800, 'brick-blitz': 0 },
+      highScores: { 'neon-dash': 48, 'dunk-rush': 18, 'cyber-reflex': 62, 'gem-surge': 140, 'brick-blitz': 0, 'canopy-swing': 0 },
       crowns: 8,
     },
     inventory: [...new Set([...unlockedDefaults, 'headwear_snapback'])],
     matchHistory: [
-      { id: 'hist-1', gameId: 'neon-dash', gameName: 'Neon Dash', mode: 'duel', date: '', at: t0, playerScore: 2450, opponentScore: 2180, opponentName: 'Viper_X', opponentAvatar: getStarterAvatar('female'), result: 'win', ratingDelta: 24, coinsEarned: 120 },
+      { id: 'hist-1', gameId: 'neon-dash', gameName: 'Neon Dash', mode: 'duel', date: '', at: t0, playerScore: 48, opponentScore: 43, opponentName: 'Viper_X', opponentAvatar: getStarterAvatar('female'), result: 'win', ratingDelta: 24, coinsEarned: 120 },
       { id: 'hist-2', gameId: 'dunk-rush', gameName: 'Dunk Rush', mode: 'duel', date: '', at: t0, playerScore: 18, opponentScore: 15, opponentName: 'GhostJumper', opponentAvatar: getStarterAvatar('male'), result: 'win', ratingDelta: 22, coinsEarned: 110 },
-      { id: 'hist-3', gameId: 'gem-surge', gameName: 'Gem Surge', mode: 'tournament', date: '', at: t0, playerScore: 4800, opponentScore: 5100, opponentName: 'PrismQueen', opponentAvatar: getStarterAvatar('female'), result: 'loss', ratingDelta: 0, coinsEarned: 40 },
+      { id: 'hist-3', gameId: 'gem-surge', gameName: 'Gem Surge', mode: 'tournament', date: '', at: t0, playerScore: 140, opponentScore: 151, opponentName: 'PrismQueen', opponentAvatar: getStarterAvatar('female'), result: 'loss', ratingDelta: 0, coinsEarned: 40 },
     ],
     quests: [],
     questDay: '',
@@ -126,10 +129,30 @@ function keepOwned(avatar: AvatarConfig, fallback: AvatarConfig, inventory: stri
   return out;
 }
 
+/** Scores saved under the old (hundreds-of-points) scale, brought to the 1-point scale. */
+function rescaleScores(p: Partial<UserState> & { stats?: Partial<PlayerStats> }) {
+  const f = (g: GameId) => SCORE_BASELINE[g] / (LEGACY_SCORE_BASELINE[g] ?? SCORE_BASELINE[g]);
+  const sc = (g: GameId, n: number) => (n > 0 ? Math.max(1, Math.round(n * f(g))) : n);
+  if (p.stats?.highScores) {
+    const hs = { ...p.stats.highScores } as Record<GameId, number>;
+    (Object.keys(hs) as GameId[]).forEach((g) => (hs[g] = sc(g, hs[g])));
+    p.stats = { ...p.stats, highScores: hs };
+  }
+  if (p.recentScores) {
+    const rs: Partial<Record<GameId, number[]>> = {};
+    (Object.keys(p.recentScores) as GameId[]).forEach((g) => (rs[g] = (p.recentScores![g] ?? []).map((n) => sc(g, n))));
+    p.recentScores = rs;
+  }
+  if (Array.isArray(p.matchHistory)) p.matchHistory = p.matchHistory.map((m) => ({ ...m, playerScore: sc(m.gameId, m.playerScore), opponentScore: sc(m.gameId, m.opponentScore) }));
+  if (Array.isArray(p.tournaments))
+    p.tournaments = p.tournaments.map((t) => ({ ...t, userBest: t.userBest === null ? null : sc(t.gameId, t.userBest), bots: t.bots.map((b) => ({ ...b, score: sc(t.gameId, b.score) })) }));
+}
+
 function migrate(raw: unknown): UserState {
   const base = getInitialState();
   if (!raw || typeof raw !== 'object') return base;
-  const p = raw as Partial<UserState> & { stats?: Partial<PlayerStats> };
+  const p = { ...(raw as Partial<UserState> & { stats?: Partial<PlayerStats> }) };
+  if ((p.scoreScale ?? 1) < SCORE_SCALE) rescaleScores(p);
   const stats = { ...base.stats, ...(p.stats ?? {}), highScores: { ...base.stats.highScores, ...(p.stats?.highScores ?? {}) } };
   stats.tier = tierForRating(stats.rating);
   stats.level = levelFor(stats.xp);
@@ -140,13 +163,14 @@ function migrate(raw: unknown): UserState {
     ...base,
     ...p,
     version: STATE_VERSION,
+    scoreScale: SCORE_SCALE,
     // Never load a look wearing something the player doesn't own (old saves, removed items).
     avatar: keepOwned({ ...base.avatar, ...(p.avatar ?? {}) }, base.avatar, inventory),
     stats,
     inventory,
     matchHistory: Array.isArray(p.matchHistory) ? p.matchHistory : base.matchHistory,
     // v2 quests had no day stamp and shared object identity with the defaults: rebuild.
-    quests: p.version === STATE_VERSION && Array.isArray(p.quests) ? p.quests : [],
+    quests: p.version === STATE_VERSION && Array.isArray(p.quests) ? syncQuests(p.quests) : [],
     questDay: p.version === STATE_VERSION ? p.questDay ?? '' : '',
     seasonXp,
     seasonTier: seasonTierFor(seasonXp),

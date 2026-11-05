@@ -35,9 +35,10 @@ export const TILES: Record<GameId, GameTile> = {
   'brick-blitz': { id: 'brick-blitz', title: 'Brick Blitz', genre: 'Aim & Launch', blurb: 'Endless volleys and power-ups. Hold back the wall as long as you can.', from: '#38bdf8', to: '#4338ca', tags: ['puzzle', 'new', 'popular'] },
   'neon-dash': { id: 'neon-dash', title: 'Neon Dash', genre: 'Swipe Runner', blurb: 'Swipe lanes, jump and slide down a neon highway.', from: '#ec4899', to: '#1e0b4b', tags: ['action', 'popular'] },
   'gem-surge': { id: 'gem-surge', title: 'Gem Surge', genre: 'Match-3', blurb: 'Swipe to swap. Cascades multiply every clear.', from: '#c084fc', to: '#2e1065', tags: ['puzzle'] },
+  'canopy-swing': { id: 'canopy-swing', title: 'Canopy Swing', genre: 'Tap & Swing', blurb: 'Tap to let go, fly to the next vine. One slip and you splash.', from: '#4ade80', to: '#065f46', tags: ['action', 'new', 'popular'] },
   'cyber-reflex': { id: 'cyber-reflex', title: 'Cyber Reflex', genre: 'Tap & Slash', blurb: 'Hit targets dead-centre, chain perfects, dodge hazards.', from: '#14b8a6', to: '#042f2e', tags: ['action', 'new'] },
 };
-const ORDER: GameId[] = ['dunk-rush', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
+const ORDER: GameId[] = ['dunk-rush', 'canopy-swing', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
 
 interface ModeCard {
   mode: Exclude<MatchMode, 'tournament'>;

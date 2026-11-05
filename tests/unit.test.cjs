@@ -77,11 +77,11 @@ ok('settlement payouts', () => {
   assert.strictEqual(r.rank, t.bots.length + 1); assert.strictEqual(r.coins, 15);
 });
 ok('rival reference adapts to player form', () => {
-  assert.strictEqual(referenceScore('neon-dash', []), 9000);
-  const strong = referenceScore('neon-dash', [20000, 21000, 22000, 20500, 21500]);
-  assert(strong > 18000, strong);
-  const weak = referenceScore('neon-dash', [3000, 3200, 2800, 3100, 2900]);
-  assert(weak < 4000, weak);
+  assert.strictEqual(referenceScore('neon-dash', []), 70);
+  const strong = referenceScore('neon-dash', [160, 170, 180, 165, 175]);
+  assert(strong > 140, strong);
+  const weak = referenceScore('neon-dash', [25, 28, 24, 27, 26]);
+  assert(weak < 35, weak);
   const r = mulberry32(1); const scores = Array.from({ length: 500 }, () => botScore(r, 1000, 0.8, 1.2));
   assert(Math.min(...scores) >= 800 && Math.max(...scores) <= 1200);
   const avg = scores.reduce((a, b) => a + b) / scores.length; assert(avg > 960 && avg < 1040, avg);
@@ -181,6 +181,44 @@ ok('item looks: every item has its own design, and named features are really the
   assert(C.itemShape(find('eyewear_ruby_shades')) !== C.itemShape(find('eyewear_pixel_shades')));
   // A hairstyle's shop colour is one the player can pick, so equipping it matches the image.
   for (const h of items.filter((x) => x.category === 'hair')) assert(C.HAIR_COLORS.some((c) => c.color === h.color), `${h.id} colour not in HAIR_COLORS`);
+});
+
+ok('canopy swing: every generated gap is makeable, tighter deeper in, same seed = same jungle', () => {
+  const P = require('../.test-build/swing-physics');
+  const { mulberry32 } = require('../.test-build/rng');
+  const gen = (seed, n) => {
+    const rng = mulberry32(seed);
+    const vs = [{ f: 0, y: 10, len: 3.4, sway: 0, speed: 1.6, phase: 0, window: [0, 0] }];
+    for (let i = 1; i <= n; i++) vs.push(P.nextVine(vs[i - 1], P.swingK(i), rng, i));
+    return vs;
+  };
+  const vs = gen(1234, 60);
+  for (let i = 0; i < 60; i++) {
+    const w = vs[i].window;
+    assert(w[1] - w[0] >= 0.2, `gap ${i} window ${w}`);
+    // the middle of the window really reaches the next vine
+    assert(P.reaches(vs[i], vs[i + 1], (w[0] + w[1]) / 2, P.catchRadius(P.swingK(i + 1))), `gap ${i} mid-window misses`);
+  }
+  const width = (a, b) => vs.slice(a, b).reduce((s, v) => s + v.window[1] - v.window[0], 0) / (b - a);
+  assert(width(0, 8) > width(45, 60), 'later gaps should be tighter');
+  assert(vs.slice(45).some((v) => v.sway > 0), 'late vines should sway');
+  assert.deepStrictEqual(gen(77, 20).map((v) => v.f), gen(77, 20).map((v) => v.f));
+  // Releasing on the back-swing / too early falls in the river.
+  assert(!P.reaches(vs[0], vs[1], -0.25, P.catchRadius(0)));
+});
+
+ok('scoring: 1 point per action, specials and multipliers', () => {
+  const S = require('../.test-build/scoring');
+  assert.strictEqual(S.award(1).total, 1);
+  assert.strictEqual(S.award(S.PTS.gold).total, 3);
+  assert.strictEqual(S.award(1, { streak: 5 }).total, 2);
+  assert.strictEqual(S.award(1, { timeLeft: 5 }).total, 2);
+  assert.strictEqual(S.award(2, { streak: 6, timeLeft: 3 }).total, 8);
+  const b = new S.ScoreBook();
+  b.record(S.award(2, { streak: 5, timeLeft: 4 }), { Baskets: 1, 'Swish bonus': 1 });
+  b.record(S.award(1), { Baskets: 1 });
+  assert.strictEqual(b.score, 9);
+  assert.strictEqual(b.breakdown().reduce((a, x) => a + x.points, 0), 9, 'breakdown sums to score');
 });
 
 console.log(`\n${n} unit checks passed`);

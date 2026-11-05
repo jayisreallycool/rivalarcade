@@ -1,7 +1,7 @@
 import type { AvatarConfig } from './avatar-types';
 
-export type GameId = 'neon-dash' | 'dunk-rush' | 'cyber-reflex' | 'gem-surge' | 'brick-blitz';
-export const GAME_IDS: GameId[] = ['brick-blitz', 'dunk-rush', 'neon-dash', 'cyber-reflex', 'gem-surge'];
+export type GameId = 'neon-dash' | 'dunk-rush' | 'cyber-reflex' | 'gem-surge' | 'brick-blitz' | 'canopy-swing';
+export const GAME_IDS: GameId[] = ['brick-blitz', 'dunk-rush', 'canopy-swing', 'neon-dash', 'cyber-reflex', 'gem-surge'];
 
 /**
  * practice   free, no stakes
@@ -19,6 +19,7 @@ export const GAME_NAMES: Record<GameId, string> = {
   'cyber-reflex': 'Cyber Reflex',
   'gem-surge': 'Gem Surge',
   'brick-blitz': 'Brick Blitz',
+  'canopy-swing': 'Canopy Swing',
 };
 
 export const MODE_LABEL: Record<MatchMode, string> = {
@@ -75,6 +76,8 @@ export interface RunStats {
   maxCombo?: number;
   baskets?: number;
   distance?: number;
+  /** Canopy Swing: vines caught. */
+  vines?: number;
   /** How the final score was built, shown on the results screen. Values sum to the score. */
   breakdown?: { label: string; points: number }[];
 }
@@ -135,13 +138,26 @@ export interface MatchInfo {
 
 /**
  * Typical scores by a mid-level player, used to scale bot opponents and tournament fields.
- * Tuned against the 3D games' actual scoring.
+ * Every game scores 1 point per action (see lib/scoring.ts), so these are small numbers.
  */
 export const SCORE_BASELINE: Record<GameId, number> = {
+  'neon-dash': 70,
+  'dunk-rush': 40,
+  'cyber-reflex': 90,
+  'gem-surge': 150,
+  // Endless survival: a steady player clears ~40–50 rows.
+  'brick-blitz': 220,
+  // Endless: a steady player swings ~30 vines.
+  'canopy-swing': 45,
+};
+
+/** Baselines before the 1-point scoring (v1), for rescaling old saves. */
+export const LEGACY_SCORE_BASELINE: Partial<Record<GameId, number>> = {
   'neon-dash': 9000,
   'dunk-rush': 2600,
   'cyber-reflex': 6000,
   'gem-surge': 5000,
-  // Endless survival: a steady player clears ~40–50 rows.
   'brick-blitz': 90000,
 };
+/** Bump when the scoring scale changes; saves with an older scale are rescaled on load. */
+export const SCORE_SCALE = 2;

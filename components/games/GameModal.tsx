@@ -98,6 +98,7 @@ const GAMES_3D: Record<GameId, React.ComponentType<GameProps>> = {
   'cyber-reflex': dynamic(() => import('./CyberReflex3DGame'), { ssr: false, loading: GameLoading }),
   'gem-surge': dynamic(() => import('./GemSurge3DGame'), { ssr: false, loading: GameLoading }),
   'brick-blitz': dynamic(() => import('./BrickBlitz3DGame'), { ssr: false, loading: GameLoading }),
+  'canopy-swing': dynamic(() => import('./CanopySwing3DGame'), { ssr: false, loading: GameLoading }),
 };
 
 

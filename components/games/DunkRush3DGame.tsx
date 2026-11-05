@@ -18,6 +18,7 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
+import { ROUND_SECONDS, CLUTCH_SECONDS, FIRE_STREAK, PTS, award, popStyle, ScoreBook, onFire } from '@/lib/scoring';
 import GameShell, { PopupApi, useSwipe, Swipe } from './GameShell';
 import { ArrowUp, MoveHorizontal, Flame } from 'lucide-react';
 
@@ -27,8 +28,6 @@ import { ArrowUp, MoveHorizontal, Flame } from 'lucide-react';
  * (perfect-swish window, bank shots, a hoop that starts moving, shifting shot spots, streaks).
  */
 
-const ROUND_SECONDS = 45;
-const CLUTCH_SECONDS = 10;
 const GRAVITY = 12;
 const BALL_R = 0.16;
 const RIM_R = 0.36; // generous vs ball (real rim/ball ≈ 1.9×, here 2.25×)
@@ -53,6 +52,7 @@ interface Ball {
   resolved: boolean;
   rimHits: number;
   bank: boolean;
+  gold: boolean;
   perfect: boolean;
   age: number;
   bounces: number;
@@ -70,6 +70,7 @@ const LEVELS = [
   { makes: 9, amp: 1.0, speed: 0.85, pull: 0.68, range: 1.9, comp: 0.42, perfect: 0.11, shift: 1.6 },
   { makes: 15, amp: 1.5, speed: 1.15, pull: 0.58, range: 1.6, comp: 0.48, perfect: 0.095, shift: 2.2 },
   { makes: 22, amp: 1.9, speed: 1.5, pull: 0.5, range: 1.3, comp: 0.52, perfect: 0.085, shift: 2.6 },
+  { makes: 30, amp: 2.3, speed: 1.9, pull: 0.42, range: 1.1, comp: 0.58, perfect: 0.075, shift: 2.9 },
 ];
 
 function makeCourtTexture() {
@@ -183,13 +184,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
     level: 0,
     reload: 0,
     clutchAnnounced: false,
-    // breakdown accumulators
-    bBase: 0,
-    bSwish: 0,
-    bBank: 0,
-    bLevel: 0,
-    bStreak: 0,
-    bClutch: 0,
+    nextGold: false,
+    golds: 0,
+    book: new ScoreBook(),
   });
 
   const start = useCallback(() => {
@@ -206,12 +203,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       level: 0,
       reload: 0,
       clutchAnnounced: false,
-      bBase: 0,
-      bSwish: 0,
-      bBank: 0,
-      bLevel: 0,
-      bStreak: 0,
-      bClutch: 0,
+      nextGold: false,
+      golds: 0,
+      book: new ScoreBook(),
     });
     resetRef.current();
     pushHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false }, true);
@@ -412,12 +406,16 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const ballMat = engine.own(
         new THREE.MeshPhysicalMaterial({ map: ballTex, bumpMap: ballBump, bumpScale: 1.2, roughness: 0.68, metalness: 0, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xffa060), emissive: 0xff4400, emissiveIntensity: 0 }),
       );
+      // Gold ball: same leather seams, polished gold, softly glowing — worth 3.
+      const goldMat = engine.own(
+        new THREE.MeshPhysicalMaterial({ map: ballTex, bumpMap: ballBump, bumpScale: 0.8, color: 0xffd34d, roughness: 0.22, metalness: 0.85, clearcoat: 1, emissive: 0xffaa00, emissiveIntensity: 0.35 }),
+      );
       const balls: Ball[] = Array.from({ length: MAX_BALLS }, () => {
         const mesh = new THREE.Mesh(ballGeo, ballMat);
         mesh.castShadow = quality.shadows;
         mesh.visible = false;
         scene.add(mesh);
-        return { mesh, pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, resolved: true, rimHits: 0, bank: false, perfect: false, age: 0, bounces: 0 };
+        return { mesh, pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, resolved: true, rimHits: 0, bank: false, gold: false, perfect: false, age: 0, bounces: 0 };
       });
       const readyBall = new THREE.Mesh(ballGeo, ballMat);
       readyBall.castShadow = quality.shadows;
@@ -533,6 +531,10 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         ball.resolved = false;
         ball.rimHits = 0;
         ball.bank = false;
+        ball.gold = st.nextGold;
+        ball.mesh.material = ball.gold ? goldMat : ballMat;
+        // The next ball may be gold (worth 3) — rarer early, more often once the hoop moves.
+        st.nextGold = rng.next() < (st.level === 0 ? 0.1 : 0.2);
         ball.perfect = res.perfect;
         ball.age = 0;
         ball.bounces = 0;
@@ -552,21 +554,18 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         st.streak += 1;
         st.bestStreak = Math.max(st.bestStreak, st.streak);
         const swish = ball.rimHits === 0 && !ball.bank;
-        const base = 100;
-        const swishB = swish ? 50 : 0;
-        const bankB = ball.bank ? 25 : 0;
-        const levelB = st.level * 20;
-        const pre = base + swishB + bankB + levelB;
-        const streakMult = st.streak >= 6 ? 3 : st.streak >= 3 ? 2 : 1;
+        // 1 point a basket; specials: gold ball 3, swish or bank +1. On fire / clutch double it.
+        const parts: Record<string, number> = { Baskets: PTS.base };
+        if (ball.gold) parts['Gold balls'] = PTS.gold - PTS.base;
+        if (swish) parts['Swish bonus'] = PTS.bonus;
+        else if (ball.bank) parts['Bank bonus'] = PTS.bonus;
+        const value = Object.values(parts).reduce((a, b) => a + b, 0);
+        const a = award(value, { streak: st.streak, timeLeft: st.timeLeft });
+        st.book.record(a, parts);
+        st.score = st.book.score;
+        const pts = a.total;
         const clutchMult = st.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
-        const pts = pre * streakMult * clutchMult;
-        st.bBase += base;
-        st.bSwish += swishB;
-        st.bBank += bankB;
-        st.bLevel += levelB;
-        st.bStreak += pre * (streakMult - 1);
-        st.bClutch += pre * streakMult * (clutchMult - 1);
-        st.score += pts;
+        if (ball.gold) st.golds += 1;
         if (swish) st.swishes += 1;
         if (ball.bank) st.banks += 1;
 
@@ -578,12 +577,12 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         rimCenter.set(hoopX, RIM_Y, HOOP_Z);
         particles.emit(rimCenter, swish ? 0xffd34d : 0x5fe8ff, { count: swish ? 34 : 18, speed: 4.5, life: 0.7 });
         const p = engine.toScreen(rimCenter);
-        popups.current?.pop(`+${pts}`, p.x, p.y - 30, { color: clutchMult > 1 ? '#fbbf24' : swish ? '#fde047' : '#ffffff', size: pts >= 300 ? 'lg' : 'md' });
-        if (ball.perfect) popups.current?.banner('PERFECT!', '#fde047');
-        else if (swish) popups.current?.pop('SWISH', p.x, p.y + 10, { color: '#7dd3fc', size: 'sm' });
-        else if (ball.bank) popups.current?.pop('BANK!', p.x, p.y + 10, { color: '#c4b5fd', size: 'sm' });
-        if (st.streak === 3) popups.current?.banner('HEATING UP ×2', '#fb923c');
-        if (st.streak === 6) popups.current?.banner('ON FIRE ×3', '#f43f5e');
+        popups.current?.pop(`+${pts}`, p.x, p.y - 30, popStyle(pts, ball.gold ? 'gold' : swish || ball.bank ? 'bonus' : undefined));
+        if (ball.gold) popups.current?.pop('GOLD BALL', p.x, p.y + 10, { color: '#fbbf24', size: 'sm' });
+        else if (ball.perfect && clutchMult === 1) popups.current?.banner('PERFECT!', '#fde047');
+        if (swish && !ball.gold) popups.current?.pop('SWISH', p.x, p.y + 10, { color: '#7dd3fc', size: 'sm' });
+        else if (ball.bank && !ball.gold) popups.current?.pop('BANK!', p.x, p.y + 10, { color: '#c4b5fd', size: 'sm' });
+        if (st.streak === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
         if (swish) feel.kick(0.35);
 
         // Level up → hoop starts moving; shot spot shifts (seeded, same for every player)
@@ -602,7 +601,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
 
       const miss = () => {
         const st = sim.current;
-        if (st.streak >= 3) popups.current?.banner('STREAK LOST', '#94a3b8');
+        if (onFire(st.streak)) popups.current?.banner('FIRE OUT', '#94a3b8');
         st.streak = 0;
         pushHud({ streak: 0 }, true);
       };
@@ -613,14 +612,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         aim.visible = false;
         sound.playLose();
         haptic('fail');
-        const breakdown = [
-          { label: `Baskets (${st.makes}/${st.shots})`, points: st.bBase },
-          { label: `Swish bonus (${st.swishes})`, points: st.bSwish },
-          { label: `Bank bonus (${st.banks})`, points: st.bBank },
-          { label: 'Moving hoop bonus', points: st.bLevel },
-          { label: `Streak multiplier (best ${st.bestStreak})`, points: st.bStreak },
-          { label: 'Clutch time ×2', points: st.bClutch },
-        ].filter((b) => b.points > 0);
+        const breakdown = st.book.breakdown();
         pushHud({ timeLeft: 0, score: st.score, clutch: false }, true);
         setPhase('over');
         onFinishRef.current(st.score, { baskets: st.makes, maxCombo: st.bestStreak, breakdown });
@@ -654,7 +646,8 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         readyBall.position.set(spawn.x, spawn.y + Math.sin(t * 3) * 0.03, spawn.z);
         readyBall.rotation.y += dt;
         readyShadow.position.set(spawn.x, 0.02, spawn.z);
-        ballMat.emissiveIntensity = st.streak >= 6 ? 0.9 + Math.sin(t * 20) * 0.2 : st.streak >= 3 ? 0.35 : 0;
+        ballMat.emissiveIntensity = onFire(st.streak) ? 0.9 + Math.sin(t * 20) * 0.2 : 0;
+        readyBall.material = st.nextGold ? goldMat : ballMat;
 
         // Ball physics (sub-stepped for reliable rim contacts)
         rimCenter.set(hoopX, RIM_Y, HOOP_Z);
@@ -719,7 +712,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           b.mesh.position.copy(b.pos);
           b.mesh.rotation.x -= b.vel.z * dt * 3;
           b.mesh.rotation.z += b.vel.x * dt * 3;
-          if (st.streak >= 6 && !b.resolved) particles.emit(b.pos, 0xff5a1f, { count: 1, speed: 0.6, life: 0.35, size: 1.4, gravity: -2 });
+          if (onFire(st.streak) && !b.resolved) particles.emit(b.pos, 0xff5a1f, { count: 1, speed: 0.6, life: 0.35, size: 1.4, gravity: -2 });
           if (b.bounces >= 3 || b.age > 4 || b.pos.z > 9 || Math.abs(b.pos.x) > 9) {
             if (!b.resolved && st.playing) miss();
             b.active = false;
@@ -758,7 +751,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           arms.left.pivot.position.y -= 0.05;
           arms.right.pivot.position.y -= 0.05;
         }
-        arms.setGlow(st.streak >= 6 ? 1.5 : st.streak >= 3 ? 0.6 : 0);
+        arms.setGlow(onFire(st.streak) ? 1.5 : 0);
       });
 
       return () => {
@@ -772,9 +765,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
 
   const chips = (
     <>
-      {hud.streak >= 3 && (
+      {onFire(hud.streak) && (
         <span className="flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-orange-500 text-black text-[11px] font-black">
-          <Flame className="w-3 h-3" /> ×{hud.streak >= 6 ? 3 : 2}
+          <Flame className="w-3 h-3" /> ON FIRE ×2
         </span>
       )}
       {hud.streak > 0 && <span className="px-2 py-0.5 rounded-full bg-black/50 text-white text-[11px] font-bold">{hud.streak} in a row</span>}
@@ -803,9 +796,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       tutorial={[
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Flick up to shoot' },
         { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Lean to aim' },
-        { icon: <Flame className="w-6 h-6" />, label: '3 in a row = ×2' },
+        { icon: <Flame className="w-6 h-6" />, label: '5 in a row = ×2' },
       ]}
-      scoring="First-person shooting. Starts easy: still hoop and strong aim help. Every few baskets the hoop moves faster and the help eases off. Basket 100 · Swish +50 · Bank +25 · Streaks ×2/×3 · Last 10s ×2."
+      scoring="Every basket is 1 point. Gold ball 3 · Swish or bank +1 · 5 in a row sets you ON FIRE ×2 · Last 10s CLUTCH ×2. The hoop starts still and moves faster as you score."
     />
   );
 }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-04 — 1-point scoring, Canopy Swing, launch splash
+
+- **One scoring language for every game** (`lib/scoring.ts`): each normal action is 1 point (basket, node, gem, brick, row, dodge, crystal, vine). Specials say so on screen: swish / bank / perfect timing +1, gold items 3, jackpots 5. 5 in a row = ON FIRE ×2; the last 10 seconds of a timed round = CLUTCH ×2 (they stack). Results breakdowns come from the same book, so they always add up.
+- **Consistent rounds:** timed games are all 60 seconds with clutch time (Dunk Rush was 45, Cyber Reflex 40); endless games (Brick Blitz, Canopy Swing) end on a fail.
+- **Per game:** Dunk Rush adds seeded gold balls and a sixth, faster hoop level; Cyber Reflex gold nodes 3, red −2, longer ramp; Neon Dash scores dodges and crystals (gold crystals 3, finishing +5) instead of distance; Gem Surge 1 a gem with cascade +1 a gem per step, 4-match +1, MEGA +3; Brick Blitz 1 a brick and a row, tough bricks and stars 3, board clear 5.
+- **New game — Canopy Swing** (first-person 3D): swing through a jungle canopy above a river, tap to let go on the forward swing, catch the next vine. Every gap is generated with a proven release window (`lib/swing-physics.ts`) that narrows as you go; later vines sway. Bananas +1, golden idols 3, sunstones 5, perfect releases +1 and 5 in a row = ON FIRE. Your cuffs glow in the release window. Has its own cover art, cup (Canopy Swing Classic), quests and profile high score.
+- **Saves carry over:** old high scores, recent scores, match history and live cup scores are rescaled to the new points on load; quest targets updated.
+- **Launch splash:** logo, LOADING bar and scoring tips, server-rendered so it shows instantly, then fades once the app is ready (never blocks taps).
+
 ## 2026-11-04 — Full 3D avatars you can spin and zoom
 
 - Wardrobe, store try-on ("On you") and profile now show your avatar in full 3D (`components/avatar/Avatar3DView.tsx`): drag with a finger or mouse to spin it all the way round (with inertia), pinch / mouse wheel / trackpad / +− buttons / double-tap to zoom toward the spot under your fingers, drag up and down to look over the body while zoomed, reset button. Unzoomed, vertical swipes still scroll the page. Arrow keys and +/− work when focused.

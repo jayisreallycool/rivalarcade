@@ -211,12 +211,14 @@ export default function ProfileView() {
         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-4">
           PERSONAL HIGH SCORES
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {[
             { id: 'neon-dash', name: 'Neon Dash', score: userState.stats.highScores['neon-dash'], unit: 'PTS' },
             { id: 'dunk-rush', name: 'Dunk Rush', score: userState.stats.highScores['dunk-rush'], unit: 'PTS' },
             { id: 'cyber-reflex', name: 'Cyber Reflex', score: userState.stats.highScores['cyber-reflex'], unit: 'PTS' },
             { id: 'gem-surge', name: 'Gem Surge', score: userState.stats.highScores['gem-surge'], unit: 'PTS' },
+            { id: 'brick-blitz', name: 'Brick Blitz', score: userState.stats.highScores['brick-blitz'] ?? 0, unit: 'PTS' },
+            { id: 'canopy-swing', name: 'Canopy Swing', score: userState.stats.highScores['canopy-swing'] ?? 0, unit: 'PTS' },
           ].map((game) => (
             <div key={game.id} className="p-3.5 bg-[#0a0b12] rounded-xl border border-[#1e202f]">
               <span className="text-xs text-slate-400 block mb-1">{game.name}</span>

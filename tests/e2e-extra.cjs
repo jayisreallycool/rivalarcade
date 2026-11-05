@@ -28,7 +28,7 @@ const ok = (c, m) => { if (!c) throw new Error(m); };
     ok(s.stats.tier === 'Diamond' && s.stats.level === 4 && s.seasonTier === 3, `derived fields wrong ${s.stats.tier} ${s.stats.level} ${s.seasonTier}`);
     ok(s.avatar.hairStyleId === 'hair_afro_puff' && s.avatar.shirtId, 'avatar not merged with defaults');
     ok(s.quests.length === 4 && s.quests[0].id !== 'q1', 'old quests not replaced');
-    ok(s.tournaments.length === 4, 'tournaments not created');
+    ok(s.tournaments.length === 5, 'tournaments not created');
     await p.locator('nav button', { hasText: 'Profile' }).click();
     ok(await p.getByText('OldTimer').first().isVisible(), 'name not shown');
     console.log('  ✓ legacy v2 save migrates (name, coins, rating tier, avatar, new quests, cups)');

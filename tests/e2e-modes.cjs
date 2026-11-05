@@ -88,6 +88,31 @@ const stats = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('rival_arc
   await p.click('[aria-label="Close match"]');
   await p.waitForTimeout(400);
 
+  // Canopy Swing: releasing in the window catches the next vine and scores 1 point per vine.
+  await p.click('[data-testid=tile-canopy-swing]');
+  await p.click('[data-testid=mode-practice]');
+  await p.waitForSelector('text=TAP TO PLAY', { timeout: 20000 });
+  await p.click('text=TAP TO PLAY');
+  await p.waitForTimeout(2600);
+  const surf = await (await p.$('[data-testid=game-surface]')).boundingBox();
+  const t0 = Date.now();
+  let vines = 0;
+  while (Date.now() - t0 < 30000 && vines < 3) {
+    const st = await p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.dataset.release);
+    if (st === 'perfect') {
+      await p.mouse.click(surf.x + surf.width / 2, surf.y + surf.height / 2);
+      await p.waitForTimeout(1600);
+      vines = Number((await p.textContent('[data-testid=swing-vines]')).replace(/\D/g, ''));
+    } else await p.waitForTimeout(20);
+  }
+  const swingScore = Number((await p.textContent('[data-testid=hud-score]')).replace(/\D/g, ''));
+  assert(vines >= 3, `canopy swing: only ${vines} vines caught with in-window releases`);
+  assert(swingScore >= vines && swingScore <= vines * 4 + 10, `canopy swing score ${swingScore} for ${vines} vines`);
+  console.log(`  canopy swing: ${vines} vines, ${swingScore} pts`);
+  await p.screenshot({ path: `${OUT}/canopy-swing.png` });
+  await p.click('[aria-label="Close match"]');
+  await p.waitForTimeout(400);
+
   assert.deepStrictEqual(errs, []);
   console.log('mode e2e passed');
   await b.close();

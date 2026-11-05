@@ -19,6 +19,7 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
+import { ROUND_SECONDS, CLUTCH_SECONDS, PTS, award, popStyle, ScoreBook } from '@/lib/scoring';
 import GameShell, { PopupApi, useSwipe, Swipe } from './GameShell';
 import { Move, Pointer, Layers } from 'lucide-react';
 
@@ -27,11 +28,9 @@ type GemSurge3DProps = GameProps;
 const ROWS = 6;
 const COLS = 6;
 const GEM_COLORS = [0x00f0ff, 0xff0055, 0xffb800, 0x10b981, 0xa855f7];
-const ROUND_SECONDS = 60;
 const SPACING = 0.95;
 const ORIGIN = new THREE.Vector3(0.2, 4.4, 0);
 const BOARD_CENTER = new THREE.Vector3(ORIGIN.x + ((COLS - 1) * SPACING) / 2, ORIGIN.y - ((ROWS - 1) * SPACING) / 2, 0);
-const CLUTCH_SECONDS = 10;
 const TOUCH_SLOP = 34;
 
 interface Gem {
@@ -57,7 +56,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
   const popups = useRef<PopupApi | null>(null);
   const inputRef = useRef<{ down: (x: number, y: number) => void; swipe: (s: Swipe) => void; tap: () => void }>({ down: () => {}, swipe: () => {}, tap: () => {} });
   const resetWorldRef = useRef<() => void>(() => {});
-  const fresh = () => ({ playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, clutchAnnounced: false, moves: 0, cleared: 0, pMatch: 0, pCascade: 0, pClutch: 0 });
+  const fresh = () => ({ playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, clutchAnnounced: false, moves: 0, cleared: 0, book: new ScoreBook() });
   const sim = useRef({ ...fresh(), playing: false });
 
   const startGame = useCallback(() => {
@@ -370,17 +369,19 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         centre.divideScalar(matched.size);
         // Combo = cascade step within this move: 1st clear ×1, 2nd ×2, …  (4/5-matches score more gems)
         s.combo += 1;
-        const clutch = s.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
-        const base = matched.size * 60;
-        const pts = base * s.combo * clutch;
-        s.pMatch += base;
-        s.pCascade += base * (s.combo - 1);
-        s.pClutch += base * s.combo * (clutch - 1);
-        s.score += pts;
+        // 1 point a gem · each cascade step adds +1 a gem · 4-match +1 · 5+ MEGA +3 · clutch ×2
+        const parts: Record<string, number> = { 'Gems cleared': matched.size * PTS.base };
+        if (s.combo > 1) parts['Cascades'] = matched.size * (s.combo - 1);
+        if (matched.size >= 5) parts['Mega matches'] = PTS.gold;
+        else if (matched.size === 4) parts['4-gem matches'] = PTS.bonus;
+        const a = award(Object.values(parts).reduce((x, y) => x + y, 0), { timeLeft: s.timeLeft });
+        s.book.record(a, parts);
+        s.score = s.book.score;
+        const pts = a.total;
         s.cleared += matched.size;
         s.bestCombo = Math.max(s.bestCombo, s.combo);
         const sp = engine.toScreen(centre);
-        popups.current?.pop(`+${pts}`, sp.x, sp.y, { color: s.combo >= 2 ? '#fde047' : '#ffffff', size: pts >= 600 ? 'lg' : 'md' });
+        popups.current?.pop(`+${pts}`, sp.x, sp.y, popStyle(pts, matched.size >= 5 ? 'gold' : s.combo >= 2 || matched.size === 4 ? 'bonus' : undefined));
         if (s.combo >= 2) popups.current?.banner(`CASCADE ×${s.combo}`, s.combo >= 3 ? '#f0abfc' : '#c4b5fd');
         if (matched.size >= 5) popups.current?.pop('MEGA MATCH', sp.x, sp.y + 26, { color: '#f0abfc', size: 'sm' });
         haptic(s.combo >= 2 ? 'big' : 'score');
@@ -511,11 +512,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
             selected = null;
             sound.playWin();
             haptic('big');
-            const breakdown = [
-              { label: `Gems cleared (${s.cleared})`, points: s.pMatch },
-              { label: `Cascade bonus (best ×${Math.max(1, s.bestCombo)})`, points: s.pCascade },
-              { label: 'Clutch time ×2', points: s.pClutch },
-            ].filter((b) => b.points > 0);
+            const breakdown = s.book.breakdown();
             pushHud({ timeLeft: 0, score: s.score, clutch: false }, true);
             setPhase('over');
             onFinishRef.current(s.score, { maxCombo: s.bestCombo, breakdown });
@@ -604,7 +601,7 @@ export default function GemSurge3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <Pointer className="w-6 h-6" />, label: 'Or tap, then tap neighbour' },
         { icon: <Layers className="w-6 h-6" />, label: 'Chain cascades' },
       ]}
-      scoring="First-person arcade cabinet. Four gem types for the first 20s, then five. Stuck? A valid swap starts to pulse. 60 per gem cleared · Each cascade step in one move multiplies (×2, ×3…) · Last 10s ×2. Same board for every player."
+      scoring="Every gem you clear is 1 point. Each cascade step adds +1 a gem · 4-gem match +1 · 5+ MEGA match +3 · Last 10s CLUTCH ×2. Four gem types for the first 20s, then five. Same board for every player."
     />
   );
 }

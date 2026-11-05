@@ -39,13 +39,15 @@ interface QuestDef {
 }
 
 const POOL: QuestDef[] = [
-  { id: 'neon-score', title: 'Warmup Lap', description: 'Score 1,000+ points in a single Neon Dash run', target: 1000, rewardCoins: 150, rewardXp: 100, kind: 'max', measure: (e) => (e.gameId === 'neon-dash' ? e.score : 0) },
+  { id: 'neon-score', title: 'Warmup Lap', description: 'Score 40+ points in a single Neon Dash run', target: 40, rewardCoins: 150, rewardXp: 100, kind: 'max', measure: (e) => (e.gameId === 'neon-dash' ? e.score : 0) },
   { id: 'neon-distance', title: 'Long Haul', description: 'Run 600m in a single Neon Dash run', target: 600, rewardCoins: 180, rewardXp: 110, kind: 'max', measure: (e) => (e.gameId === 'neon-dash' ? e.stats.distance ?? 0 : 0) },
   { id: 'dunk-baskets', title: 'Court Dominance', description: 'Sink 5 baskets in Dunk Rush today', target: 5, rewardCoins: 200, rewardXp: 120, kind: 'sum', measure: (e) => (e.gameId === 'dunk-rush' ? e.stats.baskets ?? 0 : 0) },
-  { id: 'dunk-streak', title: 'Heat Check', description: 'Hit a 3-basket streak in Dunk Rush', target: 3, rewardCoins: 220, rewardXp: 130, kind: 'max', measure: (e) => (e.gameId === 'dunk-rush' ? e.stats.maxCombo ?? 0 : 0) },
+  { id: 'dunk-streak', title: 'Heat Check', description: 'Get ON FIRE: 5 baskets in a row in Dunk Rush', target: 5, rewardCoins: 220, rewardXp: 130, kind: 'max', measure: (e) => (e.gameId === 'dunk-rush' ? e.stats.maxCombo ?? 0 : 0) },
   { id: 'reflex-combo', title: 'Reflex Master', description: 'Reach a 15x streak in Cyber Reflex', target: 15, rewardCoins: 250, rewardXp: 150, kind: 'max', measure: (e) => (e.gameId === 'cyber-reflex' ? e.stats.maxCombo ?? 0 : 0) },
   { id: 'gem-cascade', title: 'Chain Reaction', description: 'Trigger a 3x cascade in Gem Surge', target: 3, rewardCoins: 220, rewardXp: 130, kind: 'max', measure: (e) => (e.gameId === 'gem-surge' ? e.stats.maxCombo ?? 0 : 0) },
-  { id: 'gem-score', title: 'Prism Hunter', description: 'Score 2,500+ in a single Gem Surge round', target: 2500, rewardCoins: 200, rewardXp: 120, kind: 'max', measure: (e) => (e.gameId === 'gem-surge' ? e.score : 0) },
+  { id: 'gem-score', title: 'Prism Hunter', description: 'Score 100+ in a single Gem Surge round', target: 100, rewardCoins: 200, rewardXp: 120, kind: 'max', measure: (e) => (e.gameId === 'gem-surge' ? e.score : 0) },
+  { id: 'swing-vines', title: 'Vine Runner', description: 'Swing 20 vines in one Canopy Swing run', target: 20, rewardCoins: 200, rewardXp: 120, kind: 'max', measure: (e) => (e.gameId === 'canopy-swing' ? e.stats.vines ?? 0 : 0) },
+  { id: 'swing-fire', title: 'Tree Top Blaze', description: 'Get ON FIRE in Canopy Swing (5 perfect catches in a row)', target: 5, rewardCoins: 240, rewardXp: 140, kind: 'max', measure: (e) => (e.gameId === 'canopy-swing' ? e.stats.maxCombo ?? 0 : 0) },
   { id: 'duel-wins', title: 'PvP Gladiator', description: 'Win 2 1v1 ranked duels', target: 2, rewardCoins: 300, rewardXp: 200, kind: 'sum', measure: (e) => (e.mode === 'duel' && e.won ? 1 : 0) },
   { id: 'play-three', title: 'Daily Grind', description: 'Finish 3 matches in any mode', target: 3, rewardCoins: 120, rewardXp: 90, kind: 'sum', measure: () => 1 },
   { id: 'tourney-run', title: 'Cup Contender', description: 'Play 1 tournament run', target: 1, rewardCoins: 180, rewardXp: 120, kind: 'sum', measure: (e) => (e.mode === 'tournament' ? 1 : 0) },
@@ -104,5 +106,18 @@ export function applyQuestEvent(quests: DailyQuest[], event: QuestEvent): DailyQ
     const progress = def.kind === 'max' ? Math.max(q.progress, value) : q.progress + value;
     const capped = Math.min(progress, q.target);
     return { ...q, progress: capped, completed: capped >= q.target };
+  });
+}
+
+/**
+ * Bring saved quests in line with the current definitions (targets / wording change when the
+ * scoring scale changes). Progress on a changed target restarts unless already completed.
+ */
+export function syncQuests(quests: DailyQuest[]): DailyQuest[] {
+  return quests.map((q) => {
+    const def = DEFS.get(q.id);
+    if (!def || (def.target === q.target && def.description === q.description)) return q;
+    if (q.completed) return { ...q, title: def.title, description: def.description };
+    return { ...q, title: def.title, description: def.description, target: def.target, progress: 0 };
   });
 }

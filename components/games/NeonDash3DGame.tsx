@@ -21,6 +21,7 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
+import { ROUND_SECONDS, CLUTCH_SECONDS, FIRE_STREAK, PTS, award as scoreAward, popStyle, ScoreBook, onFire } from '@/lib/scoring';
 import GameShell, { PopupApi, useSwipe } from './GameShell';
 import { ArrowLeftRight, ArrowUp, ArrowDown } from 'lucide-react';
 
@@ -33,6 +34,7 @@ interface Obstacle {
   lane: number;
   type: ObstacleType;
   collected: boolean;
+  gold?: boolean;
 }
 
 const LANES = [-2.5, 0, 2.5];
@@ -56,9 +58,6 @@ const ramp = (elapsed: number) => {
 };
 const CITY_SEGMENT = 180;
 const CELL_LENGTH = 4;
-const ROUND_SECONDS = 60;
-const CLUTCH_SECONDS = 10;
-const SURVIVAL_BONUS = 500;
 
 type Phase = 'ready' | 'playing' | 'over';
 
@@ -69,7 +68,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
   const stableAvatar = useStructuralMemo(avatar);
   const onFinishRef = useLatest(onFinish);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false, shields: SHIELDS });
+  const [hud, pushHud] = useThrottledHud({ score: 0, combo: 0, distance: 0, timeLeft: ROUND_SECONDS, clutch: false, shields: SHIELDS });
   const popups = useRef<PopupApi | null>(null);
   const resetWorldRef = useRef<() => void>(() => {});
   const flashRef = useRef<HTMLDivElement | null>(null);
@@ -98,20 +97,16 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
     slideTimer: 0,
     speed: BASE_SPEED,
     score: 0,
-    combo: 1,
+    combo: 0,
     distance: 0,
     nextSpawnZ: -30,
     action: 'idle' as 'idle' | 'run' | 'jump' | 'slide',
     shake: 0,
-    bestCombo: 1,
+    bestCombo: 0,
     timeLeft: ROUND_SECONDS,
     clutchAnnounced: false,
-    // score breakdown (base points; clutch extra tracked separately)
-    pDistance: 0,
-    pCrystals: 0,
-    pDodges: 0,
-    pSurvival: 0,
-    pClutch: 0,
+    book: new ScoreBook(),
+    golds: 0,
     crystals: 0,
     dodges: 0,
     shields: SHIELDS,
@@ -168,19 +163,16 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       slideTimer: 0,
       speed: BASE_SPEED,
       score: 0,
-      combo: 1,
+      combo: 0,
       distance: 0,
       nextSpawnZ: -18, // first hazard ~3.5s after GO
       action: 'run',
       shake: 0,
-      bestCombo: 1,
+      bestCombo: 0,
       timeLeft: ROUND_SECONDS,
       clutchAnnounced: false,
-      pDistance: 0,
-      pCrystals: 0,
-      pDodges: 0,
-      pSurvival: 0,
-      pClutch: 0,
+      book: new ScoreBook(),
+      golds: 0,
       crystals: 0,
       dodges: 0,
       shields: SHIELDS,
@@ -190,7 +182,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
     });
     rngRef.current = mulberry32(seedRef.current ?? randomSeed());
     resetWorldRef.current();
-    pushHud({ score: 0, combo: 1, distance: 0, timeLeft: ROUND_SECONDS, clutch: false, shields: SHIELDS }, true);
+    pushHud({ score: 0, combo: 0, distance: 0, timeLeft: ROUND_SECONDS, clutch: false, shields: SHIELDS }, true);
     setPhase('playing');
   }, [pushHud, seedRef]);
 
@@ -325,6 +317,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       const postMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0x1a1d2e, metalness: 0.9, roughness: 0.28, clearcoat: 0.6 }));
       const crystalGeo = engine.own(new THREE.OctahedronGeometry(0.5, 0));
       const crystalMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0x00f0ff, emissive: 0x00f0ff, emissiveIntensity: 1.1, roughness: 0.05, metalness: 0.2, clearcoat: 1, iridescence: 0.8, envMapIntensity: 2, flatShading: true }));
+      const goldCrystalMat = engine.own(new THREE.MeshPhysicalMaterial({ color: 0xffd34d, emissive: 0xffaa00, emissiveIntensity: 1.2, roughness: 0.05, metalness: 0.6, clearcoat: 1, envMapIntensity: 2, flatShading: true }));
 
       const show = (o: THREE.Object3D) => scene.add(o);
       const hide = (o: THREE.Object3D) => scene.remove(o);
@@ -363,14 +356,13 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
         particles.clear();
       };
 
-      /** Award points with the clutch multiplier and track the breakdown. */
-      const award = (base: number, cat: 'pDistance' | 'pCrystals' | 'pDodges' | 'pSurvival') => {
+      /** Score one moment in the shared language (1 a dodge or crystal, gold 3, finish 5). */
+      const award = (parts: Record<string, number>, streak = 0) => {
         const s = sim.current;
-        const mult = s.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
-        s[cat] += base;
-        s.pClutch += base * (mult - 1);
-        s.score += base * mult;
-        return base * mult;
+        const a = scoreAward(Object.values(parts).reduce((x, y) => x + y, 0), { streak, timeLeft: s.playing ? s.timeLeft : undefined });
+        s.book.record(a, parts);
+        s.score = s.book.score;
+        return a.total;
       };
 
       const endRun = (survived: boolean) => {
@@ -378,8 +370,8 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
         s.playing = false;
         if (survived) {
           s.action = 'idle';
-          award(SURVIVAL_BONUS, 'pSurvival');
-          popups.current?.banner(`FINISHED! +${SURVIVAL_BONUS}`, '#5fe8ff');
+          award({ 'Finished the run': PTS.jackpot });
+          popups.current?.banner(`FINISHED! +${PTS.jackpot}`, '#5fe8ff');
           sound.playWin();
           haptic('big');
           engine.flash(0.6);
@@ -395,16 +387,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
           haptic('fail');
         }
         const final = totalScore();
-        const breakdown = [
-          { label: `Distance (${Math.floor(s.distance)}m)`, points: Math.floor(s.pDistance) },
-          { label: `Crystals (${s.crystals})`, points: s.pCrystals },
-          { label: `Dodges (${s.dodges})`, points: s.pDodges },
-          { label: 'Full-run bonus', points: s.pSurvival },
-          { label: 'Clutch time ×2', points: Math.floor(s.pClutch) },
-        ].filter((b) => b.points > 0);
-        // Rounding: make the rows add up exactly to the score.
-        const diff = final - breakdown.reduce((a, b) => a + b.points, 0);
-        if (breakdown.length && diff) breakdown[0].points += diff;
+        const breakdown = s.book.breakdown();
         pushHud({ score: final, distance: Math.floor(s.distance), timeLeft: Math.max(0, s.timeLeft), clutch: false }, true);
         setPhase('over');
         onFinishRef.current(final, { maxCombo: s.bestCombo, distance: Math.floor(s.distance), breakdown });
@@ -444,7 +427,6 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
         }
 
         if (s.playing) {
-          award((s.speed * dt) / 4, 'pDistance');
           s.distance += s.speed * dt;
           const k = ramp(ROUND_SECONDS - s.timeLeft);
           s.speed = BASE_SPEED + (MAX_SPEED - BASE_SPEED) * k;
@@ -483,7 +465,10 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
               const obj = pools[t].acquire();
               obj.position.set(LANES[ln], t === 'spike' ? 0.7 : t === 'crystal' ? 1.2 : 0, s.nextSpawnZ);
               obj.visible = true;
-              obstacles.push({ obj, lane: ln, type: t, collected: false });
+              // Some crystals are gold (worth 3); more of them as the road speeds up.
+              const gold = t === 'crystal' && rng() < 0.12 + 0.12 * k;
+              if (t === 'crystal') (obj as THREE.Mesh).material = gold ? goldCrystalMat : crystalMat;
+              obstacles.push({ obj, lane: ln, type: t, collected: false, gold });
             };
             place(type, lane);
             // Late game: a second hazard in another lane, always leaving one lane open.
@@ -507,7 +492,8 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
                 o.collected = true; // never hits twice
                 s.shields -= 1;
                 s.hits += 1;
-                s.combo = 1;
+                if (onFire(s.combo)) popups.current?.banner('FIRE OUT', '#94a3b8');
+                s.combo = 0;
                 if (s.shields <= 0) {
                   endRun(false);
                   break;
@@ -521,20 +507,20 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
                 popups.current?.banner(s.shields === 1 ? 'LAST SHIELD!' : 'SHIELD HIT', '#fb7185');
                 sound.playLose();
                 haptic('fail');
-                pushHud({ shields: s.shields, combo: 1 }, true);
+                pushHud({ shields: s.shields, combo: 0 }, true);
               }
               if (o.type === 'crystal' && !o.collected) {
                 o.collected = true;
                 o.obj.visible = false;
-                const got = award(150 * s.combo, 'pCrystals');
-                s.crystals += 1;
-                const sp = engine.toScreen(o.obj.position);
-                popups.current?.pop(`+${got}`, sp.x, sp.y - 20, { color: got >= 600 ? '#fde047' : '#7df9ff', size: got >= 600 ? 'lg' : 'md' });
-                haptic('score');
-                s.combo = Math.min(10, s.combo + 1);
-                if (s.combo === 5) popups.current?.banner('COMBO ×5', '#7df9ff');
-                if (s.combo === 10) popups.current?.banner('MAX COMBO ×10', '#fde047');
+                s.combo += 1;
                 s.bestCombo = Math.max(s.bestCombo, s.combo);
+                const got = award(o.gold ? { Crystals: PTS.base, 'Gold crystals': PTS.gold - PTS.base } : { Crystals: PTS.base }, s.combo);
+                s.crystals += 1;
+                if (o.gold) s.golds += 1;
+                const sp = engine.toScreen(o.obj.position);
+                popups.current?.pop(`+${got}`, sp.x, sp.y - 20, popStyle(got, o.gold ? 'gold' : undefined));
+                haptic('score');
+                if (s.combo === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
                 sound.playScore(1 + s.combo * 0.1);
                 engine.flash(0.35);
                 particles.emit(o.obj.position, 0x00f0ff, { count: 18, speed: 4.5, drift });
@@ -543,8 +529,13 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
 
             if (z > 8) {
               if (o.type !== 'crystal' && s.playing && !o.collected) {
-                award(50 * s.combo, 'pDodges');
+                s.combo += 1;
+                s.bestCombo = Math.max(s.bestCombo, s.combo);
+                const got = award({ Dodges: PTS.base }, s.combo);
                 s.dodges += 1;
+                const sp = engine.toScreen(tmp.set(LANES[o.lane], 1.2, 2));
+                popups.current?.pop(`+${got}`, sp.x, Math.min(sp.y, engine.renderer.domElement.clientHeight * 0.6), popStyle(got));
+                if (s.combo === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
               }
               pools[o.type].release(o.obj);
               obstacles.splice(i, 1);
@@ -585,7 +576,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
           arms.run(t, s.playing ? 7 + s.speed * 0.25 : 2.2, s.playing ? 1 : 0.25);
         }
         arms.root.visible = s.invuln <= 0 || Math.floor(t * 14) % 2 === 0;
-        arms.setGlow(s.combo >= 5 ? 1.2 : 0);
+        arms.setGlow(onFire(s.combo) ? 1.2 : 0);
       });
 
       return () => {
@@ -597,7 +588,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
 
   const chips = (
     <>
-      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${hud.combo >= 5 ? 'bg-amber-400 text-black' : 'bg-black/50 text-amber-300'}`}>×{hud.combo} COMBO</span>
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${onFire(hud.combo) ? 'bg-orange-500 text-black' : 'bg-black/50 text-amber-300'}`}>{onFire(hud.combo) ? 'ON FIRE ×2 · ' : ''}{hud.combo} clean</span>
       <span className="px-2 py-0.5 rounded-full bg-black/50 text-[11px] font-black tracking-tight" data-testid="shields" aria-label={`${hud.shields} shields left`}>
         {Array.from({ length: SHIELDS }, (_, i) => (
           <span key={i} className={i < hud.shields ? 'text-cyan-300' : 'text-white/20'}>
@@ -632,7 +623,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Swipe up / tap: jump spikes' },
         { icon: <ArrowDown className="w-6 h-6" />, label: 'Swipe down: slide lasers' },
       ]}
-      scoring="First-person 60-second run that starts slow and speeds up. 3 shields — a hit costs one and your combo. Crystals 150 × combo · Dodges 50 × combo · Finish the run +500 · Last 10s ×2. Same road for every player."
+      scoring="Every hazard you dodge and every crystal is 1 point. Gold crystal 3 · 5 clean in a row = ON FIRE ×2 · Finish the run +5 · Last 10s CLUTCH ×2. 3 shields; the road speeds up. Same road for every player."
     >
       <div ref={flashRef} className="absolute inset-0 z-10 pointer-events-none opacity-0" style={{ background: 'radial-gradient(ellipse at center, transparent 45%, rgba(255,0,72,0.55) 100%)' }} />
     </GameShell>

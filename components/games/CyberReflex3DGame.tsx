@@ -20,6 +20,7 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
+import { ROUND_SECONDS, CLUTCH_SECONDS, FIRE_STREAK, PTS, award, popStyle, ScoreBook, onFire } from '@/lib/scoring';
 import GameShell, { PopupApi, useSwipe } from './GameShell';
 import { Pointer, Hand, ShieldAlert } from 'lucide-react';
 
@@ -27,20 +28,18 @@ type CyberReflex3DProps = GameProps;
 
 type NodeType = 'target' | 'hazard' | 'bonus';
 const NODE_COLORS: Record<NodeType, number> = { target: 0x00f0ff, hazard: 0xff0055, bonus: 0xffb800 };
-const ROUND_SECONDS = 40;
 const RING_START = 2.4;
 /**
  * Difficulty by time into the round (same for every player): k goes 0 → 1 over RAMP_SECONDS.
  * Early: one or two slow targets at a time, no hazards, a wide "perfect" window.
  * Late: up to five fast nodes, red hazards mixed in, a tight perfect window.
  */
-const RAMP_SECONDS = 32;
+const RAMP_SECONDS = 50;
 const rampK = (elapsed: number) => {
   const x = Math.min(1, Math.max(0, elapsed / RAMP_SECONDS));
   return x * x * (3 - 2 * x);
 };
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
-const CLUTCH_SECONDS = 10;
 const TOUCH_SLOP = 46; // px: a near-miss tap still counts on phones
 const EYE_Y = 1.62;
 /** Nodes are seen up close in first person, so they are drawn smaller than in the old overhead view. */
@@ -78,7 +77,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
     });
   }, []);
 
-  const fresh = () => ({ playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, spawnTimer: 0, clutchAnnounced: false, hits: 0, perfects: 0, hazards: 0, pHits: 0, pPerfect: 0, pStreak: 0, pClutch: 0, pHazard: 0 });
+  const fresh = () => ({ playing: true, score: 0, combo: 0, bestCombo: 0, timeLeft: ROUND_SECONDS, spawnTimer: 0, clutchAnnounced: false, hits: 0, perfects: 0, hazards: 0, book: new ScoreBook() });
   const sim = useRef({ ...fresh(), playing: false });
 
   const startGame = useCallback(() => {
@@ -242,11 +241,11 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
         const clutch = s.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
 
         if (node.type === 'hazard') {
-          const loss = Math.min(s.score, 150 * clutch);
-          s.score -= loss;
-          s.pHazard -= loss;
+          // Red node: −2 and the streak is gone.
+          const loss = s.book.penalty('Red nodes hit', 2);
+          s.score = s.book.score;
           s.hazards += 1;
-          if (s.combo >= 5) popups.current?.banner('STREAK BROKEN', '#fb7185');
+          if (onFire(s.combo)) popups.current?.banner('FIRE OUT', '#fb7185');
           s.combo = 0;
           sound.playLose();
           haptic('fail');
@@ -256,28 +255,25 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
           popups.current?.pop(`-${loss}`, sp.x, sp.y, { color: '#fb7185', size: 'md' });
         } else {
           const accurate = Math.abs(node.ringScale - 1.0) < lerp(0.42, 0.22, rampK(ROUND_SECONDS - s.timeLeft));
-          const bonus = node.type === 'bonus' ? 2 : 1;
-          const hitBase = 160 * bonus;
-          const perfectBase = accurate ? 90 * bonus : 0;
           s.combo += 1;
           s.bestCombo = Math.max(s.bestCombo, s.combo);
-          const mult = Math.min(5, 1 + Math.floor(s.combo / 5));
-          const pre = hitBase + perfectBase;
-          const pts = pre * mult * clutch;
-          s.pHits += hitBase;
-          s.pPerfect += perfectBase;
-          s.pStreak += pre * (mult - 1);
-          s.pClutch += pre * mult * (clutch - 1);
-          s.score += pts;
+          // 1 per node · gold node 3 · perfect ring timing +1 · on fire / clutch ×2
+          const parts: Record<string, number> = { 'Nodes hit': PTS.base };
+          if (node.type === 'bonus') parts['Gold nodes'] = PTS.gold - PTS.base;
+          if (accurate) parts['Perfect timing'] = PTS.bonus;
+          const a = award(Object.values(parts).reduce((x, y) => x + y, 0), { streak: s.combo, timeLeft: s.timeLeft });
+          s.book.record(a, parts);
+          s.score = s.book.score;
+          const pts = a.total;
           s.hits += 1;
           if (accurate) s.perfects += 1;
           sound.playScore(1 + (s.combo % 8) * 0.1);
           haptic(accurate ? 'score' : 'light');
           engine.flash(accurate ? 0.55 : 0.25);
           particles.emit(tmp, NODE_COLORS[node.type], { count: accurate ? 28 : 16, speed: accurate ? 6 : 4 });
-          popups.current?.pop(`+${pts}`, sp.x, sp.y - 18, { color: accurate ? '#fde047' : '#7df9ff', size: pts >= 1000 ? 'lg' : 'md' });
+          popups.current?.pop(`+${pts}`, sp.x, sp.y - 18, popStyle(pts, node.type === 'bonus' ? 'gold' : accurate ? 'bonus' : undefined));
           if (accurate) popups.current?.pop('PERFECT', sp.x, sp.y + 16, { color: '#fde047', size: 'sm' });
-          if (s.combo > 0 && s.combo % 5 === 0) popups.current?.banner(`STREAK ×${mult}`, '#7df9ff');
+          if (s.combo === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
           // Laser from your right hand to the node; the view leans toward it a touch.
           recoil = 1;
           feel.kick(0.18);
@@ -300,13 +296,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
         s.playing = false;
         sound.playWin();
         haptic('big');
-        const breakdown = [
-          { label: `Targets hit (${s.hits})`, points: s.pHits },
-          { label: `Perfect timing (${s.perfects})`, points: s.pPerfect },
-          { label: `Streak multiplier (best ${s.bestCombo})`, points: s.pStreak },
-          { label: 'Clutch time ×2', points: s.pClutch },
-          { label: `Hazards hit (${s.hazards})`, points: s.pHazard },
-        ].filter((b) => b.points !== 0);
+        const breakdown = s.book.breakdown();
         pushHud({ timeLeft: 0, score: s.score, clutch: false }, true);
         setPhase('over');
         onFinishRef.current(s.score, { maxCombo: s.bestCombo, breakdown });
@@ -373,6 +363,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
           n.ring.lookAt(camera.position);
           if (n.ringScale <= 0.6 || !s.playing) {
             if (s.playing && n.type !== 'hazard' && s.combo !== 0) {
+              if (onFire(s.combo)) popups.current?.banner('FIRE OUT', '#94a3b8');
               s.combo = 0;
               pushHud({ combo: 0 }, true);
             }
@@ -405,11 +396,11 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
     [stableAvatar],
   );
 
-  const mult = Math.min(5, 1 + Math.floor(hud.combo / 5));
+  const fire = onFire(hud.combo);
   const chips = (
     <>
-      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${mult > 1 ? 'bg-cyan-400 text-black' : 'bg-black/50 text-cyan-300'}`}>
-        {hud.combo} streak{mult > 1 ? ` · ×${mult}` : ''}
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${fire ? 'bg-orange-500 text-black' : 'bg-black/50 text-cyan-300'}`}>
+        {fire ? 'ON FIRE ×2 · ' : ''}{hud.combo} streak
       </span>
     </>
   );
@@ -437,7 +428,7 @@ export default function CyberReflex3DGame({ avatar, onFinish, seed, rival, match
         { icon: <Hand className="w-6 h-6" />, label: 'Slash across many' },
         { icon: <ShieldAlert className="w-6 h-6" />, label: 'Avoid red' },
       ]}
-      scoring="First-person laser drill. Starts slow with no red nodes; speeds up as the clock runs. Hit 160 · Perfect ring timing +90 · Gold ×2 · Every 5 in a row raises the multiplier (max ×5) · Red −150 · Last 10s ×2."
+      scoring="Every node is 1 point. Gold node 3 · Hit as the ring closes +1 · 5 in a row = ON FIRE ×2 · Red node −2 · Last 10s CLUTCH ×2. Starts slow; more and faster nodes as the clock runs."
     >
       <div ref={flashRef} className="absolute inset-0 z-10 pointer-events-none opacity-0" style={{ background: 'radial-gradient(ellipse at center, transparent 45%, rgba(255,0,72,0.55) 100%)' }} />
     </GameShell>

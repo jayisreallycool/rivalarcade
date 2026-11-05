@@ -214,8 +214,15 @@ function PhoneFlow({ link, onBack }: { link: boolean; onBack?: () => void }) {
         </>
       )}
       <p className="mt-6 text-[11px] leading-relaxed text-slate-500 text-center">
-        Mobile numbers only (no VoIP). Message and data rates may apply. By continuing you agree to the Terms and Privacy Policy. Cash games are 18+ and not available in every state.
+        Mobile numbers only (no VoIP). Message and data rates may apply. By continuing you agree to the{' '}
+        <a href="/terms" className="underline text-slate-300">Terms</a> and <a href="/privacy" className="underline text-slate-300">Privacy Policy</a>. Cash games are 18+ and not available in every state.
       </p>
+      <div className="mt-3 flex justify-center gap-4 text-[11px] font-bold text-slate-500">
+        <a href="/help">Help</a>
+        <a href="/rules">Rules</a>
+        <a href="/responsible-play">Responsible play</a>
+        <a href="/about">About</a>
+      </div>
       {link && (
         <button onClick={() => userStore.signOut()} className="mt-4 w-full text-xs font-bold text-slate-400">
           Use a different account

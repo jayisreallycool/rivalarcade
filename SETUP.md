@@ -68,11 +68,11 @@ Redeploy after adding the variables, because `NEXT_PUBLIC_*` values are baked in
 
 ## 5. Going live with real money
 
-Before you switch `CASH_MODE=live` and use `sk_live_…` keys:
+Before you switch `CASH_MODE=live`:
 
 - **Legal review.** Skill-gaming laws vary by state. The blocked list (`CASH_BLOCKED_REGIONS`) defaults to AZ, AR, CT, DE, LA, MT, SC, SD and TN. Have a gaming lawyer confirm the list, your terms of service, your privacy policy and your prize rules.
-- **Stripe approval.** Stripe treats paid skill contests as a restricted business. Apply and get written approval for this business type before taking live payments, or use a processor that specialises in skill gaming.
-- **Terms & Privacy pages.** The sign-in screen refers to them, so publish real ones.
+- **A skill-gaming payment processor.** Stripe *prohibits* paid skill contests ("games of skill … tournaments or competitions with a monetary prize" — stripe.com/legal/restricted-businesses), so Stripe is for **test mode only**. For live money, apply to a processor that underwrites skill gaming (e.g. Paysafe, Nuvei, or a high-risk merchant account) and swap it in for the deposit / payout / ID calls in `app/api/rpc/route.ts` and `app/api/stripe/webhook/route.ts`.
+- **Legal pages.** /terms, /privacy, /rules, /fair-play and /responsible-play ship with solid starting text (`lib/info-pages.ts`); have counsel review and adjust them. Contact-form messages land in Firestore under `support/`.
 - **Anti-cheat limits.** The server keeps the seed secret until a run starts, times every run, rejects impossible scores and holds unusually large jumps for review.
   - It does **not** replay games on the server. For high-stakes cash play, consider adding server-side replay checks.
 - **Account review.** Accounts flagged by the checks (shared devices, rejected runs) can't play for cash or withdraw.

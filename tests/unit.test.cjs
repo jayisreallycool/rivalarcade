@@ -131,28 +131,40 @@ ok('item looks: every item has its own design, and named features are really the
   for (const h of items.filter((x) => x.category === 'hair')) assert(C.HAIR_COLORS.some((c) => c.color === h.color), `${h.id} colour not in HAIR_COLORS`);
 });
 
-ok('canopy swing: every generated gap is makeable, tighter deeper in, same seed = same jungle', () => {
-  const P = require('../.test-build/swing-physics');
+ok('canopy swing hook course: deterministic, every gap makeable, four stages that get harder', () => {
+  const P = require('../.test-build/grapple-physics');
   const { mulberry32 } = require('../.test-build/rng');
   const gen = (seed, n) => {
     const rng = mulberry32(seed);
-    const vs = [{ f: 0, y: 10, len: 3.4, sway: 0, speed: 1.6, phase: 0, window: [0, 0] }];
-    for (let i = 1; i <= n; i++) vs.push(P.nextVine(vs[i - 1], P.swingK(i), rng, i));
-    return vs;
+    const as = [P.FIRST_ANCHOR];
+    for (let i = 1; i <= n; i++) as.push(P.nextAnchor(as[i - 1], i, rng));
+    return as;
   };
-  const vs = gen(1234, 60);
-  for (let i = 0; i < 60; i++) {
-    const w = vs[i].window;
-    assert(w[1] - w[0] >= 0.2, `gap ${i} window ${w}`);
-    // the middle of the window really reaches the next vine
-    assert(P.reaches(vs[i], vs[i + 1], (w[0] + w[1]) / 2, P.catchRadius(P.swingK(i + 1))), `gap ${i} mid-window misses`);
+  const as = gen(1234, 100);
+  for (let i = 1; i < as.length; i++) {
+    const st = P.stageAt(i);
+    const b = as[i];
+    assert(P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 + b.bob }, st.range) && P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 - b.bob }, st.range), `gap ${i} not makeable`);
   }
-  const width = (a, b) => vs.slice(a, b).reduce((s, v) => s + v.window[1] - v.window[0], 0) / (b - a);
-  assert(width(0, 8) > width(45, 60), 'later gaps should be tighter');
-  assert(vs.slice(45).some((v) => v.sway > 0), 'late vines should sway');
-  assert.deepStrictEqual(gen(77, 20).map((v) => v.f), gen(77, 20).map((v) => v.f));
-  // Releasing on the back-swing / too early falls in the river.
-  assert(!P.reaches(vs[0], vs[1], -0.25, P.catchRadius(0)));
+  const gap = (x, y) => as.slice(x, y).reduce((s, a, k) => s + a.f - as[x + k - 1 < 0 ? 0 : x + k - 1].f, 0) / (y - x);
+  assert(gap(60, 90) > gap(1, 12) + 2, `crazy gaps (${gap(60, 90)}) should be much wider than slow (${gap(1, 12)})`);
+  assert(as.slice(56).some((a) => a.bob > 0) && as.slice(1, 12).every((a) => a.bob === 0), 'only later anchors bob');
+  assert.deepStrictEqual(['SLOW', 'MIDDLE', 'FINAL', 'CRAZY'], [0, 12, 30, 55].map((i) => P.stageAt(i).name));
+  assert(P.stageAt(100).hold < P.stageAt(55).hold && P.stageAt(55).hold < P.stageAt(0).hold, 'ropes fray faster');
+  assert(P.stageAt(100).range < P.stageAt(0).range, 'rope range shrinks');
+  assert.deepStrictEqual(gen(77, 30).map((a) => a.f), gen(77, 30).map((a) => a.f));
+  // Rope physics: hanging still, you swing down and the rope keeps its length.
+  const b = { f: 3, y: 10.5 - 1, vf: 0, vy: 0 };
+  const rope = { anchor: 0, L: 3.2, t: 0 };
+  let maxD = 0;
+  for (let k = 0; k < 600; k++) {
+    P.step(b, rope, { f: 0, y: 10.5 }, 1 / 120);
+    maxD = Math.max(maxD, Math.hypot(b.f, b.y - 10.5));
+  }
+  assert(maxD <= 3.21, `rope stretched to ${maxD}`);
+  assert(rope.t > 4.9, 'hold timer runs');
+  // Letting go on the back-swing never reaches a far anchor.
+  assert(!P.reachable(P.FIRST_ANCHOR, { ...P.FIRST_ANCHOR, f: 14 }, 6.6));
 });
 
 ok('scoring: 1 point per action, specials and multipliers', () => {

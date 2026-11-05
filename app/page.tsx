@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { SEASON_TIERS, useUserStore, userStore, usd } from '@/lib/user-store';
 import AuthGate from '@/components/auth/AuthGate';
+import { SplashGate, SplashMarkup } from '@/components/SplashScreen';
 import WalletView from '@/components/wallet/WalletView';
 import { leagueFor, LEAGUES } from '@/lib/game-types';
 import { sound } from '@/lib/sound';
@@ -81,9 +82,13 @@ function Segments<T extends string>({ value, onChange, items }: { value: T; onCh
 
 export default function Home() {
   return (
-    <AuthGate>
-      <App />
-    </AuthGate>
+    <>
+      <SplashMarkup />
+      <SplashGate />
+      <AuthGate>
+        <App />
+      </AuthGate>
+    </>
   );
 }
 

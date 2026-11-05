@@ -1006,6 +1006,16 @@ export class Engine {
     });
   }
 
+  /** Contact-form message (support/{id}); reviewed in the Firebase console. */
+  async supportTicket(t: { name: string; email: string; username: string; topic: string; message: string; ip: string }) {
+    const id = uuid();
+    const now = this.now;
+    await this.store.run(async (tx) => {
+      tx.create(`support/${id}`, { id, ...t, status: 'open', createdAt: now });
+    });
+    return id;
+  }
+
   // ---------------------------------------------------------------- reads (what the app shows)
 
   /** Everything the app needs about the signed-in player (no internal flags). */

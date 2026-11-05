@@ -195,7 +195,9 @@ export default function WalletView() {
             <button disabled={!!busy} onClick={() => run('pause', () => userStore.setLimits(null, 7), 'Paid play paused for 7 days.')} className="text-xs font-bold text-amber-300 flex items-center gap-1" data-testid="self-exclude">
               <PauseCircle className="w-4 h-4" /> Take a 7-day break from paid play
             </button>
-            <p className="text-[10px] text-white/35 mt-2">Limits can be lowered any time. Need help? Call 1-800-GAMBLER.</p>
+            <p className="text-[10px] text-white/35 mt-2">
+              Limits can be lowered any time. Need help? Call 1-800-GAMBLER · <a href="/responsible-play" className="underline">Responsible play</a> · <a href="/rules" className="underline">Contest rules</a>
+            </p>
           </>
         )}
       </div>

@@ -2,7 +2,6 @@ import type {Metadata, Viewport} from 'next';
 import '@fontsource/lilita-one/400.css';
 import '@fontsource-variable/nunito';
 import './globals.css';
-import { SplashGate, SplashMarkup } from '@/components/SplashScreen';
 
 export const metadata: Metadata = {
   title: 'RivalArcade - Competitive Skill Gaming & Playable Custom Avatars',
@@ -37,8 +36,6 @@ export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en" className="dark bg-[#0a0b10] text-slate-100 antialiased selection:bg-cyan-500 selection:text-black">
       <body suppressHydrationWarning className="min-h-screen bg-[#0b0b10] overflow-x-hidden font-sans">
-        <SplashMarkup />
-        <SplashGate />
         {children}
       </body>
     </html>

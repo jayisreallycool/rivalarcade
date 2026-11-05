@@ -269,7 +269,7 @@ export default function GameLibraryView() {
                 })}
               </div>
               <p className="mt-3 text-[10px] text-white/35 text-center">
-                {currency === 'usd' ? 'Skill contests between real players. 10% service fee on paid pots. 18+, void where prohibited.' : 'Rival Coins are a virtual in-game currency with no cash value.'}
+                {currency === 'usd' ? 'Skill contests between real players. 10% service fee on paid pots. 18+, void where prohibited.' : 'Rival Coins are a virtual in-game currency with no cash value.'} <a href="/rules" className="underline">Rules</a>
               </p>
             </div>
           </div>

@@ -6,6 +6,7 @@ import Avatar3DView from '@/components/avatar/Avatar3DView';
 import BannerBackdrop from '@/components/avatar/BannerBackdrop';
 import { sound, useMuted } from '@/lib/sound';
 import { formatCountdown } from '@/lib/quests';
+import { PAGE_LINKS } from '@/lib/info-pages';
 import { detectDeviceTier, getQualityOverride, setQualityOverride, QualityTier } from '@/lib/engine/quality';
 import { Trophy, Flame, Coins, Edit2, Check, Settings, Volume2, VolumeX, MonitorSmartphone, RotateCcw, X } from 'lucide-react';
 
@@ -365,6 +366,17 @@ export default function ProfileView() {
                 <RotateCcw className="w-3.5 h-3.5" /> Sign out
               </button>
             )}
+          </div>
+
+          <div className="pt-4 border-t border-[#1e202f]" data-testid="legal-links">
+            <span className="text-sm font-bold text-white block mb-2">Help & legal</span>
+            <div className="grid grid-cols-2 gap-2">
+              {PAGE_LINKS.map((l) => (
+                <a key={l.href} href={l.href} className="h-10 px-3 rounded-lg bg-white/[0.04] border border-white/5 text-xs font-bold text-slate-300 flex items-center justify-between">
+                  {l.label} <span className="text-slate-500">›</span>
+                </a>
+              ))}
+            </div>
           </div>
         </div>
       </div>

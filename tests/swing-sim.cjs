@@ -24,7 +24,7 @@ function run(seed, react, noise, r2){
         if(drop>=0.15&&drop<=vines[target]){if(P.isPerfect(drop,vines[target]))perf++;caught++;line={anchor:target,drop,L:Math.max(P.MIN_ROPE,Math.hypot(T.f-b.f,yAt-b.y)),t:0};target++;ensure(target+2)} else reload=P.RELOAD_S;}
       else if(Math.hypot(nf-b.f,ny-b.y)>st.range){flying=null;reload=P.RELOAD_S}else{flying.f=nf;flying.y=ny}}
     if(reload>0)reload-=dt;
-    if(!line&&!flying&&b.f>as[target].f+2.5){target++;ensure(target+2)}
+    if(!line&&!flying&&b.f>as[target].f+0.6){target++;ensure(target+2)}
     if(b.y<P.WATER_Y+0.35)return {caught,perf,secs:Math.round(t)};
   }
   return {caught,perf,secs:Math.round(t),timeout:true};

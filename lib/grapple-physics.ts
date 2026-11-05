@@ -15,13 +15,13 @@
  * run ends: a strong player lasts a few minutes, nobody lasts forever.
  */
 
-export const G = 15;
+export const G = 13;
 export const WATER_Y = 0;
 export const HOOK_SPEED = 34;
 export const RELOAD_S = 0.35;
 /** Swing assist: hanging, you're kept swinging to at least this amplitude (rad). */
-export const AMP = 1.05;
-export const MAX_SPEED = 19;
+export const AMP = 1.3; // big, pumping swings
+export const MAX_SPEED = 15.5;
 export const MIN_ROPE = 2.8;
 export const REEL_SPEED = 3.2; // the gun winches you up the rope after a catch
 /** The hook gun's fixed firing angle, up from horizontal. */
@@ -103,6 +103,7 @@ export function step(b: Body, rope: Rope | null, A: { f: number; y: number } | n
   b.y += b.vy * dt;
   if (rope && A) {
     rope.t += dt;
+    const Lold = rope.L;
     if (rope.L > MIN_ROPE) rope.L = Math.max(MIN_ROPE, rope.L - REEL_SPEED * dt);
     let df = b.f - A.f;
     let dy = b.y - A.y;
@@ -116,6 +117,15 @@ export function step(b: Body, rope: Rope | null, A: { f: number; y: number } | n
       if (radial > 0) {
         b.vf -= radial * df;
         b.vy -= radial * dy;
+      }
+      // winching in spins you faster (angular momentum is kept) — chain catches to build speed
+      if (Lold > rope.L) {
+        const k = Lold / rope.L;
+        const tfx = -dy;
+        const tfy = df;
+        const sT = b.vf * tfx + b.vy * tfy;
+        b.vf += sT * (k - 1) * tfx;
+        b.vy += sT * (k - 1) * tfy;
       }
       // pump: keep at least the steady swing amplitude (only below the anchor)
       if (dy < 0) {

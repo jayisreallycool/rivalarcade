@@ -46,6 +46,8 @@ interface Hook {
   y: number;
   state: 'out' | 'back';
   t: number;
+  /** Next vine the line hasn't passed yet. */
+  next: number;
 }
 
 function barkTexture() {
@@ -433,6 +435,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       let caught = 0;
       let stageIdx = 0;
       let frameN = 0;
+      let lastHooked = 0;
       let lastCanRelease = false;
       let book = new ScoreBook();
       const camFocus = new THREE.Vector3(0, 7, -3);
@@ -469,6 +472,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         ensureAhead(0);
         hangOn(0, -0.75, 3.6);
         target = 1;
+        lastHooked = 0;
         shots = 0;
         reload = 0;
         flying = null;
@@ -504,7 +508,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           return;
         }
         if (flying || reload > 0) return;
-        flying = { f: b.f, y: b.y, state: 'out', t: 0 };
+        flying = { f: b.f, y: b.y, state: 'out', t: 0, next: target };
         sound.playLaser();
         haptic('light');
         particles.emit(tmpV.set(0.2, b.y + 0.5, -b.f), 0x5eead4, { count: 6, speed: 2, life: 0.25, gravity: 0 });
@@ -527,7 +531,9 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
 
       const onHook = (i: number, dist: number, drop: number) => {
         const st = stageAt(i);
-        caught += 1;
+        const skipped = Math.max(0, i - lastHooked - 1);
+        lastHooked = i;
+        caught += 1 + skipped;
         const perfect = shots === 0 && isPerfect(drop, st.vine);
         streak = perfect ? streak + 1 : 0;
         bestStreak = Math.max(bestStreak, streak);
@@ -535,12 +541,14 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         const base = a0.gold ? PTS.gold : PTS.base;
         const parts: Record<string, number> = { [a0.gold ? 'Gold vines' : 'Vines']: base };
         if (perfect) parts['Perfect shots'] = PTS.bonus;
-        const a = award(base + (perfect ? PTS.bonus : 0), { streak });
+        if (skipped) parts['Skipped vines'] = skipped * PTS.bonus;
+        const a = award(base + (perfect ? PTS.bonus : 0) + skipped * PTS.bonus, { streak });
         book.record(a, parts);
         const A0 = anchorPos(a0, t);
         const A = { f: A0.f, y: A0.y - drop };
         popAtWorld(A.f, A.y + 0.7, `+${a.total}`, popStyle(a.total, a0.gold ? 'gold' : perfect ? 'bonus' : undefined));
         if (perfect) popAtWorld(A.f, A.y + 1.2, 'PERFECT', { color: '#fde047', size: 'sm' });
+        if (skipped) popups.current?.banner(skipped > 1 ? `SKIP ×${skipped}!` : 'SKIP!', '#38bdf8');
         if (streak === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
         // stage change
         const ns = STAGES.findIndex((s) => s.name === stageAt(i + 1).name);
@@ -602,32 +610,37 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
               flying.t += h;
               const T = anchorPos(anchors[target], t);
               if (flying.state === 'out') {
-                // straight out along the gun's fixed angle; bites if it crosses the target vine
+                // Straight out along the gun's fixed angle. It bites the FIRST vine its line really
+                // crosses — that can be one further on: fly past vines to skip them (bonus).
                 const stepLen = HOOK_SPEED * h;
                 const nf = flying.f + AIM_DIR.f * stepLen;
                 const ny = flying.y + AIM_DIR.y * stepLen;
-                const len = objs[target]?.len ?? st.vine;
-                if (nf >= T.f) {
-                  const yAt = flying.y + ((T.f - flying.f) / AIM_DIR.f) * AIM_DIR.y;
-                  const drop = T.y - yAt;
+                let done = false;
+                while (!done && flying && nf >= anchorPos(anchors[flying.next], t).f) {
+                  const V = anchorPos(anchors[flying.next], t);
+                  const len = objs[flying.next]?.len ?? stageAt(flying.next).vine;
+                  const yAt = flying.y + ((V.f - flying.f) / AIM_DIR.f) * AIM_DIR.y;
+                  const drop = V.y - yAt;
                   if (drop >= 0.15 && drop <= len) {
-                    const P = { f: T.f, y: yAt };
+                    const i = flying.next;
                     flying = null;
-                    onHook(target, Math.hypot(P.f - b.f, P.y - b.y), drop);
+                    onHook(i, Math.hypot(V.f - b.f, yAt - b.y), drop);
+                    done = true;
                   } else {
+                    flying.next += 1; // the line passes this vine — keep flying
+                    ensureAhead(flying.next);
+                  }
+                }
+                if (!done && flying) {
+                  if (Math.hypot(nf - b.f, ny - b.y) > st.range) {
                     flying.state = 'back';
                     shots += 1;
                     streak = 0;
-                    popAtWorld(T.f, yAt, 'MISS', { color: '#fca5a5', size: 'sm' });
+                    popAtWorld(nf, ny + 0.3, 'MISS', { color: '#fca5a5', size: 'sm' });
+                  } else {
+                    flying.f = nf;
+                    flying.y = ny;
                   }
-                } else if (Math.hypot(nf - b.f, ny - b.y) > st.range) {
-                  flying.state = 'back';
-                  shots += 1;
-                  streak = 0;
-                  popAtWorld(nf, ny + 0.3, 'TOO FAR', { color: '#fca5a5', size: 'sm' });
-                } else {
-                  flying.f = nf;
-                  flying.y = ny;
                 }
               } else {
                 const df = b.f - flying.f;
@@ -645,9 +658,9 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
             }
             if (reload > 0) reload = Math.max(0, reload - h);
             // flew past the next branch without hooking: aim at the one after
-            if (!line && !flying && b.f > anchors[target].f + 2.5) {
+            // flew past the next vine: aim at the one after (skips score a bonus when you hook)
+            if (!line && !flying && b.f > anchors[target].f + 0.6) {
               target += 1;
-              shots = 1;
               ensureAhead(target);
             }
             collectFruit();
@@ -736,8 +749,17 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         // aim laser along the gun's fixed angle: green when firing now would hit the vine, gold in
         // the PERFECT zone, red otherwise. It shortens every stage (none in CRAZY).
         const range = st.range;
-        const vineLen = objs[target]?.len ?? st.vine;
-        const hit = hookHit(b, T, vineLen, range);
+        let vineLen = objs[target]?.len ?? st.vine;
+        let hit = hookHit(b, T, vineLen, range);
+        for (let k = 1; !hit && k <= 3 && target + k < anchors.length; k++) {
+          const Vk = anchorPos(anchors[target + k], t);
+          const lk = objs[target + k]?.len ?? stageAt(target + k).vine;
+          const hk = hookHit(b, Vk, lk, range);
+          if (hk) {
+            hit = hk;
+            vineLen = lk;
+          }
+        }
         const inRange = !!hit;
         const inSweet = !!hit && isPerfect(hit.drop, vineLen);
         const show = playing && !flying && !line;
@@ -842,7 +864,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       surface={surface}
       hint="Tap to let go · tap again to fire when the line crosses the vine"
       guide={{
-        goal: 'Hook-swing vine to vine across the river. Don’t fall in.',
+        goal: 'Swing, fly and hook vine to vine across the river. Don’t fall in.',
         controls: [
           { gesture: 'release', label: 'Tap to let go on the up-swing' },
           { gesture: 'tap', label: 'Tap again in the air to fire the hook' },
@@ -851,6 +873,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         points: [
           { label: 'Vine', value: '1' },
           { label: 'Hit the glowing middle', value: '+1', tone: 'bonus' },
+          { label: 'Each vine you skip', value: '+1', tone: 'bonus' },
           { label: 'Gold vine', value: '3', tone: 'gold' },
           { label: 'Banana', value: '1' },
           { label: 'Idol / Sunstone', value: '3 / 5', tone: 'jackpot' },

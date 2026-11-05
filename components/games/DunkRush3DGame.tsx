@@ -23,9 +23,12 @@ import GameShell, { PopupApi, useSwipe, Swipe } from './GameShell';
 import { ArrowUp, MoveHorizontal, Flame } from 'lucide-react';
 
 /**
- * DUNK RUSH — flick-to-shoot basketball, tuned like the skill-game apps:
- * easy to pick up (swipe up from the ball, aim assist, forgiving rim), hard to master
- * (perfect-swish window, bank shots, a hoop that starts moving, shifting shot spots, streaks).
+ * DUNK RUSH — flick-to-shoot basketball where the shot is yours:
+ * the ANGLE of your flick aims left/right, its LENGTH sets how far the ball travels, and its
+ * SPEED sets the arc (slow push = high, soft arc that swishes; quick snap = flat line drive that
+ * rattles). You shoot from changing spots — close, mid-range, 3-point and deep — so you have to
+ * judge power for each range. Aim help and the arc preview fade as you level up, and the hoop
+ * starts moving (lead it yourself).
  */
 
 const GRAVITY = 12;
@@ -36,7 +39,7 @@ const RIM_Y = 3.05;
 const HOOP_Z = -2.6; // rim centre depth
 const BOARD_OFFSET = 0.52; // backboard sits this far behind rim centre
 // The ball is held in your hands just below eye level (first person).
-const SPAWN = new THREE.Vector3(0, 1.36, 3.4);
+const SPAWN = new THREE.Vector3(0, 1.36, HOOP_Z + 3.3); // first spot: close range, straight on
 const EYE = { y: 1.74, back: 1.0 };
 const MAX_BALLS = 4;
 const RELOAD = 0.38; // seconds before the next ball is ready
@@ -54,6 +57,7 @@ interface Ball {
   bank: boolean;
   gold: boolean;
   perfect: boolean;
+  zone: ZoneId;
   age: number;
   bounces: number;
 }
@@ -64,14 +68,25 @@ interface Ball {
  * and compressed power (comp = how much of your power error survives). Later levels move the hoop,
  * shift your shot spot and hand more of the shot back to your own skill.
  */
-const LEVELS = [
-  { makes: 0, amp: 0, speed: 0, pull: 0.85, range: 2.6, comp: 0.3, perfect: 0.16, shift: 0 },
-  { makes: 4, amp: 0.5, speed: 0.55, pull: 0.78, range: 2.2, comp: 0.36, perfect: 0.13, shift: 0 },
-  { makes: 9, amp: 1.0, speed: 0.85, pull: 0.68, range: 1.9, comp: 0.42, perfect: 0.11, shift: 1.6 },
-  { makes: 15, amp: 1.5, speed: 1.15, pull: 0.58, range: 1.6, comp: 0.48, perfect: 0.095, shift: 2.2 },
-  { makes: 22, amp: 1.9, speed: 1.5, pull: 0.5, range: 1.3, comp: 0.52, perfect: 0.085, shift: 2.6 },
-  { makes: 30, amp: 2.3, speed: 1.9, pull: 0.42, range: 1.1, comp: 0.58, perfect: 0.075, shift: 2.9 },
+type ZoneId = 'close' | 'mid' | 'three' | 'deep';
+/** Shot ranges: distance to the rim (m), how far round the arc the spot can be (rad), bonus. */
+const ZONES: Record<ZoneId, { dist: number; spread: number; label: string; bonus: number }> = {
+  close: { dist: 3.3, spread: 0.35, label: 'CLOSE', bonus: 0 },
+  mid: { dist: 4.6, spread: 0.55, label: 'MID-RANGE', bonus: 0 },
+  three: { dist: 6.3, spread: 0.6, label: '3-POINT', bonus: 1 },
+  deep: { dist: 7.6, spread: 0.45, label: 'DEEP 3', bonus: 1 },
+};
+/** assist: share of a near-miss corrected (only within `window` metres); preview: share of the arc shown. */
+const LEVELS: { makes: number; amp: number; speed: number; assist: number; window: number; preview: number; zones: ZoneId[] }[] = [
+  { makes: 0, amp: 0, speed: 0, assist: 0.45, window: 0.8, preview: 1, zones: ['close', 'mid'] },
+  { makes: 3, amp: 0, speed: 0, assist: 0.35, window: 0.7, preview: 0.75, zones: ['mid', 'close', 'three'] },
+  { makes: 7, amp: 0.5, speed: 0.6, assist: 0.25, window: 0.6, preview: 0.55, zones: ['mid', 'three'] },
+  { makes: 12, amp: 1.0, speed: 0.9, assist: 0.18, window: 0.5, preview: 0.4, zones: ['three', 'mid', 'deep'] },
+  { makes: 18, amp: 1.5, speed: 1.2, assist: 0.12, window: 0.45, preview: 0.28, zones: ['three', 'deep'] },
+  { makes: 25, amp: 2.0, speed: 1.6, assist: 0.08, window: 0.4, preview: 0.18, zones: ['deep', 'three'] },
 ];
+/** Metres of carry per unit of power (a flick of half the screen height). */
+const CARRY = 6.0;
 
 function makeCourtTexture() {
   const c = document.createElement('canvas');
@@ -165,7 +180,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
   const seedRef = useLatest(seed);
   const popups = useRef<PopupApi | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false });
+  const [hud, pushHud] = useThrottledHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false, zone: 'close' as ZoneId });
   const resetRef = useRef<() => void>(() => {});
   const shootRef = useRef<(s: Swipe, w: number, h: number) => void>(() => {});
   const aimRef = useRef<(s: Swipe | null, w: number, h: number) => void>(() => {});
@@ -186,6 +201,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
     clutchAnnounced: false,
     nextGold: false,
     golds: 0,
+    zone: 'close' as ZoneId,
     book: new ScoreBook(),
   });
 
@@ -205,10 +221,11 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       clutchAnnounced: false,
       nextGold: false,
       golds: 0,
+      zone: 'close',
       book: new ScoreBook(),
     });
     resetRef.current();
-    pushHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false }, true);
+    pushHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false, zone: 'close' }, true);
     setPhase('playing');
   }, [pushHud]);
 
@@ -242,10 +259,10 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
 
       // First person: you hold the ball at the free-throw spot and look up at the rim.
       // The camera follows when the shot spot shifts; the lens widens on tall phone screens.
-      const view = { camX: 0, lookY: 1.1 };
+      const view = { camX: 0, camZ: SPAWN.z, lookY: 1.1, baseLook: 1.1, look: 1.1 };
       engine.onResize((_w, _h, aspect) => {
         camera.fov = aspect < 0.6 ? 70 : aspect < 0.8 ? 64 : 50;
-        view.lookY = aspect < 0.8 ? 1.1 : 1.45;
+        view.baseLook = aspect < 0.8 ? 1.1 : 1.45;
         camera.updateProjectionMatrix();
       });
       const feel = new CameraFeel();
@@ -415,7 +432,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         mesh.castShadow = quality.shadows;
         mesh.visible = false;
         scene.add(mesh);
-        return { mesh, pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, resolved: true, rimHits: 0, bank: false, gold: false, perfect: false, age: 0, bounces: 0 };
+        return { mesh, pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, resolved: true, rimHits: 0, bank: false, gold: false, perfect: false, zone: 'close' as ZoneId, age: 0, bounces: 0 };
       });
       const readyBall = new THREE.Mesh(ballGeo, ballMat);
       readyBall.castShadow = quality.shadows;
@@ -424,7 +441,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       scene.add(readyShadow);
 
       // Aim preview dots (short arc only: helps without solving the shot for you)
-      const AIM_DOTS = 9;
+      const AIM_DOTS = 22;
       const aimPos = new Float32Array(AIM_DOTS * 3);
       const aimGeo = new THREE.BufferGeometry();
       aimGeo.setAttribute('position', new THREE.BufferAttribute(aimPos, 3));
@@ -449,6 +466,8 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         hoopPhase = rng.next() * Math.PI * 2;
         hoopX = 0;
         spawn.copy(SPAWN);
+        view.camX = 0;
+        view.camZ = SPAWN.z;
         balls.forEach((b) => {
           b.active = false;
           b.resolved = true;
@@ -461,39 +480,40 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const solve = (from: THREE.Vector3, target: THREE.Vector3, t: number, out: THREE.Vector3) =>
         out.set((target.x - from.x) / t, (target.y - from.y + 0.5 * GRAVITY * t * t) / t, (target.z - from.z) / t);
 
-      /** Swipe → launch velocity with aim assist. Returns null if the gesture isn't a shot. */
+      let lastShot: Record<string, number> = {};
+      /**
+       * Swipe → launch velocity. Angle = left/right, length = carry distance, speed = arc.
+       * Only light aim help on the first levels; none after. Returns null if not a shot.
+       */
       const shotFromSwipe = (s: Swipe, w: number, h: number, out: THREE.Vector3) => {
         if (s.dy > -30) return null; // must flick upward
         const up = -s.dy;
-        // Power: 1.0 = a swipe of ~36% screen height (forgiving band, length not speed)
-        const rawPower = up / (h * 0.36);
-        // Direction: horizontal lean of the flick, measured as dx per dy
-        const lean = THREE.MathUtils.clamp(s.dx / up, -1.2, 1.2);
-        const dz = spawn.z - HOOP_Z;
-        let aimX = spawn.x + lean * dz * 0.42;
-        // Aim assist (strong at first, easing off as levels rise): pull lateral aim toward the rim
-        // and compress power error, so a roughly-right flick goes in.
         const L = LEVELS[sim.current.level];
-        const err = hoopX - aimX;
-        if (Math.abs(err) < L.range) aimX += err * L.pull;
-        let power = 1 + (rawPower - 1) * L.comp;
-        power = THREE.MathUtils.clamp(power, 0.6, 1.5);
-        const perfect = Math.abs(hoopX - aimX) < L.perfect && Math.abs(power - 1) < L.perfect * 0.5;
-        if (perfect) {
-          aimX = hoopX;
-          power = 1;
+        const power = THREE.MathUtils.clamp(up / (h * 0.5), 0.2, 1.7);
+        const lean = THREE.MathUtils.clamp(s.dx / up, -1, 1);
+        // "Straight up the screen" points at the basket's home spot; lean turns up to ±31°.
+        const baseYaw = Math.atan2(0 - spawn.x, spawn.z - HOOP_Z);
+        let yaw = baseYaw + lean * 0.55;
+        let dist = power * CARRY;
+        const wantYaw = Math.atan2(hoopX - spawn.x, spawn.z - HOOP_Z);
+        const need = Math.hypot(hoopX - spawn.x, HOOP_Z - spawn.z);
+        if (L.assist > 0) {
+          if (Math.abs(wantYaw - yaw) < 0.1) yaw += (wantYaw - yaw) * L.assist;
+          if (Math.abs(need - dist) < L.window) dist += (need - dist) * L.assist;
         }
-        // Lead the moving hoop: aim where it will be at arrival
-        // Longer flight = higher, steeper arc that drops cleanly through the rim.
-        const flight = 1.2;
-        const lead = LEVELS[sim.current.level].speed * LEVELS[sim.current.level].amp * Math.cos(hoopPhase) * flight;
-        // Power error moves the landing point short/long (linear, forgiving) rather than scaling
-        // the whole launch: ±~15% power still swishes, ±25% rattles, big overshoots can bank in.
-        const depth = HOOP_Z + 0.05 - (power - 1) * 1.2;
-        const target = tmp2.set(aimX + (perfect ? lead : lead * (0.4 + 0.6 * L.pull)), RIM_Y + 0.05, depth);
-        solve(spawn, target, flight, out);
+        // Arc from flick speed, set as the angle the ball drops into the rim: slow, controlled push
+        // → 48° (soft, swishes); quick snap → 28° line drive (clips the rim more often).
+        const quick = THREE.MathUtils.clamp((s.speed - 0.5) / 2.2, 0, 1);
+        const rise = RIM_Y + 0.12 - spawn.y;
+        dist += 0.05; // aim a touch past the rim centre so short and long misses are even
+        const theta = Math.atan((2 * rise) / dist + Math.tan(THREE.MathUtils.degToRad(48 - 20 * quick)));
+        const c = Math.cos(theta);
+        const v = Math.sqrt((GRAVITY * dist * dist) / (2 * c * c * (dist * Math.tan(theta) - rise)));
+        out.set(v * c * Math.sin(yaw), v * Math.sin(theta), -v * c * Math.cos(yaw));
+        const perfect = Math.abs(dist - 0.05 - need) < 0.12 && Math.abs(yaw - wantYaw) < 0.025 && quick < 0.55;
         void w;
-        return { perfect };
+        lastShot = { dist: +dist.toFixed(2), need: +need.toFixed(2), yaw: +(yaw - wantYaw).toFixed(3), quick: +quick.toFixed(2), h, up };
+        return { perfect, flight: dist / (v * c) };
       };
 
       aimRef.current = (s, w, h) => {
@@ -502,13 +522,15 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           return;
         }
         const v = tmp.set(0, 0, 0);
-        if (!shotFromSwipe(s, w, h, v)) {
+        const r = shotFromSwipe(s, w, h, v);
+        if (!r) {
           aim.visible = false;
           return;
         }
-        // Only the first ~35% of the arc
+        // Arc preview: the whole flight on level 1, a shrinking piece of it after that.
+        const T = r.flight * LEVELS[sim.current.level].preview;
         for (let i = 0; i < AIM_DOTS; i++) {
-          const t = (i + 1) * 0.04;
+          const t = ((i + 1) / AIM_DOTS) * T;
           aimPos[i * 3] = spawn.x + v.x * t;
           aimPos[i * 3 + 1] = spawn.y + v.y * t - 0.5 * GRAVITY * t * t;
           aimPos[i * 3 + 2] = spawn.z + v.z * t;
@@ -517,12 +539,27 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         aim.visible = true;
       };
 
+      /** Move to a new seeded shot spot for this level's ranges. */
+      const newSpot = () => {
+        const st = sim.current;
+        const zones = LEVELS[st.level].zones;
+        const z = zones[Math.floor(rng.next() * zones.length)];
+        const Z = ZONES[z];
+        const ang = (rng.next() - 0.5) * 2 * Z.spread;
+        spawn.set(Math.sin(ang) * Z.dist, SPAWN.y, HOOP_Z + Math.cos(ang) * Z.dist);
+        if (z !== st.zone) popups.current?.banner(`${Z.label} · ${Z.dist.toFixed(1)}m`, z === 'deep' ? '#f472b6' : z === 'three' ? '#fbbf24' : '#5fe8ff');
+        st.zone = z;
+        pushHud({ zone: z }, true);
+      };
+
       shootRef.current = (s, w, h) => {
         const st = sim.current;
         if (!st.playing || st.reload > 0) return;
         const ball = balls.find((b) => !b.active);
         if (!ball) return;
         const res = shotFromSwipe(s, w, h, ball.vel);
+        ball.zone = st.zone;
+        engine.renderer.domElement.dataset.lastShot = JSON.stringify(lastShot); // (read by automated play-tests)
         aim.visible = false;
         if (!res) return;
         ball.pos.copy(spawn);
@@ -557,6 +594,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         // 1 point a basket; specials: gold ball 3, swish or bank +1. On fire / clutch double it.
         const parts: Record<string, number> = { Baskets: PTS.base };
         if (ball.gold) parts['Gold balls'] = PTS.gold - PTS.base;
+        if (ZONES[ball.zone].bonus) parts['3-pointers'] = ZONES[ball.zone].bonus;
         if (swish) parts['Swish bonus'] = PTS.bonus;
         else if (ball.bank) parts['Bank bonus'] = PTS.bonus;
         const value = Object.values(parts).reduce((a, b) => a + b, 0);
@@ -579,6 +617,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         const p = engine.toScreen(rimCenter);
         popups.current?.pop(`+${pts}`, p.x, p.y - 30, popStyle(pts, ball.gold ? 'gold' : swish || ball.bank ? 'bonus' : undefined));
         if (ball.gold) popups.current?.pop('GOLD BALL', p.x, p.y + 10, { color: '#fbbf24', size: 'sm' });
+        else if (ZONES[ball.zone].bonus) popups.current?.pop(ball.zone === 'deep' ? 'DEEP THREE!' : 'THREE!', p.x, p.y + 10, { color: '#fbbf24', size: 'sm' });
         else if (ball.perfect && clutchMult === 1) popups.current?.banner('PERFECT!', '#fde047');
         if (swish && !ball.gold) popups.current?.pop('SWISH', p.x, p.y + 10, { color: '#7dd3fc', size: 'sm' });
         else if (ball.bank && !ball.gold) popups.current?.pop('BANK!', p.x, p.y + 10, { color: '#c4b5fd', size: 'sm' });
@@ -591,11 +630,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           st.level = nextLevel;
           popups.current?.banner(`LEVEL ${nextLevel + 1}`, '#5fe8ff');
         }
-        const shift = LEVELS[st.level].shift;
-        if (shift > 0) {
-          spawn.x = (rng.next() - 0.5) * shift;
-          spawn.z = SPAWN.z + (rng.next() - 0.5) * 0.3 * shift;
-        }
+        newSpot();
         pushHud({ score: st.score, streak: st.streak, level: st.level }, true);
       };
 
@@ -681,7 +716,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
             // Backboard
             if (b.vel.z < 0 && b.pos.z - BALL_R < boardZ && b.prev.z - BALL_R >= boardZ && Math.abs(b.pos.x - hoopX) < 0.9 && b.pos.y > RIM_Y - 0.15 && b.pos.y < RIM_Y + 1.05) {
               b.pos.z = boardZ + BALL_R;
-              b.vel.z *= -0.55;
+              b.vel.z *= -0.72; // lively glass: slight overshoots bank in, big ones bounce out
               b.vel.x *= 0.8;
               b.bank = true;
               sound.playTap();
@@ -731,9 +766,13 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
 
         // First-person camera at the shot spot (follows it when it shifts), gentle breathing sway.
         view.camX += (spawn.x - view.camX) * Math.min(1, dt * 3);
+        view.camZ += (spawn.z - view.camZ) * Math.min(1, dt * 3);
         const off = feel.update(dt, t, 0);
         const breathe = Math.sin(t * 1.3) * 0.006;
-        camera.position.set(view.camX + off.x, EYE.y + breathe + off.y, spawn.z + EYE.back);
+        camera.position.set(view.camX * 1.12 + off.x, EYE.y + breathe + off.y, view.camZ + EYE.back);
+        // Closer spots tilt the view up so the rim sits comfortably in frame, not under the HUD.
+        const spotDist = Math.hypot(view.camX, view.camZ - HOOP_Z);
+        view.lookY += (view.baseLook + THREE.MathUtils.clamp((7.6 - spotDist) / 4.3, 0, 1) * 0.85 - view.lookY) * Math.min(1, dt * 3);
         camera.lookAt(view.camX * 0.85 + hoopX * 0.15, view.lookY, HOOP_Z);
 
         // Arms: cradle the ball, then push up and through on the shot.
@@ -771,6 +810,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         </span>
       )}
       {hud.streak > 0 && <span className="px-2 py-0.5 rounded-full bg-black/50 text-white text-[11px] font-bold">{hud.streak} in a row</span>}
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${ZONES[hud.zone].bonus ? 'bg-amber-400 text-black' : 'bg-black/50 text-white'}`} data-testid="dunk-zone">
+        {ZONES[hud.zone].label} · {ZONES[hud.zone].dist.toFixed(1)}m
+      </span>
       {hud.level > 0 && <span className="px-2 py-0.5 rounded-full bg-cyan-400/90 text-black text-[11px] font-black">LVL {hud.level + 1}</span>}
     </>
   );
@@ -792,29 +834,30 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       match={match}
       onExit={onExit}
       surface={surface}
-      hint="Flick UP from the ball to shoot"
+      hint="Flick up: angle = aim · length = distance · speed = arc"
       guide={{
         goal: 'Sink as many baskets as you can before the clock runs out.',
         controls: [
-          { gesture: 'flick-up', label: 'Flick up from the ball to shoot' },
-          { gesture: 'drag', label: 'Hold & drag to see the arc' },
-          { gesture: 'swipe-x', label: 'Angle your flick to aim' },
+          { gesture: 'flick-up', label: 'Longer flick = farther shot' },
+          { gesture: 'swipe-x', label: 'Angle your flick to aim left / right' },
+          { gesture: 'drag', label: 'Slow push = high arc · quick snap = flat' },
         ],
         points: [
           { label: 'Basket', value: '1' },
           { label: 'Swish / bank', value: '+1', tone: 'bonus' },
+          { label: '3-pointer', value: '+1', tone: 'bonus' },
           { label: 'Gold ball', value: '3', tone: 'gold' },
           { label: '5 in a row', value: '×2', tone: 'fire' },
           { label: 'Last 10s', value: '×2', tone: 'clutch' },
         ],
-        ends: '60-second round · the hoop starts moving as you score',
+        ends: '60-second round · shot spots change range · the hoop starts moving',
       }}
       tutorial={[
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Flick up to shoot' },
         { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Lean to aim' },
         { icon: <Flame className="w-6 h-6" />, label: '5 in a row = ×2' },
       ]}
-      scoring="Every basket is 1 point. Gold ball 3 · Swish or bank +1 · 5 in a row sets you ON FIRE ×2 · Last 10s CLUTCH ×2. The hoop starts still and moves faster as you score."
+      scoring="Every basket is 1 point. 3-pointer +1 · Gold ball 3 · Swish or bank +1 · 5 in a row sets you ON FIRE ×2 · Last 10s CLUTCH ×2. Flick angle aims, flick length sets distance, flick speed sets the arc. Shot spots move between close, mid-range, 3-point and deep, the aim help and arc preview fade, and the hoop starts moving as you score."
     />
   );
 }

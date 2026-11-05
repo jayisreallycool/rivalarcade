@@ -21,6 +21,8 @@ const nextConfig: NextConfig = {
   },
   output: 'standalone',
   poweredByHeader: false,
+  // Genkit (and its OpenTelemetry tracing) runs as plain Node modules on the server.
+  serverExternalPackages: ['genkit', '@genkit-ai/googleai', '@genkit-ai/core', '@opentelemetry/sdk-node'],
   async headers() {
     const csp = [
       "default-src 'self'",

@@ -78,14 +78,14 @@ const ZONES: Record<ZoneId, { dist: number; spread: number; label: string; bonus
 };
 /** assist: share of a near-miss corrected (only within `window` metres); preview: share of the arc shown. */
 const LEVELS: { makes: number; amp: number; speed: number; assist: number; window: number; preview: number; zones: ZoneId[] }[] = [
-  { makes: 0, amp: 0, speed: 0, assist: 0.45, window: 0.8, preview: 1, zones: ['close', 'mid'] },
-  { makes: 3, amp: 0, speed: 0, assist: 0.35, window: 0.7, preview: 0.75, zones: ['mid', 'close', 'three'] },
-  { makes: 7, amp: 0.5, speed: 0.6, assist: 0.25, window: 0.6, preview: 0.55, zones: ['mid', 'three'] },
-  { makes: 12, amp: 1.0, speed: 0.9, assist: 0.18, window: 0.5, preview: 0.4, zones: ['three', 'mid', 'deep'] },
-  { makes: 18, amp: 1.5, speed: 1.2, assist: 0.12, window: 0.45, preview: 0.28, zones: ['three', 'deep'] },
-  { makes: 25, amp: 2.0, speed: 1.6, assist: 0.08, window: 0.4, preview: 0.18, zones: ['deep', 'three'] },
+  { makes: 0, amp: 0, speed: 0, assist: 0.45, window: 0.8, preview: 0.09, zones: ['close', 'mid'] },
+  { makes: 3, amp: 0, speed: 0, assist: 0.35, window: 0.7, preview: 0.08, zones: ['mid', 'close', 'three'] },
+  { makes: 7, amp: 0.5, speed: 0.6, assist: 0.25, window: 0.6, preview: 0.07, zones: ['mid', 'three'] },
+  { makes: 12, amp: 1.0, speed: 0.9, assist: 0.18, window: 0.5, preview: 0.06, zones: ['three', 'mid', 'deep'] },
+  { makes: 18, amp: 1.5, speed: 1.2, assist: 0.12, window: 0.45, preview: 0.05, zones: ['three', 'deep'] },
+  { makes: 25, amp: 2.0, speed: 1.6, assist: 0.08, window: 0.4, preview: 0.04, zones: ['deep', 'three'] },
 ];
-/** Metres of carry per unit of power (a flick of half the screen height). */
+/** Metres of carry per unit of power (a flick of ~a third of the screen height; a deep three ≈ 45%). */
 const CARRY = 6.0;
 
 function makeCourtTexture() {
@@ -441,14 +441,29 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       scene.add(readyShadow);
 
       // Aim preview dots (short arc only: helps without solving the shot for you)
-      const AIM_DOTS = 22;
+      const AIM_DOTS = 4;
       const aimPos = new Float32Array(AIM_DOTS * 3);
       const aimGeo = new THREE.BufferGeometry();
       aimGeo.setAttribute('position', new THREE.BufferAttribute(aimPos, 3));
-      const aim = new THREE.Points(aimGeo, new THREE.PointsMaterial({ color: new THREE.Color(0xffffff).multiplyScalar(1.6), size: 0.07, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
+      // round, small dots (not squares)
+      const dotC = document.createElement('canvas');
+      dotC.width = dotC.height = 32;
+      const dg = dotC.getContext('2d')!;
+      dg.fillStyle = '#fff';
+      dg.beginPath();
+      dg.arc(16, 16, 13, 0, Math.PI * 2);
+      dg.fill();
+      const dotTex = engine.own(new THREE.CanvasTexture(dotC));
+      const aim = new THREE.Points(aimGeo, new THREE.PointsMaterial({ map: dotTex, alphaTest: 0.2, color: new THREE.Color(0xffffff).multiplyScalar(1.5), size: 0.03, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
       aim.frustumCulled = false;
       aim.visible = false;
       scene.add(aim);
+      // landing marker at rim height (first levels only): where this flick would come down
+      const landMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0x5fe8ff).multiplyScalar(1.6), transparent: true, opacity: 0.7, toneMapped: false, depthWrite: false, side: THREE.DoubleSide }));
+      const land = new THREE.Mesh(engine.own(new THREE.RingGeometry(0.09, 0.13, 24)), landMat);
+      land.rotation.x = -Math.PI / 2;
+      land.visible = false;
+      scene.add(land);
 
       const particles = new ParticleBursts(engine);
 
@@ -489,7 +504,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         if (s.dy > -30) return null; // must flick upward
         const up = -s.dy;
         const L = LEVELS[sim.current.level];
-        const power = THREE.MathUtils.clamp(up / (h * 0.5), 0.2, 1.7);
+        const power = THREE.MathUtils.clamp(up / (h * 0.36), 0.2, 1.7);
         const lean = THREE.MathUtils.clamp(s.dx / up, -1, 1);
         // "Straight up the screen" points at the basket's home spot; lean turns up to ±31°.
         const baseYaw = Math.atan2(0 - spawn.x, spawn.z - HOOP_Z);
@@ -519,16 +534,21 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       aimRef.current = (s, w, h) => {
         if (!s || !sim.current.playing || sim.current.reload > 0) {
           aim.visible = false;
+          land.visible = false;
           return;
         }
         const v = tmp.set(0, 0, 0);
         const r = shotFromSwipe(s, w, h, v);
         if (!r) {
           aim.visible = false;
+          land.visible = false;
           return;
         }
-        // Arc preview: the whole flight on level 1, a shrinking piece of it after that.
+        // Arc preview: only the first bit of the flight, shrinking each level.
         const T = r.flight * LEVELS[sim.current.level].preview;
+        const lt = r.flight;
+        land.position.set(spawn.x + v.x * lt, RIM_Y + 0.02, spawn.z + v.z * lt);
+        land.visible = sim.current.level <= 2;
         for (let i = 0; i < AIM_DOTS; i++) {
           const t = ((i + 1) / AIM_DOTS) * T;
           aimPos[i * 3] = spawn.x + v.x * t;
@@ -558,6 +578,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         const ball = balls.find((b) => !b.active);
         if (!ball) return;
         const res = shotFromSwipe(s, w, h, ball.vel);
+        land.visible = false;
         ball.zone = st.zone;
         engine.renderer.domElement.dataset.lastShot = JSON.stringify(lastShot); // (read by automated play-tests)
         aim.visible = false;

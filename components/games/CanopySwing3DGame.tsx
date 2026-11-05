@@ -4,7 +4,8 @@ import React, { useCallback, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { sound } from '@/lib/sound';
 import { haptic } from '@/lib/haptics';
-import { CameraFeel, ParticleBursts, createFirstPersonRig, useGameEngine, useLatest, useStructuralMemo, useThrottledHud } from '@/lib/engine';
+import { CameraFeel, ParticleBursts, useGameEngine, useLatest, useStructuralMemo, useThrottledHud } from '@/lib/engine';
+import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
 import { FIRE_STREAK, PTS, award, popStyle, ScoreBook, onFire } from '@/lib/scoring';
@@ -28,7 +29,8 @@ import GameShell, { PopupApi, useSwipe } from './GameShell';
 import { Pointer, Timer, Banana } from 'lucide-react';
 
 /**
- * CANOPY SWING — first-person vine swinging through a jungle canopy above a river.
+ * CANOPY SWING — side-on (left → right) vine swinging through a jungle canopy above a river.
+ * You see your own 3D avatar hanging from the vine; the camera leads ahead so the next gap is in view.
  * Tap to let go on the forward swing; you catch the next vine automatically if you're close.
  * Endless: one fall into the river ends the run. Every gap is generated with a proven release
  * window (lib/swing-physics), wide at first and tighter the deeper you go; later vines sway.
@@ -37,7 +39,12 @@ import { Pointer, Timer, Banana } from 'lucide-react';
  * sunstone 5 · 5 perfect releases in a row = ON FIRE ×2.
  */
 
-const EYE_DROP = 0.62; // eyes sit this far below your hands
+/** Your avatar's hands, arms straight up, sit this high above its feet. */
+const HAND_UP = 1.87;
+/** World metres of the course kept in view across a portrait phone / up a landscape screen. */
+const VIEW_W = 7.6;
+const VIEW_H = 8.5;
+const FOV = 45;
 const AHEAD = 7; // vines generated ahead of the current one
 const BEHIND = 3;
 
@@ -131,7 +138,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
     {
       background: 0x5f9a7c,
       fog: { color: 0x5f9a7c, density: 0.016 },
-      camera: { fov: 74, near: 0.03, far: 140, position: [0, 9, 0], lookAt: [0, 8, -10] },
+      camera: { fov: FOV, near: 0.5, far: 220, position: [24, 8, 0], lookAt: [0, 7, 0] },
       exposure: 1.2,
       bloom: { strength: 0.35, radius: 0.4, threshold: 0.92 },
       environment: 0.45,
@@ -141,9 +148,14 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
     (engine) => {
       const { scene, camera, quality } = engine;
       const feel = new CameraFeel();
+      // Side camera: back off far enough that VIEW_W metres fit across a portrait phone and
+      // VIEW_H metres fit up a landscape screen.
+      let camDist = 24;
       engine.onResize((_w, _h, aspect) => {
-        camera.fov = aspect < 0.6 ? 80 : aspect < 0.8 ? 74 : 64;
+        camera.fov = FOV;
         camera.updateProjectionMatrix();
+        const tan = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
+        camDist = Math.max(VIEW_H / (2 * tan), VIEW_W / (2 * tan * aspect));
       });
 
       // ---------------- lights: warm sun through the canopy, cool fill from the river
@@ -163,7 +175,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       // The next vine's grip knot glows so you always know your target.
       const knotGlowMat = engine.own(new THREE.MeshStandardMaterial({ color: 0xffd27a, roughness: 0.5, metalness: 0, emissive: 0xffc860, emissiveIntensity: 0.8 }));
       const vineLeafMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.7, side: THREE.DoubleSide }));
-      const trunkGeo = engine.own(new THREE.CylinderGeometry(0.5, 0.7, 26, 12, 1));
+      const trunkGeo = engine.own(new THREE.CylinderGeometry(0.32, 0.48, 26, 12, 1));
       const branchGeo = engine.own(new THREE.CylinderGeometry(0.12, 0.2, 1, 8));
       const canopyGeo = engine.own(new THREE.IcosahedronGeometry(1.6, 1));
       const ropeGeo = engine.own(new THREE.CylinderGeometry(0.035, 0.04, 1, 6));
@@ -179,11 +191,9 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       river.receiveShadow = quality.shadows;
       scene.add(river);
       const bankMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x1f4a2a, roughness: 1, flatShading: true }));
-      [-1, 1].forEach((side) => {
-        const bank = new THREE.Mesh(new THREE.BoxGeometry(30, 2.5, 400), bankMat);
-        bank.position.set(side * 22, 0.6, -180);
-        scene.add(bank);
-      });
+      const bank = new THREE.Mesh(new THREE.BoxGeometry(30, 2.5, 400), bankMat);
+      bank.position.set(-22, 0.6, -180);
+      scene.add(bank);
 
       // Distant jungle walls (instanced trunks) + canopy roof, so the world feels enclosed.
       const farCount = Math.round(110 * quality.propDensity);
@@ -196,8 +206,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       const farRng = mulberry32(7);
       const farZ: number[] = [];
       for (let i = 0; i < farCount; i++) {
-        const side = i % 2 ? 1 : -1;
-        const x = side * (7 + farRng() * 14);
+        // Background jungle only (the camera looks in from +x).
+        const x = -(7 + farRng() * 24);
         const z = -farRng() * 200;
         farZ.push(z);
         sc.set(0.8 + farRng() * 0.8, 1, 0.8 + farRng() * 0.8);
@@ -254,8 +264,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
 
       const buildVineObj = (v: Vine, i: number) => {
         const tree = new THREE.Group();
-        const side = i % 2 ? 1 : -1;
-        const tx = side * (2.8 + (i % 3) * 0.4);
+        // Trunks stand behind the path so nothing blocks your view of the swing.
+        const tx = -(3.6 + (i % 3) * 0.7);
         const trunk = new THREE.Mesh(trunkGeo, barkMat);
         trunk.position.set(tx, 9, -v.f - 0.4);
         trunk.castShadow = quality.shadows;
@@ -346,7 +356,23 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       };
 
       // ---------------- player
-      const arms = createFirstPersonRig(engine, stableAvatar, { spread: 0.2, drop: 0.38, depth: 0.42 });
+      // You: your own 3D avatar, hanging by both hands from a pivot at the grip.
+      const me = create3DAvatar(stableAvatar);
+      const body = new THREE.Group();
+      me.group.position.y = -HAND_UP;
+      me.group.rotation.y = Math.PI - 0.75; // facing the way you travel, turned toward the camera
+      me.group.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) o.castShadow = quality.shadows;
+      });
+      body.add(me.group);
+      scene.add(body);
+      // Release cue: a ring round your hands — amber in the window, bright gold in the perfect zone.
+      const cueMat = new THREE.MeshBasicMaterial({ color: 0xfde047, transparent: true, opacity: 0, toneMapped: false, depthWrite: false });
+      const cue = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.05, 8, 40), cueMat);
+      cue.rotation.y = Math.PI / 2;
+      engine.own(cue.geometry);
+      engine.own(cueMat);
+      scene.add(cue);
       let state: SwingState = { kind: 'hang', vine: 0, L: 3.4, theta: -0.6, omega: 0 };
       let playing = false;
       let over = false;
@@ -355,8 +381,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       let caught = 0;
       let book = new ScoreBook();
       let lastRelease = { perfect: false, inWindow: false };
-      const eye = new THREE.Vector3(0, 8, 0);
-      const look = new THREE.Vector3(0, 8, -10);
+      const camFocus = new THREE.Vector3(0, 6, -2);
       const tmpV = new THREE.Vector3();
 
       const clearWorld = () => {
@@ -514,79 +539,85 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           fr.mesh.position.y = fr.y + Math.sin(time * 2.5 + k) * 0.06;
         });
 
-        // ---- first-person camera
+        // ---- you on the vine
         let hand: { f: number; y: number };
-        let ropeDir = { f: 0, y: 1 };
+        if (state.kind === 'hang') hand = handPos(vines[state.vine], state);
+        else hand = { f: state.f, y: state.y };
+        body.position.set(0, hand.y, -hand.f);
+        me.updateAnimation(time, 'idle', dt);
         if (state.kind === 'hang') {
-          const v = vines[state.vine];
-          hand = handPos(v, state);
-          ropeDir = { f: v.f - hand.f, y: v.y - hand.y };
-          const n = Math.hypot(ropeDir.f, ropeDir.y) || 1;
-          ropeDir = { f: ropeDir.f / n, y: ropeDir.y / n };
-        } else hand = { f: state.f, y: state.y };
-        const target = new THREE.Vector3(0, hand.y - ropeDir.y * EYE_DROP, -(hand.f - ropeDir.f * EYE_DROP));
-        eye.lerp(target, 1 - Math.exp(-dt * 18));
+          body.rotation.x = state.theta; // hang along the rope
+          me.leftArm.rotation.x = me.rightArm.rotation.x = -Math.PI;
+          me.leftArm.rotation.z = -0.12;
+          me.rightArm.rotation.z = 0.12;
+          // legs trail the swing a little
+          const kick = -state.omega * 0.18;
+          me.leftLeg.rotation.x = kick + 0.12;
+          me.rightLeg.rotation.x = kick - 0.08;
+        } else {
+          // flying: lean into the jump, reach for the next vine, knees tucked
+          body.rotation.x += (THREE.MathUtils.clamp(-state.vy * 0.04, -0.4, 0.4) - body.rotation.x) * Math.min(1, dt * 8);
+          me.leftArm.rotation.x = -2.6;
+          me.rightArm.rotation.x = -2.9;
+          me.leftLeg.rotation.x = -0.9;
+          me.rightLeg.rotation.x = -0.5;
+        }
+
+        // ---- side camera: travel runs left → right; keep you ~30% from the left edge
         const nextI = state.kind === 'hang' ? state.vine + 1 : state.from + 1;
         const nv = vines[Math.min(vines.length - 1, nextI)];
-        const knotY = nv.y - nv.len;
-        look.lerp(tmpV.set(0, THREE.MathUtils.lerp(eye.y - 0.6, knotY, 0.55), -(Math.max(nv.f, hand.f + 4))), 1 - Math.exp(-dt * 5));
+        const aspect = camera.aspect;
+        const viewW = 2 * camDist * Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * aspect;
+        const lead = THREE.MathUtils.clamp(nv.f - hand.f, 0, viewW * 0.55) * 0.5 + viewW * 0.08;
+        camFocus.lerp(tmpV.set(0, THREE.MathUtils.lerp(5.4, hand.y - 1.2, 0.45), -(hand.f + lead)), 1 - Math.exp(-dt * 4));
         const off = feel.update(dt, time, 0);
-        camera.position.set(eye.x + off.x, eye.y + off.y, eye.z);
-        camera.lookAt(look);
+        camera.position.set(camDist, camFocus.y + 1.2 + off.y, camFocus.z + off.x);
+        camera.lookAt(camFocus);
 
-        // world details that follow you
-        sun.position.set(6, 24, eye.z + 6);
-        sun.target.position.set(0, 8, eye.z - 4);
-        river.position.z = eye.z - 150;
+        // world details that follow the view
+        sun.position.set(10, 24, camFocus.z + 6);
+        sun.target.position.set(0, 8, camFocus.z);
+        river.position.z = camFocus.z - 150;
         (river.material as THREE.MeshStandardMaterial).map!.offset.y += dt * 0.05;
-        // recycle distant jungle walls in front of you
-        const zNow = eye.z;
+        const zNow = camFocus.z + 10;
         if (Math.abs(zNow - farTrunks.position.z) > 100) {
           farTrunks.position.z = farLeaves.position.z = Math.round(zNow / 100) * 100;
         }
         shafts.forEach((sh, i) => {
           if (sh.position.z > zNow + 6) sh.position.z -= 72;
-          sh.material = shaftMat;
           sh.rotation.y += dt * 0.02 * (i % 2 ? 1 : -1);
         });
         for (let i = 0; i < flyN; i++) {
           const sd = flySeed[i];
           let z = sd[2] + zNow;
           z = zNow - (((zNow - z) % 60) + 60) % 60;
-          flyPos[i * 3] = sd[0] + Math.sin(time * 0.7 + sd[3]) * 0.5;
+          flyPos[i * 3] = sd[0] - 4 + Math.sin(time * 0.7 + sd[3]) * 0.5;
           flyPos[i * 3 + 1] = sd[1] + Math.sin(time * 1.1 + sd[3] * 2) * 0.3;
           flyPos[i * 3 + 2] = z;
         }
         flyGeo.attributes.position.needsUpdate = true;
 
-        // ---- arms: gripping the rope overhead while hanging, reaching forward in flight
-        arms.reset();
+        // ---- release cue round your hands
+        cue.position.set(0.3, hand.y, -hand.f);
         if (state.kind === 'hang') {
-          const sway = state.theta * 0.15;
-          // hands up gripping the rope, just inside the top of the view
-          arms.left.pivot.rotation.x = -1.8 + sway;
-          arms.right.pivot.rotation.x = -1.75 + sway;
-          arms.left.pivot.rotation.z = -0.35;
-          arms.right.pivot.rotation.z = 0.35;
-          // the release window lights your cuffs: brighter in the perfect zone
           const v = vines[state.vine];
           const [w0, w1] = v.window;
           const forward = state.omega > 0.2;
           const inW = forward && state.theta >= w0 && state.theta <= w1;
           const perf = inW && Math.abs(state.theta - (w0 + w1) / 2) <= (w1 - w0) * 0.2;
-          arms.setGlow(onFire(streak) ? 1.4 : perf ? 1.2 : inW ? 0.5 : 0);
+          cueMat.color.setHex(perf ? 0xfff1a8 : 0xf59e0b).multiplyScalar(perf ? 2.2 : 1.3);
+          cueMat.opacity += ((playing && inW ? (perf ? 1 : 0.55) : 0) - cueMat.opacity) * Math.min(1, dt * 20);
+          cue.scale.setScalar(perf ? 1.15 + Math.sin(time * 18) * 0.06 : 1);
           // (read by automated play-tests)
           engine.renderer.domElement.dataset.release = perf ? 'perfect' : inW ? 'window' : 'none';
           // first few vines: a TAP cue in the window
           if (playing && caught < 3 && perf && Math.floor(time * 4) % 4 === 0) {
-            const p = engine.toScreen(tmpV.set(0, eye.y + 0.2, eye.z - 3));
+            const p = engine.toScreen(tmpV.set(0, hand.y + 0.9, -hand.f));
             popups.current?.pop('TAP!', p.x, p.y, { color: '#fde047', size: 'sm' });
           }
         } else {
+          cueMat.opacity = Math.max(0, cueMat.opacity - dt * 6);
           engine.renderer.domElement.dataset.release = 'flying';
-          arms.left.pivot.rotation.x = -1.6;
-          arms.right.pivot.rotation.x = -1.7;
-          arms.setGlow(onFire(streak) ? 1.4 : 0);
         }
 
         if (!playing && !over && state.kind === 'hang') {
@@ -596,6 +627,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       });
 
       return () => {
+        me.dispose();
         api.current = { tap: () => {}, start: () => {} };
       };
     },
@@ -634,7 +666,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       hint="Tap to let go on the forward swing"
       tutorial={[
         { icon: <Pointer className="w-6 h-6" />, label: 'Tap to let go' },
-        { icon: <Timer className="w-6 h-6" />, label: 'Release as your cuffs glow' },
+        { icon: <Timer className="w-6 h-6" />, label: 'Let go when the ring glows' },
         { icon: <Banana className="w-6 h-6" />, label: 'Grab fruit mid-air' },
       ]}
       scoring="Endless — one fall into the river ends the run. Every vine is 1 point. Perfect release +1 · Banana +1 · Golden idol 3 · Sunstone 5 · 5 perfect releases in a row = ON FIRE ×2. Gaps widen and vines start swaying the deeper you go. Same jungle for every player."

@@ -241,7 +241,7 @@ async function waitResults(page, timeout = 150000) {
     if (await owned.count()) {
       const ownedId = (await owned.getAttribute('data-testid')).replace('wardrobe-item-', '');
       await owned.click();
-      await page.getByText(/Equipped /).first().waitFor({ timeout: 3000 });
+      await page.waitForFunction(([k, item]) => JSON.parse(localStorage.getItem(k) || '{}').avatar?.shirtId === item, [KEY, ownedId], { timeout: 8000 });
       expect((await state(page)).avatar.shirtId === ownedId, 'owned shirt not saved');
       expect((await page.locator(`[data-testid=wardrobe-item-${ownedId}]`).getAttribute('data-state')) === 'equipped', 'owned shirt not marked equipped');
     }
@@ -265,7 +265,8 @@ async function waitResults(page, timeout = 150000) {
       if (cost <= coins) {
         const id = (await cards.nth(i).getAttribute('data-testid')).replace('wardrobe-item-', '');
         await cards.nth(i).locator('button:has-text("UNLOCK")').click();
-        await page.getByText(/Unlocked & equipped/).waitFor({ timeout: 8000 });
+        // The confirmation toast is brief; check the saved state (what actually matters) instead.
+        await page.waitForFunction(([k, item]) => (JSON.parse(localStorage.getItem(k) || '{}').inventory || []).includes(item), [KEY, id], { timeout: 8000 });
         const st = await state(page);
         expect(st.stats.coins === coins - cost, `coins ${st.stats.coins} != ${coins - cost}`);
         expect(st.avatar.shirtId === id && st.inventory.includes(id), 'unlocked shirt not equipped');

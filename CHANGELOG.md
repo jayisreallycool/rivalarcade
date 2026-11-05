@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-04 — Brick Blitz stages & lights, Canopy Swing side view
+
+- **Brick Blitz** is faster and built for 1v1 duels: four seeded stages — Easy (rows 1–6), Challenging (7–14), Hard (15–24), Extreme (25+). Each stage hardens and packs the rows, adds tough bricks, speeds the balls up (18 → 24) and shortens a new **shot clock** (9s → 5s; it fires for you at your aim when it runs out). Volleys auto fast-forward sooner, tap jumps to ×3, rows drop faster.
+- **More light and effects:** stage-coloured lamps over the lane that breathe and pulse with every break, flashes of light and shockwave rings where bricks shatter (gold for tough bricks), the arena edges, rim light, launcher ring and balls re-colour each stage with a STAGE banner and burst, and a red warning light pulses when the wall is one row from the line. Weak GPUs get fewer lights.
+- **Canopy Swing** is now a side-on, left-to-right view: you see your own 3D avatar hanging from the vine, legs trailing the swing, reaching mid-air. The camera leads ahead so the next vine is always on screen (fitted for portrait phones), trees stand behind the path, and a glowing ring round your hands shows the release window.
+
 ## 2026-11-04 — 1-point scoring, Canopy Swing, launch splash
 
 - **One scoring language for every game** (`lib/scoring.ts`): each normal action is 1 point (basket, node, gem, brick, row, dodge, crystal, vine). Specials say so on screen: swish / bank / perfect timing +1, gold items 3, jackpots 5. 5 in a row = ON FIRE ×2; the last 10 seconds of a timed round = CLUTCH ×2 (they stack). Results breakdowns come from the same book, so they always add up.

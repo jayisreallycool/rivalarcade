@@ -131,6 +131,21 @@ ok('item looks: every item has its own design, and named features are really the
   for (const h of items.filter((x) => x.category === 'hair')) assert(C.HAIR_COLORS.some((c) => c.color === h.color), `${h.id} colour not in HAIR_COLORS`);
 });
 
+ok('canopy swing fire wall: comes after dawdling, burns when it reaches you, dies back on a catch', () => {
+  const P = require('../.test-build/grapple-physics');
+  const s = P.STAGES[0];
+  const f = P.newFire();
+  let burnedAt = -1;
+  for (let k = 0; k < 600 && burnedAt < 0; k++) if (P.fireStep(f, 1 / 60, s, 10, 10)) burnedAt = k / 60;
+  assert(Math.abs(burnedAt - (s.fire + P.FIRE_APPROACH)) < 0.1, `burn at ${burnedAt}`);
+  const g = P.newFire();
+  for (let k = 0; k < 60 * (s.fire + 0.5); k++) P.fireStep(g, 1 / 60, s, 10, 10);
+  assert(g.front !== null, 'wall should be out');
+  assert(P.fireEscape(g) === true && g.front === null && g.heat === 0, 'escape resets');
+  assert(P.STAGES.every((x, i) => i === 0 || x.fire < P.STAGES[i - 1].fire), 'later stages give less time');
+  assert(P.PACE > 1, 'fast pace');
+});
+
 ok('canopy swing physics: rope constraint, momentum kept on release, reachable sections, no grabbing through brambles', () => {
   const P = require('../.test-build/grapple-physics');
   const { mulberry32 } = require('../.test-build/rng');

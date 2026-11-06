@@ -23,10 +23,15 @@ export const ROPE = 3.2;
 export const REEL_SPEED = 1.4;
 export const MIN_ROPE = 2.0;
 /** Pumping: tangential push near the bottom of the arc (m/s²), up to this swing size (rad). */
-export const PUMP = 4.6;
+export const PUMP = 11;
 export const PUMP_MAX_AMP = 1.45;
 /** A bounce pad sends you back up at this speed. */
 export const PAD_BOUNCE = 13;
+/** Game clock speed-up (a fast-paced game; geometry and reachability are unchanged by it). */
+export const PACE = 1.3;
+/** The fire wall shows up this far behind the pod you're on and reaches it in FIRE_APPROACH s. */
+export const FIRE_START = 5.5;
+export const FIRE_APPROACH = 1.5;
 
 export interface Stage {
   name: 'SLOW' | 'MIDDLE' | 'FINAL' | 'CRAZY';
@@ -40,15 +45,44 @@ export interface Stage {
   /** Chance of a bramble obstacle in a gap, and of a bounce pad on the water. */
   bramble: number;
   pad: number;
+  /** Real seconds on one pod (since your last catch) before the fire wall comes for you. */
+  fire: number;
   color: string;
 }
 
 export const STAGES: Stage[] = [
-  { name: 'SLOW', from: 0, reach: 4.4, speed: 0.92, gap: [5.0, 6.0], dy: 0.6, bob: 0, bramble: 0, pad: 0.25, color: '#4ade80' },
-  { name: 'MIDDLE', from: 12, reach: 4.0, speed: 1, gap: [5.8, 7.0], dy: 1.3, bob: 0.3, bramble: 0.25, pad: 0.18, color: '#facc15' },
-  { name: 'FINAL', from: 30, reach: 3.7, speed: 1.07, gap: [6.4, 7.6], dy: 1.8, bob: 0.7, bramble: 0.4, pad: 0.12, color: '#fb923c' },
-  { name: 'CRAZY', from: 55, reach: 3.4, speed: 1.14, gap: [7.0, 8.4], dy: 2.2, bob: 1.1, bramble: 0.55, pad: 0.08, color: '#f43f5e' },
+  { name: 'SLOW', from: 0, reach: 4.4, speed: 0.92, gap: [5.0, 6.0], dy: 0.6, bob: 0, bramble: 0, pad: 0.25, fire: 3.2, color: '#4ade80' },
+  { name: 'MIDDLE', from: 12, reach: 4.0, speed: 1, gap: [5.8, 7.0], dy: 1.3, bob: 0.3, bramble: 0.25, pad: 0.18, fire: 2.8, color: '#facc15' },
+  { name: 'FINAL', from: 30, reach: 3.7, speed: 1.07, gap: [6.4, 7.6], dy: 1.8, bob: 0.7, bramble: 0.4, pad: 0.12, fire: 2.5, color: '#fb923c' },
+  { name: 'CRAZY', from: 55, reach: 3.4, speed: 1.14, gap: [7.0, 8.4], dy: 2.2, bob: 1.1, bramble: 0.55, pad: 0.08, fire: 2.2, color: '#f43f5e' },
 ];
+
+/**
+ * The fire wall: dawdle on a pod (or between catches) longer than the stage allows and a wall of
+ * fire sweeps in from the left. Catch a new pod before it reaches you and it dies back.
+ */
+export interface Fire {
+  /** Real seconds since your last catch. */
+  heat: number;
+  /** Front of the wall (`f`), or null when there's no fire. */
+  front: number | null;
+}
+export const newFire = (): Fire => ({ heat: 0, front: null });
+/** Advance the fire by `realDt` seconds; returns true if it reached you. */
+export function fireStep(fire: Fire, realDt: number, s: Stage, podF: number, bodyF: number) {
+  fire.heat += realDt;
+  if (fire.front === null && fire.heat > s.fire) fire.front = podF - FIRE_START;
+  if (fire.front === null) return false;
+  fire.front += (FIRE_START / FIRE_APPROACH) * realDt;
+  return fire.front >= bodyF - 0.3;
+}
+/** You caught a new pod: the fire dies back. Returns true if you escaped a live wall. */
+export function fireEscape(fire: Fire) {
+  const was = fire.front !== null;
+  fire.heat = 0;
+  fire.front = null;
+  return was;
+}
 
 export function stageAt(i: number): Stage {
   let s = STAGES[0];

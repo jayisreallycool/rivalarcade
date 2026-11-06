@@ -1,8 +1,9 @@
-// Offline Canopy Swing check: simulated hold-to-grab players (different reaction times) on seeded
-// courses, using the same rules as the game loop (brambles, pads, berries).
-// Run after: sh scripts/build-tests.sh   →   node tests/swing-sim.cjs
+// Offline Canopy Swing check: simulated hook-gun players (different reaction times) on seeded
+// courses, using the same rules as the game loop (pace, fire wall, brambles, pads, berries).
+// Run after: sh scripts/build-tests.sh   →   node tests/swing-sim.cjs [minutes]
 const P = require('../.test-build/grapple-physics');
 const { mulberry32 } = require('../.test-build/rng');
+const MINUTES = Number(process.argv[2] || 10);
 function run(seed, react, noise, r2) {
   const rng = mulberry32(seed);
   const as = [{ ...P.FIRST_ANCHOR }];
@@ -12,39 +13,49 @@ function run(seed, react, noise, r2) {
   const A0 = P.anchorPos(as[0], 0);
   const b = { f: A0.f + P.ROPE * Math.sin(-0.8), y: A0.y - P.ROPE * Math.cos(-0.8), vf: 0, vy: 0 };
   let line = P.grab(b, 0, A0);
-  let target = 1, passed = 0, pendingRel = -1, hits = 0, bounces = 0, bigAir = 0, last = 0, berries = 0;
+  let target = 1, passed = 0, pendingRel = -1, hits = 0, bigAir = 0, last = 0, berries = 0, escapes = 0;
+  let podF = A0.f;
+  const fire = P.newFire();
   const taken = new Set();
   const knocked = new Set();
   let stun = 0;
-  const h = 1 / 240;
-  for (let k = 0; k < 240 * 900; k++) {
+  const h = 1 / 240; // real seconds per step
+  const end = (why) => ({ why, passed, secs: Math.round(k * h), hits, bigAir, berries, escapes });
+  let k = 0;
+  for (; k < 240 * 60 * MINUTES; k++) {
     const st = P.stageAt(target);
-    const dt = h * st.speed;
+    const dt = h * st.speed * P.PACE;
     t += dt;
     stun = Math.max(0, stun - h);
     const pv = line ? P.anchorPos(as[line.anchor], t) : null;
     P.step(b, line, pv, dt);
     // holding on the rope: let go (after reaction time) once the release would carry you to the next point
-    if (line && pendingRel < 0 && P.releaseWorks(b, as[target], st.reach, t, as[target - 1].bramble)) pendingRel = t + react + (r2() - 0.5) * noise;
-    if (line && pendingRel >= 0 && t >= pendingRel) { line = null; pendingRel = -1; }
+    if (line && pendingRel < 0 && P.releaseWorks(b, as[target], st.reach, t, as[target - 1].bramble)) pendingRel = k * h + react + (r2() - 0.5) * noise;
+    if (line && pendingRel >= 0 && k * h >= pendingRel) { line = null; pendingRel = -1; }
     if (!line && stun <= 0) {
-      // the finger goes back down right away: catch whatever comes in reach
+      // the finger goes back down right away: the hook gun fires at whatever comes in reach
       const g = P.grabbable(b, as, target + 1, t, st.reach);
-      if (g >= target) { const Ag = P.anchorPos(as[g], t); as[g].y0 = Ag.y; as[g].bob = 0; line = P.grab(b, g, Ag); if (g - last >= 2) bigAir++; last = g; target = g + 1; ensure(target); }
+      if (g >= target) {
+        const Ag = P.anchorPos(as[g], t); as[g].y0 = Ag.y; as[g].bob = 0;
+        line = P.grab(b, g, Ag); podF = Ag.f;
+        if (P.fireEscape(fire)) escapes++;
+        if (g - last >= 2) bigAir++; last = g; target = g + 1; ensure(target);
+      }
     }
+    if (P.fireStep(fire, h, st, podF, b.f)) return end('fire');
     for (const br of [as[target - 2]?.bramble, as[target - 1]?.bramble, as[target]?.bramble]) {
       if (br && !knocked.has(br) && P.hitsBramble(b, br)) { knocked.add(br); hits++; line = null; b.vf = -2.5; b.vy = Math.min(b.vy, -2) - 2; stun = 0.6; }
     }
-    if (!line && P.padBounce(b, as, target)) bounces++;
+    if (!line && P.padBounce(b, as, target)) {}
     for (let i = Math.max(0, target - 2); i <= target; i++) for (const bb of as[i].berries || []) if (!taken.has(bb) && Math.hypot(b.f - bb.f, b.y - bb.y) < 0.7) { taken.add(bb); berries++; }
     while (passed + 1 < as.length && b.f > as[passed + 1].f) passed++;
     if (!line && b.f > as[target].f + 0.6) { target++; ensure(target); }
-    if (b.y < P.WATER_Y + 0.35) return { passed, secs: Math.round(t), hits, bounces, bigAir, berries };
+    if (b.y < P.WATER_Y + 0.35) return end('splash');
   }
-  return { passed, secs: Math.round(t), timeout: true, berries };
+  return { ...end('alive'), timeout: true };
 }
-for (const [react, noise] of [[0.05, 0.03], [0.12, 0.08], [0.2, 0.14], [0.3, 0.2]]) {
+for (const [react, noise] of [[0.08, 0.05], [0.18, 0.12], [0.28, 0.18], [0.4, 0.25]]) {
   const res = [];
   for (let s = 1; s <= 8; s++) res.push(run(s * 97, react, noise, mulberry32(s)));
-  console.log('react', react, 'noise', noise, res.map((r) => `${r.passed}${r.timeout ? '+' : ''}/${r.secs}s/b${r.berries}${r.hits ? '/x' + r.hits : ''}`).join(' '));
+  console.log('react', react, res.map((r) => `${r.passed}/${r.secs}s/${r.why}${r.escapes ? '/esc' + r.escapes : ''}`).join(' '));
 }

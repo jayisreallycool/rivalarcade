@@ -44,9 +44,12 @@ export const GAME_RULES: Record<string, GameRule> = {
   'dunk-rush': { timed: true, roundSeconds: 60, maxScore: 500, maxPointsPerSec: 9, maxDurationS: 600, baseline: 40 },
   'neon-dash': { timed: true, roundSeconds: 60, maxScore: 600, maxPointsPerSec: 11, maxDurationS: 600, baseline: 70 },
   'cyber-reflex': { timed: true, roundSeconds: 60, maxScore: 700, maxPointsPerSec: 13, maxDurationS: 600, baseline: 90 },
-  'gem-surge': { timed: true, roundSeconds: 60, maxScore: 1600, maxPointsPerSec: 30, maxDurationS: 600, baseline: 150 },
-  'brick-blitz': { timed: false, roundSeconds: 0, maxScore: 5000, maxPointsPerSec: 6, maxDurationS: 3600, baseline: 220 },
+  // Ends on the clock (2 min + time gems) or when you run out of moves, so it isn't strictly timed.
+  'gem-surge': { timed: false, roundSeconds: 0, maxScore: 4000, maxPointsPerSec: 30, maxDurationS: 900, baseline: 300 },
+  'brick-blitz': { timed: false, roundSeconds: 0, maxScore: 5000, maxPointsPerSec: 9, maxDurationS: 3600, baseline: 220 },
   'canopy-swing': { timed: false, roundSeconds: 0, maxScore: 8000, maxPointsPerSec: 10, maxDurationS: 3600, baseline: 150 },
+  // 3 rounds × 45 s, ends early on a knockout.
+  'fight-night': { timed: false, roundSeconds: 0, maxScore: 800, maxPointsPerSec: 8, maxDurationS: 900, baseline: 60 },
 };
 
 export interface CupTemplate {

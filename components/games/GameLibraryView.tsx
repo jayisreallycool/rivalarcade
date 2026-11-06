@@ -30,14 +30,15 @@ const CHIPS: { id: 'all' | 'live' | Category; label: string }[] = [
 ];
 
 export const TILES: Record<GameId, GameTile> = {
-  'dunk-rush': { id: 'dunk-rush', title: 'Dunk Rush', genre: 'Flick Basketball', blurb: 'Flick to shoot. Swishes, banks and streak multipliers.', from: '#f97316', to: '#7c2d12', tags: ['sports', 'popular'] },
+  'dunk-rush': { id: 'dunk-rush', title: 'Dunk Rush', genre: 'Flick Basketball', blurb: 'Drag and release to shoot. Swish for 2, light the flame ball for 6.', from: '#f97316', to: '#7c2d12', tags: ['sports', 'popular'] },
   'brick-blitz': { id: 'brick-blitz', title: 'Brick Blitz', genre: 'Aim & Launch', blurb: 'Endless volleys and power-ups. Hold back the wall as long as you can.', from: '#38bdf8', to: '#4338ca', tags: ['puzzle', 'new', 'popular'] },
   'neon-dash': { id: 'neon-dash', title: 'Neon Dash', genre: 'Swipe Runner', blurb: 'Swipe lanes, jump and slide down a neon highway.', from: '#ec4899', to: '#1e0b4b', tags: ['action', 'popular'] },
-  'gem-surge': { id: 'gem-surge', title: 'Gem Surge', genre: 'Match-3', blurb: 'Swipe to swap. Cascades multiply every clear.', from: '#c084fc', to: '#2e1065', tags: ['puzzle'] },
-  'canopy-swing': { id: 'canopy-swing', title: 'Canopy Swing', genre: 'Tap & Swing', blurb: 'Tap to let go, fly to the next vine. One slip and you splash.', from: '#4ade80', to: '#065f46', tags: ['action', 'new', 'popular'] },
+  'gem-surge': { id: 'gem-surge', title: 'Gem Surge', genre: 'Match-3', blurb: 'Build power gems, chain cascades — and never run out of moves.', from: '#c084fc', to: '#2e1065', tags: ['puzzle'] },
+  'canopy-swing': { id: 'canopy-swing', title: 'Canopy Swing', genre: 'Hold & Swing', blurb: 'Hook a vine, swing, let go and fly. Keep your momentum.', from: '#4ade80', to: '#065f46', tags: ['action', 'new', 'popular'] },
+  'fight-night': { id: 'fight-night', title: 'FightNight', genre: 'Boxing', blurb: 'Jab, slip and land haymakers. Read his guard, counter his punches, go for the KO.', from: '#ef4444', to: '#1c0a0a', tags: ['sports', 'action', 'new'] },
   'cyber-reflex': { id: 'cyber-reflex', title: 'Cyber Reflex', genre: 'Tap & Slash', blurb: 'Hit targets dead-centre, chain perfects, dodge hazards.', from: '#14b8a6', to: '#042f2e', tags: ['action', 'new'] },
 };
-const ORDER: GameId[] = ['dunk-rush', 'canopy-swing', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
+const ORDER: GameId[] = ['dunk-rush', 'fight-night', 'canopy-swing', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
 
 interface ModeCard {
   mode: Exclude<MatchMode, 'tournament' | 'blitz' | 'streak'>;

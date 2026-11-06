@@ -485,6 +485,63 @@ function SwingArt() {
   );
 }
 
+
+function FightArt() {
+  const glove = (cx: number, cy: number, rot: number, c: [string, string], id: string) => (
+    <g transform={`translate(${cx} ${cy}) rotate(${rot})`}>
+      <defs>
+        <radialGradient id={id} cx="0.35" cy="0.3" r="0.8">
+          <stop offset="0" stopColor={c[0]} />
+          <stop offset="1" stopColor={c[1]} />
+        </radialGradient>
+      </defs>
+      <ellipse cx="4" cy="10" rx="52" ry="58" fill="#1b1030" />
+      <ellipse cx="0" cy="0" rx="52" ry="58" fill={`url(#${id})`} stroke="#1b1030" strokeWidth="6" />
+      <ellipse cx="-30" cy="6" rx="16" ry="26" fill={c[1]} stroke="#1b1030" strokeWidth="5" />
+      <path d="M-14 -38 Q8 -48 28 -34" stroke="rgba(255,255,255,0.55)" strokeWidth="7" fill="none" strokeLinecap="round" />
+      <rect x="-34" y="46" width="68" height="34" rx="8" fill="#f8fafc" stroke="#1b1030" strokeWidth="6" />
+      <path d="M-26 60 H26" stroke="#1b1030" strokeWidth="4" />
+    </g>
+  );
+  return (
+    <svg viewBox="0 0 300 430" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="fn-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#0b0a14" />
+          <stop offset="0.6" stopColor="#3b0a0a" />
+          <stop offset="1" stopColor="#7f1d1d" />
+        </linearGradient>
+        <radialGradient id="fn-spot" cx="0.5" cy="0" r="1">
+          <stop offset="0" stopColor="#fff7d6" stopOpacity="0.6" />
+          <stop offset="1" stopColor="#fff7d6" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <rect width="300" height="430" fill="url(#fn-bg)" />
+      <path d="M95 0 L205 0 L300 330 L0 330Z" fill="url(#fn-spot)" />
+      {/* crowd + camera flashes */}
+      {Array.from({ length: 50 }, (_, i) => (
+        <circle key={i} cx={(i * 47) % 300} cy={250 + ((i * 31) % 40)} r={7 + (i % 3)} fill="#1f0d14" opacity="0.9" />
+      ))}
+      {[[40, 236], [120, 244], [210, 232], [262, 250], [80, 262]].map(([x, y], i) => (
+        <g key={i} transform={`translate(${x} ${y})`}>
+          <path d="M0 -9 L2 -2 L9 0 L2 2 L0 9 L-2 2 L-9 0 L-2 -2Z" fill="#fff" opacity="0.9" />
+        </g>
+      ))}
+      {/* ring ropes */}
+      {[300, 318, 336].map((y, i) => (
+        <path key={y} d={`M0 ${y} Q150 ${y - 8} 300 ${y}`} stroke={['#dc2626', '#f1f5f9', '#2563eb'][i]} strokeWidth="7" fill="none" />
+      ))}
+      <rect y="350" width="300" height="80" fill="#1e293b" />
+      {/* the two gloves meeting */}
+      {glove(92, 168, -18, ['#f87171', '#b91c1c'], 'fn-g1')}
+      {glove(208, 150, 22, ['#60a5fa', '#1d4ed8'], 'fn-g2')}
+      {/* impact */}
+      <path d="M150 112 l10 22 l24 -6 l-14 20 l18 16 l-24 2 l-4 24 l-12 -20 l-20 12 l6 -24 l-22 -10 l24 -6z" fill="#fde047" stroke="#1b1030" strokeWidth="5" strokeLinejoin="round" />
+      <Title lines={['FIGHT', 'NIGHT']} y={74} fill={['#fef2f2', '#f87171']} size={60} tilt={-4} />
+    </svg>
+  );
+}
+
 const ART: Record<GameId, () => React.ReactElement> = {
   'dunk-rush': DunkArt,
   'neon-dash': DashArt,
@@ -492,6 +549,7 @@ const ART: Record<GameId, () => React.ReactElement> = {
   'cyber-reflex': ReflexArt,
   'gem-surge': GemArt,
   'canopy-swing': SwingArt,
+  'fight-night': FightArt,
 };
 
 export default function GameArt({ id }: { id: GameId }) {

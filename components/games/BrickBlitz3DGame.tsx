@@ -28,13 +28,16 @@ import { Crosshair, Hand, Zap } from 'lucide-react';
  * BRICK BLITZ 3D — endless aim-and-launch brick breaker in first person.
  *
  * You stand behind the launcher looking down the brick lane. Point where to fire (drag), release
- * to launch the volley. Every brick shows the hits it needs; each turn the wall moves one row
- * closer. There is no clock: the run lasts until the wall reaches the red line with no shields
- * left. Grab "+1" rings for more balls, and power-ups that unlock one by one as you survive
- * deeper (then keep appearing at random). Seeded rows: same wall for every player.
+ * to launch the volley. Every brick shows the hits it needs. The wall CREEPS toward you while you
+ * aim (faster every stage) and drops a full row after each volley, so quick, sure shots are the
+ * skill; it ends when the wall reaches the red line with no shields left.
+ * Scoring (small numbers): brick 1 · tough brick 3 · GOLD brick 5 · ROW CLEAR +2 · QUICK SHOT +1
+ * (fire within 2 s) · row survived 1 · 5 breaks in one volley = ON FIRE ×2 · board clear jackpot.
+ * Grab "+1" rings for more balls and power-ups that unlock as you go deeper. Seeded rows: the same
+ * wall for every player, so the best shooter wins.
  *
  * The simulation runs in board units (1 = one cell, x 0…COLS left→right, y 0…ROWS far→near)
- * and is drawn on the 3D floor.
+ * and is drawn on the 3D floor; `creep` (0…1 of a row) slides the whole wall toward you.
  */
 
 const COLS = 7;
@@ -56,14 +59,16 @@ const BRICK_H = 0.62;
  * re-lights the arena so you can feel the step up.
  */
 const STAGES = [
-  { from: 1, name: 'EASY', color: 0x22d3ee, css: '#22d3ee', hp: 0.7, extra: 0, tough: 0, clock: 9, speed: 18 },
-  { from: 7, name: 'CHALLENGING', color: 0xa78bfa, css: '#a78bfa', hp: 1.0, extra: 0, tough: 0.25, clock: 7, speed: 20 },
-  { from: 15, name: 'HARD', color: 0xfb923c, css: '#fb923c', hp: 1.3, extra: 1, tough: 0.35, clock: 6, speed: 22 },
-  { from: 25, name: 'EXTREME', color: 0xf43f5e, css: '#f43f5e', hp: 1.7, extra: 2, tough: 0.5, clock: 5, speed: 24 },
+  { from: 1, name: 'EASY', color: 0x22d3ee, css: '#22d3ee', hp: 0.8, extra: 0, tough: 0.1, clock: 8, speed: 18, creep: 0.05, gold: 0 },
+  { from: 6, name: 'CHALLENGING', color: 0xa78bfa, css: '#a78bfa', hp: 1.15, extra: 1, tough: 0.3, clock: 7, speed: 20, creep: 0.08, gold: 0.3 },
+  { from: 13, name: 'HARD', color: 0xfb923c, css: '#fb923c', hp: 1.5, extra: 1, tough: 0.42, clock: 6, speed: 22, creep: 0.11, gold: 0.3 },
+  { from: 22, name: 'EXTREME', color: 0xf43f5e, css: '#f43f5e', hp: 1.95, extra: 2, tough: 0.55, clock: 5, speed: 24, creep: 0.15, gold: 0.35 },
 ] as const;
 const stageIndex = (turn: number) => STAGES.reduce((k, st, i) => (turn >= st.from ? i : k), 0);
 
-type Brick = { kind: 'brick'; hp: number; max: number; flash: number; tough?: boolean };
+type Brick = { kind: 'brick'; hp: number; max: number; flash: number; tough?: boolean; gold?: boolean };
+/** Fire within this many seconds of the shot clock starting for a QUICK SHOT bonus. */
+const QUICK_S = 2;
 type PowerKind = 'ball3' | 'laserH' | 'laserV' | 'bomb' | 'fire' | 'split' | 'shield' | 'freeze';
 type PickupKind = 'ball' | 'star' | PowerKind;
 type Pickup = { kind: PickupKind; used?: boolean };
@@ -541,6 +546,10 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       let clock: number = STAGES[0].clock;
       let stage = 0;
       let lastAim = Math.PI / 2;
+      /** How far (0…1 of a row) the wall has crept toward you since its last full-row step. */
+      let creep = 0;
+      let aimTime = 0; // seconds since this shot's clock started
+      let rowBreaks = new WeakMap<(Cell | null)[], number>(); // bricks broken per row, this volley
       const seen = new Set<PowerKind>();
       const s = { score: 0, playing: false, book: new ScoreBook(), broken: 0, bestVolley: 0, powers: 0, volleyBreaks: 0 };
       const launchY = ROWS - 0.02;
@@ -562,13 +571,16 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         const tough = st.tough > 0 && rng() < st.tough + 0.1;
         let count = turn < 4 ? 1 + Math.floor(rng() * 3) : 2 + Math.floor(rng() * 3) + st.extra;
         count = Math.min(COLS - 1, count);
-        const late = turn > 35 ? 1 + (turn - 35) * 0.04 : 1;
+        const late = turn > 30 ? 1 + (turn - 30) * 0.05 : 1;
         const base = Math.max(1, Math.round(turn * Math.min(1.05, 0.5 + turn * 0.015) * st.hp * late));
         const cols = [...Array(COLS).keys()].sort(() => rng() - 0.5);
+        // one GOLD brick now and then (worth 5): a target worth aiming for
+        const goldAt = st.gold > 0 && rng() < st.gold ? Math.floor(rng() * count) : -1;
         for (let i = 0; i < count; i++) {
-          const isTough = tough && rng() < 0.4;
-          const hp = isTough ? base * 2 : base;
-          row[cols[i]] = { kind: 'brick', hp, max: hp, flash: 0, tough: isTough };
+          const isGold = i === goldAt;
+          const isTough = !isGold && tough && rng() < 0.4;
+          const hp = isTough ? base * 2 : isGold ? Math.ceil(base * 1.5) : base;
+          row[cols[i]] = { kind: 'brick', hp, max: hp, flash: 0, tough: isTough, gold: isGold };
         }
         let free = count;
         row[cols[free++]] = { kind: 'ball' };
@@ -607,6 +619,8 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         aimAng = null;
         particles.clear();
         Object.assign(s, { score: 0, playing: false, book: new ScoreBook(), broken: 0, bestVolley: 0, powers: 0, volleyBreaks: 0 });
+        creep = 0;
+        aimTime = 0;
       };
       reset();
 
@@ -701,7 +715,12 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       };
 
       const fire = (ang: number) => {
+        if (s.playing && aimTime <= QUICK_S && turn > 2) {
+          const q = award({ 'Quick shots': 1 });
+          popAt(launchX, launchY - 0.8, `QUICK +${q}`, '#86efac');
+        }
         state = 'volley';
+        rowBreaks = new WeakMap();
         fireAngle = ang;
         lastAim = ang;
         toFire = ballCount;
@@ -734,15 +753,28 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           grid[row][colIdx] = null;
           s.broken += 1;
           s.volleyBreaks += 1;
-          // Tough (double-strength) bricks are worth 3.
-          const tough = !!c.tough;
-          const pts = award(tough ? { 'Bricks broken': PTS.base, 'Tough bricks': PTS.gold - PTS.base } : { 'Bricks broken': PTS.base }, s.volleyBreaks);
+          // Tough (double-strength) bricks are worth 3, gold bricks 5.
+          const tough = !!c.tough || !!c.gold;
+          const pts = award(
+            c.gold ? { 'Bricks broken': PTS.base, 'Gold bricks': 4 } : c.tough ? { 'Bricks broken': PTS.base, 'Tough bricks': PTS.gold - PTS.base } : { 'Bricks broken': PTS.base },
+            s.volleyBreaks,
+          );
+          // ROW CLEAR: you emptied a row of bricks you broke this volley (2 or more)
+          const rw = grid[row];
+          const nb = (rowBreaks.get(rw) ?? 0) + 1;
+          rowBreaks.set(rw, nb);
+          if (nb >= 2 && !rw.some((x) => x?.kind === 'brick')) {
+            const rc = award({ 'Row clears': 2 });
+            popAt(COLS / 2, row + 0.5 + creep, `ROW CLEAR +${rc}`, '#34d399', 'md');
+            for (let k = 0; k < COLS; k++) particles.emit(tmp.set(wx(k + 0.5), BRICK_H / 2, wz(row + 0.5 + creep)), 0x34d399, { count: 5, speed: 3, life: 0.5 });
+            sound.playCombo(2);
+          }
           if (s.volleyBreaks === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
           const hue = hueFor(c.max, turn);
           const st = popStyle(pts, tough ? 'gold' : undefined);
-          popAt(colIdx + 0.5, row + 0.5, `+${pts}`, pts > 1 ? st.color : `hsl(${hue} 95% 70%)`, pts >= 3 ? 'md' : 'sm');
-          particles.emit(tmp.set(wx(colIdx + 0.5), BRICK_H / 2, wz(row + 0.5)), col.setHSL(hue / 360, 0.95, 0.6).getHex(), { count: 16, speed: 4, life: 0.6 });
-          shock(wx(colIdx + 0.5), wz(row + 0.5), tough ? 0xfbbf24 : col.getHex(), tough ? 1.6 : 1);
+          popAt(colIdx + 0.5, row + 0.5 + creep, `+${pts}`, pts > 1 ? st.color : `hsl(${hue} 95% 70%)`, pts >= 3 ? 'md' : 'sm');
+          particles.emit(tmp.set(wx(colIdx + 0.5), BRICK_H / 2, wz(row + 0.5 + creep)), c.gold ? 0xffc400 : col.setHSL(hue / 360, 0.95, 0.6).getHex(), { count: c.gold ? 28 : 16, speed: 4, life: 0.6 });
+          shock(wx(colIdx + 0.5), wz(row + 0.5 + creep), tough ? 0xfbbf24 : col.getHex(), tough ? 1.6 : 1);
           flash(0.06);
           haptic('light');
           feel.kick(0.25);
@@ -873,7 +905,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           b.y = R;
           b.vy = Math.abs(b.vy);
         }
-        const cr = Math.floor(b.y);
+        const cr = Math.floor(b.y - creep);
         const cc = Math.floor(b.x);
         for (let row = cr - 1; row <= cr + 1; row++) {
           if (row < 0 || row >= ROWS) continue;
@@ -882,7 +914,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
             const c = grid[row][c2];
             if (!c) continue;
             if (c.kind !== 'brick') {
-              if (Math.hypot(b.x - (c2 + 0.5), b.y - (row + 0.5)) < R + 0.24) {
+              if (Math.hypot(b.x - (c2 + 0.5), b.y - (row + 0.5 + creep)) < R + 0.24) {
                 const key = row * COLS + c2;
                 touching = key;
                 if (b.inside !== key) collect(row, c2, c, b);
@@ -892,8 +924,8 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
             const padding = 0.05;
             const x0 = c2 + padding;
             const x1 = c2 + 1 - padding;
-            const y0 = row + padding;
-            const y1 = row + 1 - padding;
+            const y0 = row + creep + padding;
+            const y1 = row + creep + 1 - padding;
             const nx = Math.max(x0, Math.min(b.x, x1));
             const ny = Math.max(y0, Math.min(b.y, y1));
             const dx = b.x - nx;
@@ -953,9 +985,15 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           frozen = false;
           popups.current?.banner('WALL FROZEN', POWERS.freeze.css);
           state = 'idle';
+          aimTime = 0;
           pushHud({ balls: ballCount, combo: 0, frozen: false });
           return;
         }
+        advanceWall(true);
+      };
+
+      /** The wall moves one full row toward you (after a volley, or when its creep reaches a row). */
+      const advanceWall = (afterVolley: boolean) => {
         grid.pop();
         turn += 1;
         const row = spawnRow();
@@ -972,8 +1010,11 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           if (POWERS[debut.kind].unlock === turn) popups.current?.banner(`NEW POWER-UP · ${POWERS[debut.kind].name}`, POWERS[debut.kind].css);
         }
         sound.setMusicIntensity(0.2 + (turn - 1) / 24);
-        dropAnim = 1;
-        state = 'drop';
+        if (afterVolley) {
+          dropAnim = 1;
+          state = 'drop';
+          aimTime = 0;
+        }
         pushHud({ balls: ballCount, turn: turn - 1, combo: 0, stage });
         const last = grid[ROWS - 1];
         if (last.some((c) => c?.kind === 'brick')) {
@@ -1032,14 +1073,14 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
             vy = -vy;
             hit = true;
           }
-          const row = Math.floor(y);
+          const row = Math.floor(y - creep);
           const c = Math.floor(x);
           const cell = row >= 0 && row < ROWS && c >= 0 && c < COLS ? grid[row][c] : null;
           if (!hit && cell?.kind === 'brick') {
             const px = x - vx * stepLen;
             const py = y - vy * stepLen;
             if (Math.floor(px) !== c) vx = -vx;
-            if (Math.floor(py) !== row) vy = -vy;
+            if (Math.floor(py - creep) !== row) vy = -vy;
             x = px;
             y = py;
             hit = true;
@@ -1109,6 +1150,16 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
 
         flashLevel = Math.max(0, flashLevel - dt * 0.9);
 
+        // The wall creeps toward you while you line up a shot (faster each stage).
+        if (s.playing && !frozen && (state === 'idle' || state === 'aim')) {
+          aimTime += dt;
+          creep += STAGES[stage].creep * dt;
+          if (creep >= 1) {
+            creep -= 1;
+            advanceWall(false);
+            if (!s.playing) return;
+          }
+        }
         // Shot clock while you line up a shot.
         if (s.playing && (state === 'idle' || state === 'aim')) {
           const before = Math.ceil(clock);
@@ -1163,7 +1214,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
             const cell = grid[row][c];
             if (!cell) continue;
             const x = wx(c + 0.5);
-            const z = wz(row + 0.5) + zOff;
+            const z = wz(row + 0.5 + creep) + zOff;
             if (cell.kind === 'brick') {
               if (cell.flash > 0) cell.flash = Math.max(0, cell.flash - dt * 6);
               const grow = 1 + cell.flash * 0.08;
@@ -1172,7 +1223,8 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
               m4.compose(pos, q, scl);
               bricks.setMatrixAt(bi, m4);
               const hue = hueFor(cell.hp, turn);
-              col.setHSL(hue / 360, 1, 0.5 + cell.flash * 0.3);
+              if (cell.gold) col.setHSL(0.13, 1, 0.52 + cell.flash * 0.3 + Math.sin(t * 6 + c) * 0.06);
+              else col.setHSL(hue / 360, 1, 0.5 + cell.flash * 0.3);
               bricks.setColorAt(bi, col);
               const label = labels[bi];
               label.material = labelMat(cell.hp);
@@ -1199,7 +1251,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
         for (let i = bi; i < labels.length; i++) labels[i].visible = false;
 
         // Danger row pulses when bricks are one row away.
-        const near = grid[ROWS - 2].some((c) => c?.kind === 'brick');
+        const near = grid[ROWS - 2].some((c) => c?.kind === 'brick') || (creep > 0.5 && grid[ROWS - 3].some((c) => c?.kind === 'brick'));
         dangerMat.opacity = near ? 0.22 + 0.14 * Math.sin(t * 8) : 0.07;
 
         // Balls (plain + burning)
@@ -1279,7 +1331,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
   const chips = (
     <>
       <span className="px-2 py-0.5 rounded-full bg-white/90 text-black text-[11px] font-black">●×{hud.balls}</span>
-      <span className="px-2 py-0.5 rounded-full text-black text-[11px] font-black" style={{ background: STAGES[hud.stage].css }} data-testid="brick-stage">
+      <span className="px-2 py-0.5 rounded-full text-black text-[11px] font-black whitespace-nowrap" style={{ background: STAGES[hud.stage].css }} data-testid="brick-stage">
         {STAGES[hud.stage].name} · ROW {hud.turn}
       </span>
       <span className={`px-2 py-0.5 rounded-full text-[11px] font-black tabular-nums ${hud.clock <= 3 ? 'bg-rose-500 text-white animate-pulse' : 'bg-black/50 text-white/80'}`} data-testid="shot-clock">
@@ -1309,7 +1361,7 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
       surface={surface}
       hint="Drag to aim down the lane · release to fire"
       guide={{
-        goal: 'Break bricks and keep the wall from reaching the red line.',
+        goal: 'Break bricks before the creeping wall reaches the red line. Aim fast — it moves while you aim.',
         controls: [
           { gesture: 'drag', label: 'Drag to aim — dots show the path' },
           { gesture: 'release', label: 'Let go to fire the volley' },
@@ -1319,18 +1371,21 @@ export default function BrickBlitz3DGame({ avatar, onFinish, seed, rival, match,
           { label: 'Brick', value: '1' },
           { label: 'Row survived', value: '1' },
           { label: 'Tough brick / star', value: '3', tone: 'gold' },
+          { label: 'Gold brick', value: '5', tone: 'gold' },
+          { label: 'Row clear', value: '+2', tone: 'bonus' },
+          { label: 'Quick shot (under 2s)', value: '+1', tone: 'bonus' },
           { label: 'Power-up', value: '+1', tone: 'bonus' },
           { label: 'Board clear', value: '5', tone: 'jackpot' },
           { label: '5 breaks a volley', value: '×2', tone: 'fire' },
         ],
-        ends: 'Endless · Easy → Challenging → Hard → Extreme · shot clock fires for you',
+        ends: 'Endless · the wall creeps faster each stage · shot clock fires for you',
       }}
       tutorial={[
         { icon: <Crosshair className="w-6 h-6" />, label: 'Drag to aim' },
         { icon: <Hand className="w-6 h-6" />, label: 'Release to fire' },
         { icon: <Zap className="w-6 h-6" />, label: 'Grab balls & power-ups' },
       ]}
-      scoring={`Endless — survive as many rows as you can. Four stages: Easy → Challenging (row 7) → Hard (row 15) → Extreme (row 25); each one hardens the wall, speeds the balls and shortens the shot clock (9s → 5s — it fires for you when it runs out). The run ends when the wall reaches the red line with no shields left. Start with ${START_BALLS} balls. Every brick broken and every row survived is 1 point. Tough bricks 3 · Stars 3 · Power-ups +1 · 5 breaks in one volley = ON FIRE ×2 · Board clear +5. New power-ups unlock as you go deeper: ${POWER_KINDS.map((k) => POWERS[k].name.toLowerCase()).join(', ')}. Tap during a volley to fast-forward.`}
+      scoring={`Endless — survive as many rows as you can. The wall creeps toward you while you aim and drops a row after every volley, so aim fast and sure. Four stages: Easy → Challenging (row 6) → Hard (row 13) → Extreme (row 22); each one hardens and fills the wall, creeps it faster, speeds the balls and shortens the shot clock (8s → 5s — it fires for you when it runs out). The run ends when the wall reaches the red line with no shields left. Start with ${START_BALLS} balls. Brick 1 · row survived 1 · tough brick or star 3 · GOLD brick 5 · ROW CLEAR +2 (empty a row in one volley) · QUICK SHOT +1 (fire within 2s) · power-up +1 · 5 breaks in one volley = ON FIRE ×2 · board clear +5. New power-ups unlock as you go deeper: ${POWER_KINDS.map((k) => POWERS[k].name.toLowerCase()).join(', ')}. Tap during a volley to fast-forward.`}
     />
   );
 }

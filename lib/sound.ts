@@ -90,6 +90,92 @@ class ArcadeAudioEngine {
     osc.stop(t + 0.05);
   }
 
+  /** Glove landing: a low body thump plus a short slap of noise (heavier for haymakers). */
+  public playPunch(heavy = false, blocked = false) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const og = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(heavy ? 120 : 170, t);
+    o.frequency.exponentialRampToValueAtTime(45, t + (heavy ? 0.22 : 0.12));
+    og.gain.setValueAtTime(blocked ? 0.08 : heavy ? 0.3 : 0.18, t);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + (heavy ? 0.26 : 0.15));
+    o.connect(og);
+    og.connect(ctx.destination);
+    o.start(t);
+    o.stop(t + 0.3);
+    const len = Math.floor(ctx.sampleRate * 0.08);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = blocked ? 2400 : 1200;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(blocked ? 0.12 : heavy ? 0.22 : 0.15, t);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(ctx.destination);
+    src.start(t);
+  }
+
+  /** Whoosh of a missed / slipped punch. */
+  public playWhiff() {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const len = Math.floor(ctx.sampleRate * 0.18);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.sin((i / len) * Math.PI);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(600, t);
+    bp.frequency.exponentialRampToValueAtTime(2200, t + 0.18);
+    const g = ctx.createGain();
+    g.gain.value = 0.07;
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(ctx.destination);
+    src.start(t);
+  }
+
+  /** Ring bell: `times` bright metallic dings. */
+  public playBell(times = 1) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    for (let k = 0; k < times; k++) {
+      const t = ctx.currentTime + k * 0.28;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+      g.connect(ctx.destination);
+      for (const [f, a] of [[1180, 1], [2950, 0.45], [4100, 0.25]] as const) {
+        const o = ctx.createOscillator();
+        const og = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = f;
+        og.gain.value = a;
+        o.connect(og);
+        og.connect(g);
+        o.start(t);
+        o.stop(t + 0.95);
+      }
+    }
+  }
+
   /** Arena horn at the end of the clock: two detuned square waves, a little over a second. */
   public playBuzzer() {
     if (!this.enabled) return;

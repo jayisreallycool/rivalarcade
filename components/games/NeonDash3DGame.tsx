@@ -35,21 +35,27 @@ interface Obstacle {
   type: ObstacleType;
   collected: boolean;
   gold?: boolean;
+  /** You dodged it at the last moment (jump / slide / lane change while it was right on you). */
+  close?: boolean;
 }
 
 const LANES = [-2.5, 0, 2.5];
 /**
  * Difficulty curve (by time into the run, identical for every player on a seed):
- *   0–12s  slow road, wide gaps, only spikes + crystals  → learn lane swipes and jumping
- *   12–30s speed builds, laser arches (slide) join the mix
- *   30s+   top speed, tight gaps, some double-lane walls
+ *   0–8s   quick road, wide gaps, only spikes + crystals  → learn lane swipes and jumping
+ *   8–25s  speed builds hard, laser arches (slide) join the mix
+ *   25s+   top speed, tight gaps, double-lane walls
  * Three shields: a hit costs one (and your combo) instead of ending the run.
+ * Skill: dodge at the last moment (jump, slide or change lane with the hazard right on you) for a
+ * CLOSE CALL bonus — the best players cut it fine on purpose.
  */
-const BASE_SPEED = 12;
-const MAX_SPEED = 31;
-const RAMP_SECONDS = 48;
-const GAP_EASY = 38;
-const GAP_HARD = 17;
+const BASE_SPEED = 17;
+const MAX_SPEED = 38;
+const RAMP_SECONDS = 40;
+const GAP_EASY = 36;
+const GAP_HARD = 19;
+/** A dodge counts as a CLOSE CALL if you reacted with the hazard less than this many seconds away. */
+const CLOSE_S = 0.32;
 const SHIELDS = 3;
 const INVULN = 1.4;
 const ramp = (elapsed: number) => {
@@ -115,12 +121,20 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
   });
 
   const totalScore = () => Math.floor(sim.current.score);
+  const obstaclesRef = useRef<Obstacle[]>([]);
+  /** Mark hazards of these types in this lane that are about to reach you as close calls. */
+  const markClose = (lane: number, types: ObstacleType[]) => {
+    const s = sim.current;
+    const near = -s.speed * CLOSE_S;
+    for (const o of obstaclesRef.current) if (o.lane === lane && types.includes(o.type) && !o.collected && o.obj.position.z > near && o.obj.position.z < -0.8) o.close = true;
+  };
 
   const changeLane = useCallback((dir: -1 | 1) => {
     const s = sim.current;
     if (!s.playing) return;
     const next = Math.max(0, Math.min(2, s.currentLane + dir));
     if (next !== s.currentLane) {
+      markClose(s.currentLane, ['spike', 'laser_arch']);
       s.currentLane = next;
       s.targetX = LANES[next];
       sound.playLaser();
@@ -131,7 +145,8 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
   const jump = useCallback(() => {
     const s = sim.current;
     if (!s.playing || s.isJumping) return;
-    s.playerVy = 13.5;
+    markClose(s.currentLane, ['spike']);
+    s.playerVy = 15;
     s.isJumping = true;
     s.isSliding = false;
     s.action = 'jump';
@@ -142,8 +157,9 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
   const slide = useCallback(() => {
     const s = sim.current;
     if (!s.playing || s.isSliding) return;
+    markClose(s.currentLane, ['laser_arch']);
     s.isSliding = true;
-    s.slideTimer = 0.55;
+    s.slideTimer = 0.5;
     s.action = 'slide';
     // Fast-fall out of a jump so slide is responsive mid-air
     if (s.isJumping) s.playerVy = Math.min(s.playerVy, -14);
@@ -342,7 +358,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       };
       Object.values(pools).forEach((p) => p.warm(6));
 
-      const obstacles: Obstacle[] = [];
+      const obstacles: Obstacle[] = obstaclesRef.current;
       // Test hook (?debug): lets automated play-tests see the road like a player does.
       if (new URLSearchParams(window.location.search).has('debug')) {
         (window as unknown as { __dash?: unknown }).__dash = { sim: sim.current, obstacles: () => obstacles.map((o) => ({ lane: o.lane, z: o.obj.position.z, type: o.type, collected: o.collected })) };
@@ -434,7 +450,7 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
           s.currentX += (s.targetX - s.currentX) * (1 - Math.exp(-14 * dt));
 
           if (s.isJumping) {
-            s.playerVy -= 32 * dt;
+            s.playerVy -= 40 * dt;
             s.playerY += s.playerVy * dt;
             if (s.playerY <= 0) {
               s.playerY = 0;
@@ -468,12 +484,12 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
               // Some crystals are gold (worth 3); more of them as the road speeds up.
               const gold = t === 'crystal' && rng() < 0.12 + 0.12 * k;
               if (t === 'crystal') (obj as THREE.Mesh).material = gold ? goldCrystalMat : crystalMat;
-              obstacles.push({ obj, lane: ln, type: t, collected: false, gold });
+              obstacles.push({ obj, lane: ln, type: t, collected: false, gold, close: false });
             };
             place(type, lane);
             // Late game: a second hazard in another lane, always leaving one lane open.
             const dbl = rng();
-            if (type !== 'crystal' && k > 0.6 && dbl < 0.35 * k) place(rng() < 0.5 ? 'spike' : 'laser_arch', (lane + 1 + Math.floor(rng() * 2)) % 3);
+            if (type !== 'crystal' && k > 0.45 && dbl < 0.45 * k) place(rng() < 0.5 ? 'spike' : 'laser_arch', (lane + 1 + Math.floor(rng() * 2)) % 3);
             // Crystal trails early on reward lane changes.
             if (type !== 'crystal' && k < 0.5 && dbl > 0.7) place('crystal', (lane + 1) % 3);
           }
@@ -531,10 +547,15 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
               if (o.type !== 'crystal' && s.playing && !o.collected) {
                 s.combo += 1;
                 s.bestCombo = Math.max(s.bestCombo, s.combo);
-                const got = award({ Dodges: PTS.base }, s.combo);
+                const got = award(o.close ? { Dodges: PTS.base, 'Close calls': 1 } : { Dodges: PTS.base }, s.combo);
                 s.dodges += 1;
                 const sp = engine.toScreen(tmp.set(LANES[o.lane], 1.2, 2));
-                popups.current?.pop(`+${got}`, sp.x, Math.min(sp.y, engine.renderer.domElement.clientHeight * 0.6), popStyle(got));
+                const py = Math.min(sp.y, engine.renderer.domElement.clientHeight * 0.6);
+                if (o.close) {
+                  popups.current?.pop(`CLOSE CALL +${got}`, sp.x, py, { color: '#f0abfc', size: 'md' });
+                  haptic('light');
+                  engine.flash(0.15);
+                } else popups.current?.pop(`+${got}`, sp.x, py, popStyle(got));
                 if (s.combo === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
               }
               pools[o.type].release(o.obj);
@@ -617,32 +638,78 @@ export default function NeonDash3DGame({ avatar, onFinish, seed, rival, match, o
       match={match}
       onExit={onExit}
       surface={surface}
-      hint="Swipe ← → to switch lanes · ↑ jump · ↓ slide"
+      hint="← → lane · ↑ jump · ↓ slide"
+      directions={<DashDirections />}
       guide={{
-        goal: 'Dodge everything on the road and grab crystals for 60 seconds.',
+        goal: 'Dodge. Grab crystals. Survive 60s.',
         controls: [
-          { gesture: 'swipe-x', label: 'Swipe ← → to change lane' },
-          { gesture: 'swipe-up', label: 'Swipe up or tap to jump' },
-          { gesture: 'swipe-down', label: 'Swipe down to slide' },
+          { gesture: 'swipe-x', label: 'Lane' },
+          { gesture: 'swipe-up', label: 'Jump' },
+          { gesture: 'swipe-down', label: 'Slide' },
         ],
         points: [
           { label: 'Dodge', value: '1' },
           { label: 'Crystal', value: '1' },
-          { label: 'Gold crystal', value: '3', tone: 'gold' },
-          { label: 'Finish', value: '+5', tone: 'jackpot' },
+          { label: 'Close call', value: '+1', tone: 'bonus' },
+          { label: 'Gold', value: '3', tone: 'gold' },
           { label: '5 clean', value: '×2', tone: 'fire' },
-          { label: 'Last 10s', value: '×2', tone: 'clutch' },
         ],
-        ends: '60 seconds · 3 shields — each hit costs one',
+        ends: '60s · 3 shields',
       }}
       tutorial={[
-        { icon: <ArrowLeftRight className="w-6 h-6" />, label: 'Swipe to change lane' },
-        { icon: <ArrowUp className="w-6 h-6" />, label: 'Swipe up / tap: jump spikes' },
-        { icon: <ArrowDown className="w-6 h-6" />, label: 'Swipe down: slide lasers' },
+        { icon: <ArrowLeftRight className="w-6 h-6" />, label: 'Lane' },
+        { icon: <ArrowUp className="w-6 h-6" />, label: 'Jump' },
+        { icon: <ArrowDown className="w-6 h-6" />, label: 'Slide' },
       ]}
-      scoring="Every hazard you dodge and every crystal is 1 point. Gold crystal 3 · 5 clean in a row = ON FIRE ×2 · Finish the run +5 · Last 10s CLUTCH ×2. 3 shields; the road speeds up. Same road for every player."
+      scoring="Swipe ← → to change lane, ↑ (or tap) to jump spikes, ↓ to slide under lasers. Every hazard you dodge and every crystal is 1 point · dodge at the very last moment for a CLOSE CALL +1 · gold crystal 3 · 5 clean in a row = ON FIRE ×2 · finish the run +5 · last 10s CLUTCH ×2. 3 shields; the road gets fast quickly. Same road for every player."
     >
       <div ref={flashRef} className="absolute inset-0 z-10 pointer-events-none opacity-0" style={{ background: 'radial-gradient(ellipse at center, transparent 45%, rgba(255,0,72,0.55) 100%)' }} />
     </GameShell>
+  );
+}
+
+/**
+ * Visual directions: three big picture cards (arrow + the hazard it beats + one word). Shown on the
+ * start card and over the 3-2-1, then they fade away at GO.
+ */
+function DashDirections() {
+  const card = 'flex flex-col items-center gap-1 rounded-2xl bg-black/55 border border-white/10 px-2 py-3';
+  const word = 'text-xs font-black tracking-widest text-white';
+  return (
+    <div className="grid grid-cols-3 gap-2" data-testid="dash-directions">
+      <div className={card}>
+        <svg viewBox="0 0 80 56" className="w-20 h-14" aria-hidden>
+          {[14, 40, 66].map((x) => (
+            <rect key={x} x={x - 9} y={6} width={18} height={44} rx={3} fill={x === 40 ? '#22d3ee33' : '#ffffff12'} />
+          ))}
+          <g className="ra-dir-x">
+            <path d="M28 28 l-12 0 m0 0 l7 -7 m-7 7 l7 7" stroke="#22d3ee" strokeWidth="5" strokeLinecap="round" fill="none" />
+            <path d="M52 28 l12 0 m0 0 l-7 -7 m7 7 l-7 7" stroke="#22d3ee" strokeWidth="5" strokeLinecap="round" fill="none" />
+          </g>
+        </svg>
+        <span className={word}>SWIPE</span>
+      </div>
+      <div className={card}>
+        <svg viewBox="0 0 80 56" className="w-20 h-14" aria-hidden>
+          <polygon points="40,52 28,52 34,36" fill="#ff0055" />
+          <polygon points="52,52 40,52 46,36" fill="#ff0055" />
+          <g className="ra-dir-up">
+            <path d="M40 30 l0 -24 m0 0 l-8 8 m8 -8 l8 8" stroke="#a3e635" strokeWidth="5" strokeLinecap="round" fill="none" />
+          </g>
+        </svg>
+        <span className={word}>JUMP</span>
+      </div>
+      <div className={card}>
+        <svg viewBox="0 0 80 56" className="w-20 h-14" aria-hidden>
+          <rect x="12" y="8" width="56" height="7" rx="3" fill="#ffb800" />
+          <rect x="12" y="8" width="4" height="44" fill="#475569" />
+          <rect x="64" y="8" width="4" height="44" fill="#475569" />
+          <g className="ra-dir-down">
+            <path d="M40 22 l0 24 m0 0 l-8 -8 m8 8 l8 -8" stroke="#f472b6" strokeWidth="5" strokeLinecap="round" fill="none" />
+          </g>
+        </svg>
+        <span className={word}>SLIDE</span>
+      </div>
+    </div>
   );
 }

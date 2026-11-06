@@ -438,3 +438,12 @@ canvas {
 @media (prefers-reduced-motion: reduce) {
   .ra-finger, .ra-finger *, .ra-g-ring, .ra-g-chain, .ra-g-gemA, .ra-g-gemB { animation: none !important; opacity: 1; }
 }
+
+/* Visual game directions (arrows nudge the way you swipe) */
+@keyframes ra-dir-x { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(1.18); } }
+@keyframes ra-dir-up { 0%, 100% { transform: translateY(4px); } 50% { transform: translateY(-3px); } }
+@keyframes ra-dir-down { 0%, 100% { transform: translateY(-4px); } 50% { transform: translateY(3px); } }
+.ra-dir-x { transform-origin: 40px 28px; animation: ra-dir-x 0.9s ease-in-out infinite; }
+.ra-dir-up { animation: ra-dir-up 0.8s ease-in-out infinite; }
+.ra-dir-down { animation: ra-dir-down 0.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ra-dir-x, .ra-dir-up, .ra-dir-down { animation: none; } }

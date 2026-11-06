@@ -1,7 +1,7 @@
 import type { AvatarConfig } from './avatar-types';
 
-export type GameId = 'neon-dash' | 'dunk-rush' | 'cyber-reflex' | 'gem-surge' | 'brick-blitz' | 'canopy-swing';
-export const GAME_IDS: GameId[] = ['brick-blitz', 'dunk-rush', 'canopy-swing', 'neon-dash', 'cyber-reflex', 'gem-surge'];
+export type GameId = 'neon-dash' | 'dunk-rush' | 'cyber-reflex' | 'gem-surge' | 'brick-blitz' | 'canopy-swing' | 'fight-night';
+export const GAME_IDS: GameId[] = ['brick-blitz', 'dunk-rush', 'canopy-swing', 'fight-night', 'neon-dash', 'cyber-reflex', 'gem-surge'];
 
 /**
  * practice   free, no stakes
@@ -19,6 +19,7 @@ export const GAME_NAMES: Record<GameId, string> = {
   'cyber-reflex': 'Cyber Reflex',
   'gem-surge': 'Gem Surge',
   'brick-blitz': 'Brick Blitz',
+  'fight-night': 'FightNight',
   'canopy-swing': 'Canopy Swing',
 };
 
@@ -149,6 +150,8 @@ export const SCORE_BASELINE: Record<GameId, number> = {
   'brick-blitz': 220,
   // Endless distance score (1 per 2 m): a steady player flows ~400 m before a slip.
   'canopy-swing': 200,
+  // A steady fighter lands ~30 punches and wins on points.
+  'fight-night': 60,
 };
 
 /** Baselines before the 1-point scoring (v1), for rescaling old saves. */

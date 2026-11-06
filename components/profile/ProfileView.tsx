@@ -228,6 +228,7 @@ export default function ProfileView() {
             { id: 'neon-dash', name: 'Neon Dash', score: userState.stats.highScores['neon-dash'], unit: 'PTS' },
             { id: 'dunk-rush', name: 'Dunk Rush', score: userState.stats.highScores['dunk-rush'], unit: 'PTS' },
             { id: 'cyber-reflex', name: 'Cyber Reflex', score: userState.stats.highScores['cyber-reflex'], unit: 'PTS' },
+            { id: 'fight-night', name: 'FightNight', score: userState.stats.highScores['fight-night'], unit: 'PTS' },
             { id: 'gem-surge', name: 'Gem Surge', score: userState.stats.highScores['gem-surge'], unit: 'PTS' },
             { id: 'brick-blitz', name: 'Brick Blitz', score: userState.stats.highScores['brick-blitz'] ?? 0, unit: 'PTS' },
             { id: 'canopy-swing', name: 'Canopy Swing', score: userState.stats.highScores['canopy-swing'] ?? 0, unit: 'PTS' },

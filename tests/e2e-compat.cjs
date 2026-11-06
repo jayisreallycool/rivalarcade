@@ -7,7 +7,7 @@ const assert = require('assert');
 const { login } = require('./helpers.cjs');
 const URL = process.env.APP_URL || 'http://localhost:3000';
 const OUT = 'tests/artifacts/compat';
-const GAMES = ['dunk-rush', 'neon-dash', 'cyber-reflex', 'gem-surge', 'brick-blitz', 'canopy-swing'];
+const GAMES = ['dunk-rush', 'neon-dash', 'cyber-reflex', 'gem-surge', 'brick-blitz', 'canopy-swing', 'fight-night'];
 const GPU = ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
 const phone = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' };
 

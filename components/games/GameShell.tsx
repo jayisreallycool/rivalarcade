@@ -220,6 +220,8 @@ interface GameShellProps {
   scoring: string;
   /** Controls guide shown before the game starts (fades away at GO). */
   guide?: GameGuide;
+  /** Optional picture directions that replace the gesture row (start card + 3-2-1, gone at GO). */
+  directions?: React.ReactNode;
   /** Pointer handlers for the play surface (from useSwipe). */
   surface: React.HTMLAttributes<HTMLDivElement>;
   /** Hint shown at the bottom for the first seconds of play. */
@@ -228,7 +230,7 @@ interface GameShellProps {
 }
 
 export default function GameShell(props: GameShellProps) {
-  const { title, accent, hostRef, popupsRef, phase, onStart, score, timeLeft, roundSeconds, chips, clutch, rival, match, onExit, tutorial, scoring, surface, hint, children, guide } = props;
+  const { title, accent, hostRef, popupsRef, phase, onStart, score, timeLeft, roundSeconds, chips, clutch, rival, match, onExit, tutorial, scoring, surface, hint, children, guide, directions } = props;
   const [count, setCount] = useState<number | 'GO' | null>(null);
   const [showHint, setShowHint] = useState(false);
   // Controls reminder during the countdown: 'on' → 'fading' at GO → 'off'.
@@ -397,7 +399,7 @@ export default function GameShell(props: GameShellProps) {
         >
           <div className="mx-auto max-w-sm rounded-3xl bg-black/60 backdrop-blur border border-white/10 p-3">
             <div className="text-[10px] font-black tracking-[0.25em] text-white/60 text-center mb-2">GET READY</div>
-            <ControlsRow guide={guide} accent={accent} />
+            {directions ?? <ControlsRow guide={guide} accent={accent} />}
           </div>
         </div>
       )}
@@ -462,7 +464,7 @@ export default function GameShell(props: GameShellProps) {
             {guide ? (
               <div className="mb-4 space-y-3" data-testid="game-guide">
                 <div className="text-[10px] font-black tracking-[0.25em] text-white/50 text-center">HOW TO PLAY</div>
-                <ControlsRow guide={guide} accent={accent} />
+                {directions ?? <ControlsRow guide={guide} accent={accent} />}
                 <p className="text-sm font-bold text-white text-center leading-snug" data-testid="guide-goal">
                   🎯 {guide.goal}
                 </p>

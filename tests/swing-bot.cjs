@@ -1,4 +1,5 @@
-// Plays Canopy Swing with a simple tap-tap bot: tap to let go when it would work, tap to grab.
+// Plays Canopy Swing with a simple hold-to-grab bot: keeps the finger down (so it catches pods),
+// lifts it the moment a release would work, then presses again to catch the next pod.
 // APP_URL=http://localhost:3000 node tests/swing-bot.cjs
 const { chromium } = require('playwright');
 const { login } = require('./helpers.cjs');
@@ -24,20 +25,28 @@ const OUT = 'tests/artifacts/swing';
   let actions = 0;
   const seen = new Set();
   await p.mouse.move(195, 500);
+  let down = false;
+  let grabs = 0;
   while (Date.now() - t0 < 300000) {
     if (await p.locator('[data-testid=match-results]').count()) break;
     const st = await p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.dataset.shot);
     const stage = await p.locator('[data-testid=swing-stage]').innerText().catch(() => '');
     if (stage && !seen.has(stage)) { seen.add(stage); await p.screenshot({ path: `${OUT}/stage-${stage}.png` }); }
     if (st === 'release') {
-      await p.mouse.click(195, 500);
+      if (down) await p.mouse.up();
+      else await p.mouse.click(195, 500); // first pod: you start on it without touching
+      down = false;
       actions++;
       if (actions === 3) await p.screenshot({ path: `${OUT}/1-fly.png` });
+    } else if (!down && (st === 'fly' || st === 'reach')) {
+      await p.mouse.down();
+      down = true;
     }
+    if (st === 'hang' && actions > grabs) grabs = actions;
     await p.waitForTimeout(30);
   }
   const score = await p.locator('[data-testid=your-score]').innerText().catch(() => '?');
   await p.screenshot({ path: `${OUT}/9-end.png` });
-  console.log(JSON.stringify({ secs: ((Date.now() - t0) / 1000).toFixed(0), actions, stages: [...seen], score, errs: errs.slice(0, 3) }));
+  console.log(JSON.stringify({ grabs, secs: ((Date.now() - t0) / 1000).toFixed(0), actions, stages: [...seen], score, errs: errs.slice(0, 3) }));
   await b.close();
 })();

@@ -27,7 +27,9 @@ const ok = (c, m) => {
   await p.click('[data-testid=mode-practice]');
   await p.waitForSelector('text=TAP TO PLAY', { timeout: 30000 });
   await p.click('text=TAP TO PLAY');
-  // never tap: the rope frays and you drop into the river
+  // one tap = let go, then never hold again: you fly off and drop into the river
+  await p.waitForTimeout(3500);
+  await p.mouse.click(195, 500);
   await p.waitForSelector('[data-testid=match-results]', { timeout: 90000 }).catch(() => {});
   ok(await p.locator('text=PRACTICE COMPLETE').count(), 'practice run completes on device');
   await p.screenshot({ path: `${OUT}/practice.png` });

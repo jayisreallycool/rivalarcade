@@ -1,71 +1,80 @@
 /**
- * Canopy Swing — vine-swing physics in the vertical plane of travel (`f` = metres forward, `y` = up).
- * Pure and deterministic, so the course generator can prove every gap is makeable and tests can too.
+ * Canopy Swing — swing physics in the vertical plane of travel (`f` = metres forward, `y` = up).
+ * Pure and deterministic, so the course generator can prove every section is reachable and tests
+ * can check the physics.
  *
- * One tap: TAP to let go and fly. You catch the next branch by yourself when you fly through its
- * ring — no tap, no aiming, no holding. The longer you stay on a vine the harder it pumps (bigger
- * swings, then loops over the top), so you launch faster and can fly over 1, 2, 3 or more rings.
- * Stay too long and it spins out and throws you off. Thorny branches (later) throw you off if you
- * fly into their ring: go over or under them.
+ * Controls (one touch): HOLD to grab the nearest swing point in reach and stay on it, RELEASE to
+ * let go — you keep your exact velocity. Holding in the air grabs the next point as soon as it's
+ * in reach (and in line of sight: you can't grab through a bramble).
  *
- * The course runs through four stages — SLOW → MIDDLE → FINAL → CRAZY — with wider gaps, shorter
- * reach, bobbing branches, thorns and faster spin-outs, so every run ends.
+ * Physics: a rigid-length rope constraint (slack when you're closer than its length), real
+ * gravity, a little air drag, and a pendulum you build up by "pumping" at the bottom of each arc,
+ * plus a gentle winch that shortens a long grab (shorter rope → faster swing, angular momentum
+ * is kept). Release on the up-swing for the longest flights. Points are never teleported to.
  */
 
 export const G = 13;
 export const WATER_Y = 0;
-export const MAX_SPEED = 19;
-/** Ideal rope length the vine settles to after a grab. */
-export const ROPE = 3.4;
-export const REEL_SPEED = 1.6;
-/** A grab never makes the rope shorter than this. */
-export const MIN_ROPE = 2.2;
-/** Full turns over the top before you spin out. */
-export const SPIN_OUT_TURNS = 2;
+export const MAX_SPEED = 18;
+/** Air drag per second (fraction of speed). */
+export const DRAG = 0.04;
+/** The winch pulls a long rope in to this length. */
+export const ROPE = 3.2;
+export const REEL_SPEED = 1.4;
+export const MIN_ROPE = 2.0;
+/** Pumping: tangential push near the bottom of the arc (m/s²), up to this swing size (rad). */
+export const PUMP = 4.6;
+export const PUMP_MAX_AMP = 1.45;
+/** A bounce pad sends you back up at this speed. */
+export const PAD_BOUNCE = 13;
 
 export interface Stage {
   name: 'SLOW' | 'MIDDLE' | 'FINAL' | 'CRAZY';
-  /** First anchor index of the stage. */
   from: number;
-  /** You catch a branch automatically when you fly within this distance of it (its ring). */
+  /** You can grab a point within this distance. */
   reach: number;
-  /** Swing size when you first grab (rad) and how fast holding pumps it bigger (rad/s). */
-  amp0: number;
-  pump: number;
-  /** Game-speed multiplier. */
   speed: number;
   gap: [number, number];
-  /** Height change between anchors (±). */
   dy: number;
-  /** Anchors bob up and down by up to this much. */
   bob: number;
+  /** Chance of a bramble obstacle in a gap, and of a bounce pad on the water. */
+  bramble: number;
+  pad: number;
   color: string;
 }
 
 export const STAGES: Stage[] = [
-  { name: 'SLOW', from: 0, reach: 2.1, amp0: 1.0, pump: 0.38, speed: 0.92, gap: [5.0, 6.0], dy: 0.6, bob: 0, color: '#4ade80' },
-  { name: 'MIDDLE', from: 12, reach: 1.9, amp0: 1.05, pump: 0.5, speed: 1, gap: [5.8, 7.0], dy: 1.3, bob: 0.35, color: '#facc15' },
-  { name: 'FINAL', from: 30, reach: 1.7, amp0: 1.1, pump: 0.65, speed: 1.08, gap: [6.6, 7.8], dy: 1.8, bob: 0.75, color: '#fb923c' },
-  { name: 'CRAZY', from: 55, reach: 1.55, amp0: 1.15, pump: 0.85, speed: 1.16, gap: [7.2, 8.6], dy: 2.2, bob: 1.15, color: '#f43f5e' },
+  { name: 'SLOW', from: 0, reach: 4.4, speed: 0.92, gap: [5.0, 6.0], dy: 0.6, bob: 0, bramble: 0, pad: 0.25, color: '#4ade80' },
+  { name: 'MIDDLE', from: 12, reach: 4.0, speed: 1, gap: [5.8, 7.0], dy: 1.3, bob: 0.3, bramble: 0.25, pad: 0.18, color: '#facc15' },
+  { name: 'FINAL', from: 30, reach: 3.7, speed: 1.07, gap: [6.4, 7.6], dy: 1.8, bob: 0.7, bramble: 0.4, pad: 0.12, color: '#fb923c' },
+  { name: 'CRAZY', from: 55, reach: 3.4, speed: 1.14, gap: [7.0, 8.4], dy: 2.2, bob: 1.1, bramble: 0.55, pad: 0.08, color: '#f43f5e' },
 ];
 
-/** Stage settings at anchor index `i`; CRAZY keeps ramping until nobody can keep up. */
 export function stageAt(i: number): Stage {
   let s = STAGES[0];
   for (const st of STAGES) if (i >= st.from) s = st;
   if (s.name !== 'CRAZY') return s;
   const k = Math.min(1, (i - s.from) / 45);
-  return { ...s, reach: s.reach - 0.2 * k, pump: s.pump + 0.4 * k, speed: s.speed + 0.1 * k, gap: [s.gap[0] + 0.4 * k, s.gap[1] + 0.8 * k], bob: s.bob + 0.4 * k };
+  return { ...s, reach: s.reach - 0.35 * k, speed: s.speed + 0.1 * k, gap: [s.gap[0] + 0.4 * k, s.gap[1] + 0.8 * k], bob: s.bob + 0.4 * k };
 }
 
+export interface Bramble {
+  f: number;
+  y: number;
+  r: number;
+}
 export interface Anchor {
   f: number;
   y0: number;
   bob: number;
   bobSpeed: number;
   phase: number;
-  /** Thorny vine: grabbing it throws you off — fly past it. */
-  thorn?: boolean;
+  /** Optional bramble floating in the gap after this point. */
+  bramble?: Bramble | null;
+  /** Optional bounce pad on the water in the gap after this point (centre f, half-width). */
+  pad?: { f: number; w: number } | null;
+  /** Collectible berries along a proven flight line into the next point. */
+  berries?: { f: number; y: number }[];
 }
 
 export const anchorPos = (a: Anchor, t: number) => ({ f: a.f, y: a.y0 + a.bob * Math.sin(a.bobSpeed * t + a.phase) });
@@ -79,176 +88,212 @@ export interface Body {
 export interface Rope {
   anchor: number;
   L: number;
-  /** Seconds held on this vine — drives the pump. */
   t: number;
-  /** Swing size at the moment of the grab, and the stage's pump rate. */
-  amp0: number;
-  pump: number;
-  /** Rope angle last step and total turn (rad), for spin-out detection. */
-  lastAngle: number;
-  turned: number;
 }
 
-/** The swing size you're being pumped toward right now (grows while you hold on). */
-export const targetAmp = (r: Rope) => r.amp0 + r.pump * r.t;
-
-/** Rope angle from straight down (0) — forward is positive, ±π is straight up. */
 export const ropeAngle = (b: Body, A: { f: number; y: number }) => Math.atan2(b.f - A.f, A.y - b.y);
 
 /**
- * One physics step. With a rope: gravity, the rope's length constraint (it never stretches), a
- * gentle winch to the ideal length, and the pump that grows the swing while you hold on — past
- * straight-up it keeps you looping. Returns true when the swing has spun out of control.
+ * One physics step: gravity and drag; with a rope, the length constraint (outward speed removed,
+ * swing speed kept), the winch (angular momentum kept, so it speeds you up) and the pump.
  */
-export function step(b: Body, rope: Rope | null, A: { f: number; y: number } | null, dt: number): boolean {
+export function step(b: Body, rope: Rope | null, A: { f: number; y: number } | null, dt: number) {
   b.vy -= G * dt;
+  const drag = 1 - DRAG * dt;
+  b.vf *= drag;
+  b.vy *= drag;
   b.f += b.vf * dt;
   b.y += b.vy * dt;
-  let spun = false;
-  if (rope && A) {
-    rope.t += dt;
-    const Lold = rope.L;
-    if (Math.abs(rope.L - ROPE) > 0.01) rope.L += Math.sign(ROPE - rope.L) * Math.min(Math.abs(ROPE - rope.L), REEL_SPEED * dt);
-    rope.L = Math.max(MIN_ROPE, rope.L);
-    let df = b.f - A.f;
-    let dy = b.y - A.y;
-    const d = Math.hypot(df, dy) || 1e-6;
-    if (d > rope.L) {
-      df /= d;
-      dy /= d;
-      b.f = A.f + df * rope.L;
-      b.y = A.y + dy * rope.L;
-      const radial = b.vf * df + b.vy * dy;
-      if (radial > 0) {
-        b.vf -= radial * df;
-        b.vy -= radial * dy;
-      }
-      const tf = -dy;
-      const ty = df; // tangent, forward when the angle increases
-      // winching in spins you faster (angular momentum is kept)
-      if (Lold > rope.L) {
-        const s0 = b.vf * tf + b.vy * ty;
-        const k = Lold / rope.L - 1;
-        b.vf += s0 * k * tf;
-        b.vy += s0 * k * ty;
-      }
-      // pump toward the growing swing size; past π it drives full loops
-      const theta = Math.atan2(df, -dy);
-      const amp = targetAmp(rope);
-      const want =
-        amp < Math.PI
-          ? Math.sqrt(Math.max(0, 2 * G * rope.L * (Math.cos(theta) - Math.cos(amp))))
-          : Math.sqrt(2 * G * rope.L * (Math.cos(theta) + 1) + G * rope.L * (amp - Math.PI) * 4);
-      const s = b.vf * tf + b.vy * ty;
-      if (Math.abs(s) < want && want > 0.4) {
-        const dir = Math.sign(s) || 1;
-        const ns = s + (dir * want - s) * Math.min(1, dt * 5);
-        b.vf += (ns - s) * tf;
-        b.vy += (ns - s) * ty;
-      }
-      // spin-out: count how far round the rope has turned
-      let da = theta - rope.lastAngle;
-      if (da > Math.PI) da -= 2 * Math.PI;
-      if (da < -Math.PI) da += 2 * Math.PI;
-      rope.turned += da;
-      rope.lastAngle = theta;
-      if (Math.abs(rope.turned) > Math.PI * 2 * SPIN_OUT_TURNS) spun = true;
-    }
+  if (!rope || !A) return capSpeed(b);
+  rope.t += dt;
+  const Lold = rope.L;
+  if (rope.L > ROPE) rope.L = Math.max(ROPE, rope.L - REEL_SPEED * dt);
+  else if (rope.L < ROPE) rope.L = Math.min(ROPE, rope.L + REEL_SPEED * dt); // short grab: let rope out
+  let df = b.f - A.f;
+  let dy = b.y - A.y;
+  const d = Math.hypot(df, dy) || 1e-6;
+  if (d <= rope.L) return capSpeed(b); // slack rope: free flight inside the circle
+  df /= d;
+  dy /= d;
+  b.f = A.f + df * rope.L;
+  b.y = A.y + dy * rope.L;
+  const radial = b.vf * df + b.vy * dy;
+  if (radial > 0) {
+    b.vf -= radial * df;
+    b.vy -= radial * dy;
   }
+  const tf = -dy; // tangent (forward when the rope angle increases)
+  const ty = df;
+  let s = b.vf * tf + b.vy * ty;
+  if (Lold > rope.L) s *= Lold / rope.L; // winch: angular momentum is conserved
+  // pump near the bottom of the arc, in the direction you're moving, until the swing is big
+  const theta = Math.atan2(df, -dy);
+  const energyAmp = Math.acos(Math.max(-1, Math.min(1, Math.cos(theta) - (s * s) / (2 * G * rope.L))));
+  if (Math.abs(theta) < 0.6 && energyAmp < PUMP_MAX_AMP) s += Math.sign(s || 1) * PUMP * dt * Math.cos(theta);
+  b.vf = s * tf;
+  b.vy = s * ty;
+  return capSpeed(b);
+}
+
+function capSpeed(b: Body) {
   const sp = Math.hypot(b.vf, b.vy);
   if (sp > MAX_SPEED) {
     b.vf *= MAX_SPEED / sp;
     b.vy *= MAX_SPEED / sp;
   }
-  return spun;
 }
 
-/** A new rope on branch `i` at `A`, grabbed from `b`. */
-export function grab(b: Body, i: number, A: { f: number; y: number }, s: Stage): Rope {
-  const angle = ropeAngle(b, A);
-  return { anchor: i, L: Math.max(MIN_ROPE, Math.hypot(b.f - A.f, b.y - A.y)), t: 0, amp0: s.amp0, pump: s.pump, lastAngle: angle, turned: 0 };
-}
-
-/** Full loops made on this vine so far. */
-export const loops = (r: Rope) => Math.floor(Math.max(0, Math.abs(r.turned) - Math.PI) / (Math.PI * 2) + (Math.abs(r.turned) > Math.PI ? 1 : 0));
-
-/** The branch you'd grab now: the nearest one ahead (from `from`) that's within reach. */
-export function grabbable(b: Body, anchors: Anchor[], from: number, t: number, reach: number) {
-  for (let i = from; i < Math.min(anchors.length, from + 6); i++) {
-    const A = anchorPos(anchors[i], t);
-    if (A.f < b.f - 0.4) continue;
-    if (Math.hypot(A.f - b.f, A.y - b.y) <= reach && b.y < A.y + 0.5) return i;
-  }
-  return -1;
+/** Does the segment p→q pass through the bramble? */
+export function blocked(p: { f: number; y: number }, q: { f: number; y: number }, br: Bramble | null | undefined) {
+  if (!br) return false;
+  const vx = q.f - p.f;
+  const vy = q.y - p.y;
+  const len2 = vx * vx + vy * vy || 1e-9;
+  const u = Math.max(0, Math.min(1, ((br.f - p.f) * vx + (br.y - p.y) * vy) / len2));
+  return Math.hypot(p.f + vx * u - br.f, p.y + vy * u - br.y) < br.r;
 }
 
 /**
- * Let go now from `b`: does the flight come within reach of branch `B` (with margin) while you're
- * clear of the river, at a point from which the new swing also clears the river? Used to prove
- * gaps are makeable and for the early "LET GO!" cue.
+ * The point you'd grab now: the nearest one (not behind you) within reach whose rope line isn't
+ * blocked by a bramble. -1 if none.
  */
-export function releaseWorks(b: Body, B: Anchor, reach: number, t0 = 0, avoid?: Anchor) {
+export function grabbable(b: Body, anchors: Anchor[], from: number, t: number, reach: number) {
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = Math.max(0, from - 1); i < Math.min(anchors.length, from + 5); i++) {
+    const A = anchorPos(anchors[i], t);
+    if (A.f < b.f - 1.2) continue;
+    const d = Math.hypot(A.f - b.f, A.y - b.y);
+    if (d > reach || d >= bestD || A.y < b.y + 0.3) continue;
+    const brs = [anchors[i - 1]?.bramble, anchors[i]?.bramble];
+    if (brs.some((br) => blocked(b, A, br))) continue;
+    best = i;
+    bestD = d;
+  }
+  return best;
+}
+
+export function grab(b: Body, i: number, A: { f: number; y: number }): Rope {
+  return { anchor: i, L: Math.max(MIN_ROPE, Math.hypot(b.f - A.f, b.y - A.y)), t: 0 };
+}
+
+/** Bounce off a pad on the water (returns true if you hit one). */
+export function padBounce(b: Body, anchors: Anchor[], from: number) {
+  if (b.vy >= 0 || b.y > WATER_Y + 0.55) return false;
+  for (let i = Math.max(0, from - 2); i < Math.min(anchors.length, from + 3); i++) {
+    const p = anchors[i].pad;
+    if (p && Math.abs(b.f - p.f) <= p.w) {
+      b.y = WATER_Y + 0.55;
+      b.vy = PAD_BOUNCE;
+      b.vf = Math.max(b.vf, 3.5);
+      return true;
+    }
+  }
+  return false;
+}
+
+export const hitsBramble = (b: Body, br: Bramble | null | undefined) => !!br && Math.hypot(b.f - br.f, b.y - br.y) < br.r + 0.25;
+
+/**
+ * Let go now from `b`: does the flight pass within reach of point `B` (with margin, in line of
+ * sight, above the river, without touching `avoid`)? Returns the flight path up to that moment.
+ */
+export function releaseWorks(b: Body, B: Anchor, reach: number, t0 = 0, avoid?: Bramble | null) {
   const body = { ...b };
   const dtS = 1 / 120;
+  const path: { f: number; y: number }[] = [];
   for (let k = 0; k < 360; k++) {
-    if (avoid) {
-      const T = anchorPos(avoid, t0 + k * dtS);
-      if (Math.hypot(T.f - body.f, T.y - body.y) <= reach * 1.15 && body.y < T.y + 0.5) return false; // would fly into the thorns
-    }
+    if (hitsBramble(body, avoid)) return null;
     const P = anchorPos(B, t0 + k * dtS);
     const d = Math.hypot(P.f - body.f, P.y - body.y);
-    if (d <= reach * 0.85 && body.y < P.y + 0.5 && P.y - Math.max(d, ROPE) > WATER_Y + 1.6) return true;
+    if (d <= reach * 0.85 && P.y > body.y + 0.3 && !blocked(body, P, avoid) && P.y - Math.max(d, ROPE) > WATER_Y + 1.5) return path;
+    if (k % 6 === 0) path.push({ f: body.f, y: body.y });
     step(body, null, null, dtS);
-    if (body.y < WATER_Y + 1) return false;
+    if (body.y < WATER_Y + 1) return null;
   }
-  return false;
+  return null;
+}
+
+/** Steady-swing state on point `A` at swing size `amp`, rope angle `rel`, moving forward. */
+export function swingState(A: { f: number; y: number }, amp: number, rel: number, L = ROPE): Body {
+  const w = Math.sqrt(Math.max(0, 2 * G * L * (Math.cos(rel) - Math.cos(amp))));
+  return { f: A.f + L * Math.sin(rel), y: A.y - L * Math.cos(rel), vf: w * Math.cos(rel), vy: w * Math.sin(rel) };
+}
+
+/** Can a typical pumped swing from `a` reach `b`? Returns a working flight path, or null. */
+export function reachable(a: Anchor, b: Anchor, s: Stage, avoid?: Bramble | null, amp = PUMP_MAX_AMP - 0.12) {
+  const A = anchorPos(a, 0);
+  for (let rel = 0; rel <= amp - 0.04; rel += 0.04) {
+    const path = releaseWorks(swingState(A, amp, rel), b, s.reach, 0, avoid);
+    if (path) return path;
+  }
+  return null;
 }
 
 /**
- * Can a typical swing from `a` make it to `b`? Simulates the steady swing on the ideal rope at the
- * stage's starting size, letting go at every point of the forward swing; true if some release works.
+ * Next point after `prev` (index `i`), seeded. Gaps a typical swing can't make are pulled in; a
+ * bramble, if any, is placed in the gap only where a proven flight still gets past it; berries
+ * sit on that proven line; bounce pads float on the water.
  */
-export function reachable(a: Anchor, b: Anchor, s: Stage, t0 = 0, amp = s.amp0 + s.pump * 0.8, avoid?: Anchor) {
-  const A = anchorPos(a, t0);
-  // (amp ≥ π: a looping power swing; otherwise a normal swing pumped for a moment)
-  for (let rel = 0; rel <= Math.min(amp, 2.6) - 0.05; rel += 0.04) {
-    const w =
-      amp < Math.PI
-        ? Math.sqrt(Math.max(0, 2 * G * ROPE * (Math.cos(rel) - Math.cos(amp))))
-        : Math.min(MAX_SPEED, Math.sqrt(2 * G * ROPE * (Math.cos(rel) + 1) + G * ROPE * (amp - Math.PI) * 4));
-    const body: Body = { f: A.f + ROPE * Math.sin(rel), y: A.y - ROPE * Math.cos(rel), vf: w * Math.cos(rel), vy: w * Math.sin(rel) };
-    if (releaseWorks(body, b, s.reach, t0, avoid)) return true;
-  }
-  return false;
-}
-
-/** A power swing (looping) — what you need to clear a thorny vine. */
-export const POWER_AMP = Math.PI + 0.6;
-const THORN_CHANCE: Record<Stage['name'], number> = { SLOW: 0, MIDDLE: 0.06, FINAL: 0.14, CRAZY: 0.22 };
-
-/**
- * Next anchor after `prev` (index `i`), seeded; gaps a typical swing can't make are pulled in.
- * After a thorny vine, the next one must be reachable from the vine before the thorn with a
- * power swing. Thorns are never back to back.
- */
-export function nextAnchor(prev: Anchor, i: number, rng: () => number, before?: Anchor): Anchor {
+export function nextAnchor(prev: Anchor, i: number, rng: () => number): Anchor {
   const s = stageAt(i);
   let gap = s.gap[0] + rng() * (s.gap[1] - s.gap[0]);
   const y0 = Math.max(9, Math.min(13, prev.y0 + (rng() - 0.5) * 2 * s.dy));
-  const bob = s.bob > 0 && rng() < 0.4 + 0.5 * (s.bob / 1.55) ? s.bob * (0.5 + rng() * 0.5) : 0;
+  const bob = s.bob > 0 && rng() < 0.4 + 0.5 * (s.bob / 1.5) ? s.bob * (0.5 + rng() * 0.5) : 0;
   const bobSpeed = 1.1 + rng() * 0.9 + (s.name === 'CRAZY' ? 0.5 : 0);
   const phase = rng() * Math.PI * 2;
-  const thorn = !prev.thorn && i > 14 && rng() < THORN_CHANCE[s.name];
-  for (let tries = 0; tries < 20; tries++) {
-    const cand: Anchor = { f: prev.f + gap, y0, bob, bobSpeed, phase, thorn };
-    const ok = (from: Anchor, amp?: number, avoid?: Anchor) => {
-      const f0 = { ...from, bob: 0 };
-      return reachable(f0, { ...cand, bob: 0, y0: y0 + bob }, s, 0, amp, avoid) && reachable(f0, { ...cand, bob: 0, y0: y0 - bob }, s, 0, amp, avoid);
+  const wantBramble = i > 12 && rng() < s.bramble;
+  const brU = 0.35 + rng() * 0.3;
+  const brY = (rng() - 0.5) * 3;
+  const brR = 0.55 + rng() * 0.35;
+  const wantPad = rng() < s.pad;
+  const berryCount = rng() < 0.6 ? 1 + Math.floor(rng() * 3) : 0;
+  for (let tries = 0; tries < 18; tries++) {
+    const cand: Anchor = { f: prev.f + gap, y0, bob, bobSpeed, phase };
+    // reachable from either end of this point's bob to either end of the next one's, from a swing
+    // still building up AND from the full steady swing (a bobbing pivot can lock to the swing's rhythm)
+    const ends = (a: Anchor) => (a.bob > 0 ? [-a.bob, a.bob] : [0]).map((d) => ({ ...a, bob: 0, y0: a.y0 + d }));
+    const froms = ends(prev);
+    const tos = ends(cand);
+    let br: Bramble | null = wantBramble ? { f: prev.f + gap * brU, y: (prev.y0 + y0) / 2 - 2.6 + brY, r: brR } : null;
+    if (br) {
+      // never inside a swing: clear of the arc you make right after catching `prev` (rope up to its
+      // reach) and of the reeled-in backswing on the new point; too low over the river → no bramble
+      const below = (f: number, yLow: number, D: number) => {
+        const df = Math.abs(br!.f - f);
+        return df >= D ? Infinity : yLow - Math.sqrt(D * D - df * df);
+      };
+      br.y = Math.min(br.y, below(prev.f, prev.y0 - prev.bob, Math.max(ROPE, stageAt(i - 1).reach) + br.r + 0.45), below(cand.f, y0 - bob, ROPE + br.r + 0.45));
+      if (br.y < WATER_Y + 2.4) br = null;
+    }
+    const ok = (avoid: Bramble | null) => {
+      let first: { f: number; y: number }[] | null = null;
+      for (const fa of froms)
+        for (const to of tos) {
+          const p = reachable(fa, to, s, avoid);
+          if (!p || !reachable(fa, to, s, avoid, PUMP_MAX_AMP - 0.02)) return null;
+          first = first ?? p;
+        }
+      return first;
     };
-    if (prev.thorn && before ? ok(before, POWER_AMP, { ...prev, bob: 0 }) : ok(prev)) return cand;
+    let path = ok(br);
+    let bramble = br;
+    if (!path && br) {
+      bramble = null; // can't fit the bramble here: drop it rather than shrink the gap
+      path = ok(null);
+    }
+    if (path) {
+      prev.bramble = bramble;
+      prev.pad = wantPad ? { f: prev.f + gap * (0.45 + rng() * 0.2), w: 0.9 } : null;
+      prev.berries = path.length > 6 ? Array.from({ length: berryCount }, (_, k) => path[Math.min(path.length - 1, Math.floor(path.length * (0.35 + k * 0.2)))]) : [];
+      return cand;
+    }
     gap -= 0.3;
   }
-  return { f: prev.f + 4.6, y0: prev.y0, bob: 0, bobSpeed: 1, phase: 0, thorn: false };
+  prev.bramble = null;
+  prev.pad = null;
+  prev.berries = [];
+  return { f: prev.f + 4.6, y0: prev.y0, bob: 0, bobSpeed: 1, phase: 0 };
 }
 
 export const FIRST_ANCHOR: Anchor = { f: 0, y0: 10.5, bob: 0, bobSpeed: 1, phase: 0 };

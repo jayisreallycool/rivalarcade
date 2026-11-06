@@ -71,6 +71,8 @@ export function useSwipe(handlers: {
   onSwipe?: (s: Swipe) => void;
   onTap?: (x: number, y: number) => void;
   onDrag?: (s: Swipe, phase: 'start' | 'move' | 'end') => void;
+  /** The system took the touch away (iOS edge swipe, call, etc.) — treat as a release. */
+  onCancel?: () => void;
   /** Fire swipes mid-gesture once this many px are covered (runner lanes). 0 = on release only. */
   earlyThreshold?: number;
 }) {
@@ -121,6 +123,7 @@ export function useSwipe(handlers: {
     },
     onPointerCancel: () => {
       start.current = null;
+      h.current.onCancel?.();
     },
   };
 }

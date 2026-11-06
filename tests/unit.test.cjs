@@ -131,53 +131,57 @@ ok('item looks: every item has its own design, and named features are really the
   for (const h of items.filter((x) => x.category === 'hair')) assert(C.HAIR_COLORS.some((c) => c.color === h.color), `${h.id} colour not in HAIR_COLORS`);
 });
 
-ok('canopy swing: deterministic course, every gap makeable, holding too long spins you out', () => {
+ok('canopy swing physics: rope constraint, momentum kept on release, reachable sections, no grabbing through brambles', () => {
   const P = require('../.test-build/grapple-physics');
   const { mulberry32 } = require('../.test-build/rng');
   const gen = (seed, n) => {
     const rng = mulberry32(seed);
-    const as = [P.FIRST_ANCHOR];
-    for (let i = 1; i <= n; i++) as.push(P.nextAnchor(as[i - 1], i, rng, as[i - 2]));
+    const as = [{ ...P.FIRST_ANCHOR }];
+    for (let i = 1; i <= n; i++) as.push(P.nextAnchor(as[i - 1], i, rng));
     return as;
   };
   const as = gen(1234, 90);
   for (let i = 1; i < as.length; i++) {
     const st = P.stageAt(i);
     const b = as[i];
-    if (b.thorn) continue; // thorns are flown past
-    const viaThorn = as[i - 1].thorn;
-    const from = { ...as[viaThorn ? i - 2 : i - 1], bob: 0 };
-    const amp = viaThorn ? P.POWER_AMP : undefined;
-    const avoid = viaThorn ? { ...as[i - 1], bob: 0 } : undefined;
-    assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st, 0, amp, avoid) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st, 0, amp, avoid), `gap ${i} not makeable${viaThorn ? ' (past a thorn)' : ''}`);
+    const from = { ...as[i - 1], bob: 0 };
+    const br = as[i - 1].bramble;
+    assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st, br) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st, br), `section ${i} not reachable`);
   }
-  assert(as.some((a) => a.thorn) && as.slice(0, 15).every((a) => !a.thorn), 'thorns only after the start');
-  assert(!as.some((a, i) => a.thorn && as[i - 1]?.thorn), 'never two thorns in a row');
-  const gap = (x, y) => (as[y].f - as[x].f) / (y - x);
-  assert(gap(60, 90) > gap(1, 12) + 1, `crazy gaps (${gap(60, 90)}) should be wider than slow (${gap(1, 12)})`);
-  assert(as.slice(56).some((a) => a.bob > 0) && as.slice(1, 12).every((a) => a.bob === 0), 'only later branches bob');
-  assert.deepStrictEqual(['SLOW', 'MIDDLE', 'FINAL', 'CRAZY'], [0, 12, 30, 55].map((i) => P.stageAt(i).name));
-  assert(P.stageAt(80).pump > P.stageAt(0).pump && P.stageAt(80).reach < P.stageAt(0).reach, 'later stages pump faster, reach less');
+  assert(as.some((a) => a.bramble) && as.slice(0, 12).every((a) => !a.bramble), 'brambles only after the start');
+  assert(as.some((a) => a.pad) && as.some((a) => a.berries && a.berries.length), 'pads and berries generated');
+  assert(P.stageAt(80).reach < P.stageAt(0).reach - 1, 'reach shrinks');
+  assert(as.slice(55).filter((a) => a.bramble).length > as.slice(12, 30).filter((a) => a.bramble).length, 'more brambles later');
   assert.deepStrictEqual(gen(77, 30).map((a) => a.f), gen(77, 30).map((a) => a.f));
-  // Hang on: the rope never stretches, the swing grows, and holding too long spins out.
-  const A = { f: 0, y: 10.5 };
-  const b = { f: 1.5, y: 10.5 - 3, vf: 0, vy: 0 };
-  const rope = P.grab(b, 0, A, P.stageAt(0));
-  let maxD = 0;
-  let spunAt = -1;
-  for (let k = 0; k < 240 * 15 && spunAt < 0; k++) {
-    if (P.step(b, rope, A, 1 / 240)) spunAt = k / 240;
+  // Rope constraint: never stretches; swing accelerates on the way down; pumping builds the arc.
+  const A = { f: 0, y: 10 };
+  const b = { f: 3.2 * Math.sin(-0.5), y: 10 - 3.2 * Math.cos(-0.5), vf: 0, vy: 0 };
+  const rope = P.grab(b, 0, A);
+  let maxD = 0, maxSpeed = 0, speedAtBottom = 0, maxAngle = 0;
+  for (let k = 0; k < 240 * 12; k++) {
+    P.step(b, rope, A, 1 / 240);
     maxD = Math.max(maxD, Math.hypot(b.f - A.f, b.y - A.y));
+    const sp = Math.hypot(b.vf, b.vy);
+    maxSpeed = Math.max(maxSpeed, sp);
+    if (k === 60) speedAtBottom = sp;
+    maxAngle = Math.max(maxAngle, Math.abs(P.ropeAngle(b, A)));
   }
-  assert(maxD <= Math.max(rope.L, 3.4) + 0.02, `rope stretched to ${maxD}`);
-  assert(spunAt > 5 && spunAt < 16, `spin-out after ${spunAt}s`);
-  // Short holds are safe: 2 seconds in, no spin-out.
-  const b2 = { f: 1.5, y: 7.5, vf: 0, vy: 0 };
-  const r2 = P.grab(b2, 0, A, P.stageAt(0));
-  for (let k = 0; k < 480; k++) assert(!P.step(b2, r2, A, 1 / 240), 'spun out too soon');
-  // Grab only works within reach, ahead of you.
-  assert.strictEqual(P.grabbable({ f: 0, y: 8 }, [P.FIRST_ANCHOR, { f: 3, y0: 10, bob: 0, bobSpeed: 1, phase: 0 }], 1, 0, 4), 1);
-  assert.strictEqual(P.grabbable({ f: 0, y: 8 }, [P.FIRST_ANCHOR, { f: 9, y0: 10, bob: 0, bobSpeed: 1, phase: 0 }], 1, 0, 4), -1);
+  assert(maxD <= rope.L + 0.01, `rope stretched to ${maxD}`);
+  assert(speedAtBottom > 2, 'gravity accelerates the swing down');
+  assert(maxAngle > 1.2 && maxAngle < 1.7, `pumping builds a big but controlled arc (${maxAngle})`);
+  // Release keeps velocity exactly.
+  const v0 = { vf: b.vf, vy: b.vy };
+  P.step(b, null, null, 1 / 240);
+  assert(Math.abs(b.vf - v0.vf) < 0.01 && b.vy < v0.vy, 'momentum kept on release');
+  // Grab: within reach only, never through a bramble, never behind you.
+  const pts = [{ f: 3, y0: 10, bob: 0, bobSpeed: 1, phase: 0, bramble: null }, { f: 6, y0: 10, bob: 0, bobSpeed: 1, phase: 0 }];
+  assert.strictEqual(P.grabbable({ f: 1, y: 8 }, pts, 0, 0, 4), 0);
+  assert.strictEqual(P.grabbable({ f: 1, y: 8 }, [{ ...pts[0], f: 30 }], 0, 0, 4), -1);
+  pts[0].bramble = { f: 2, y: 9, r: 0.6 };
+  assert.strictEqual(P.grabbable({ f: 1, y: 8 }, [pts[0]], 0, 0, 4), -1, 'grabbed through a bramble');
+  // Bounce pads throw you back up.
+  const fall = { f: 4, y: 0.4, vf: 2, vy: -8 };
+  assert(P.padBounce(fall, [{ ...pts[1], pad: { f: 4, w: 1 } }], 0) && fall.vy > 10);
 });
 
 ok('scoring: 1 point per action, specials and multipliers', () => {

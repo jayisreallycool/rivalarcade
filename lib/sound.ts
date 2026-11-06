@@ -90,6 +90,85 @@ class ArcadeAudioEngine {
     osc.stop(t + 0.05);
   }
 
+  /** Arena horn at the end of the clock: two detuned square waves, a little over a second. */
+  public playBuzzer() {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.09, t + 0.03);
+    gain.gain.setValueAtTime(0.09, t + 1.05);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.25);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1800;
+    lp.connect(gain);
+    gain.connect(this.ctx.destination);
+    for (const f of [196, 203, 392]) {
+      const o = this.ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.setValueAtTime(f, t);
+      o.connect(lp);
+      o.start(t);
+      o.stop(t + 1.3);
+    }
+  }
+
+  /** Shot-clock countdown beep. */
+  public playBeep(high = false) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(high ? 1320 : 990, t);
+    g.gain.setValueAtTime(0.05, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    o.connect(g);
+    g.connect(this.ctx.destination);
+    o.start(t);
+    o.stop(t + 0.13);
+  }
+
+  /** Firework: a soft thump then a crackle of noise. */
+  public playFirework(delay = 0) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime + delay;
+    const len = Math.floor(ctx.sampleRate * 0.6);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (Math.random() < 0.08 ? 1 : 0.25) * (1 - i / len) ** 2;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 900;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.12, t);
+    src.connect(hp);
+    hp.connect(g);
+    g.connect(ctx.destination);
+    src.start(t);
+    const o = ctx.createOscillator();
+    const og = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(50, t + 0.25);
+    og.gain.setValueAtTime(0.14, t);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+    o.connect(og);
+    og.connect(ctx.destination);
+    o.start(t);
+    o.stop(t + 0.3);
+  }
+
   // Jump swoosh
   public playJump() {
     if (!this.enabled) return;

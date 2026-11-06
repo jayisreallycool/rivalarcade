@@ -18,17 +18,19 @@ import {
 } from '@/lib/engine';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
-import { ROUND_SECONDS, CLUTCH_SECONDS, FIRE_STREAK, PTS, award, popStyle, ScoreBook, onFire } from '@/lib/scoring';
+import { ROUND_SECONDS, CLUTCH_SECONDS, award, popStyle, ScoreBook } from '@/lib/scoring';
 import GameShell, { PopupApi, useSwipe, Swipe } from './GameShell';
 import { ArrowUp, MoveHorizontal, Flame } from 'lucide-react';
 
 /**
  * DUNK RUSH — drag-and-release basketball built for a thumb on a phone screen:
- * touch anywhere, DRAG UP to set power (a short, comfortable pull — about a quarter of the screen
- * for a deep three) and slide SIDEWAYS to aim; an aim arc and a power meter show your shot live,
- * and LETTING GO shoots. Pull back down to cancel. You shoot from changing spots — close,
- * mid-range, 3-point and deep — so judging power for each range is the skill. The aim help fades
- * as you level up, and the hoop starts moving (lead it yourself).
+ * touch anywhere, DRAG UP to set power and slide SIDEWAYS to aim; an aim arc and a power meter
+ * show your shot live, and LETTING GO shoots. Pull back down to cancel.
+ * Scoring: SWISH (nothing but net) 2 · BANK SHOT or RIM SHOT 1 · three swishes in a row light the
+ * FLAME BALL — a flaming swish is worth 6; anything but a swish puts the flame out.
+ * An arena shot clock and scoreboard (red LED) run the 60 s round and the buzzer ends it;
+ * fireworks go up on every make. Shot spots change range, the aim help fades as you level up,
+ * and the hoop glides side to side (always in view — lead it yourself).
  */
 
 const GRAVITY = 12;
@@ -43,6 +45,12 @@ const SPAWN = new THREE.Vector3(0, 1.36, HOOP_Z + 3.3); // first spot: close ran
 const EYE = { y: 1.74, back: 1.0 };
 const MAX_BALLS = 4;
 const RELOAD = 0.38; // seconds before the next ball is ready
+/** Points: nothing-but-net, off the glass or the rim, and a swish with the flame ball. */
+const PTS_SWISH = 2;
+const PTS_OTHER = 1;
+const PTS_FLAME_SWISH = 6;
+/** Swishes in a row that light the flame ball. */
+const FLAME_AFTER = 3;
 
 type Phase = 'ready' | 'playing' | 'over';
 
@@ -55,7 +63,7 @@ interface Ball {
   resolved: boolean;
   rimHits: number;
   bank: boolean;
-  gold: boolean;
+  flame: boolean;
   perfect: boolean;
   zone: ZoneId;
   age: number;
@@ -121,62 +129,150 @@ function makeCourtTexture() {
   return c;
 }
 
-/** Grey-scale pebble grain + recessed seams, used as the ball's bump map. */
-function makeBallBump() {
-  const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = 256;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#808080';
-  ctx.fillRect(0, 0, 512, 256);
-  for (let i = 0; i < 16000; i++) {
-    const v = 110 + Math.floor(Math.random() * 60);
-    ctx.fillStyle = `rgb(${v},${v},${v})`;
-    ctx.beginPath();
-    ctx.arc(Math.random() * 512, Math.random() * 256, 1.2 + Math.random() * 1.2, 0, Math.PI * 2);
-    ctx.fill();
+/**
+ * Seams of a real 8-panel ball in the sphere's (equirectangular) texture space: the equator, one
+ * great circle through both poles, and two curved seams (small circles round the equator's front
+ * and back). Returns polylines in pixel coordinates.
+ */
+function ballSeams(W: number, H: number) {
+  const X = (lon: number) => (((lon / (Math.PI * 2) + 0.5) % 1) + 1) % 1 * W;
+  const Y = (lat: number) => (0.5 - lat / Math.PI) * H;
+  const lines: { x: number; y: number }[][] = [];
+  lines.push([{ x: 0, y: H / 2 }, { x: W, y: H / 2 }]); // equator
+  lines.push([{ x: W / 4, y: 0 }, { x: W / 4, y: H }], [{ x: (3 * W) / 4, y: 0 }, { x: (3 * W) / 4, y: H }]); // pole-to-pole
+  const A = THREE.MathUtils.degToRad(62);
+  for (const c of [0, Math.PI]) {
+    for (const side of [-1, 1]) {
+      const pts: { x: number; y: number }[] = [];
+      for (let k = 0; k <= 80; k++) {
+        const lat = -A + (2 * A * k) / 80;
+        const dl = Math.acos(THREE.MathUtils.clamp(Math.cos(A) / Math.cos(lat), -1, 1));
+        pts.push({ x: X(c + side * dl), y: Y(lat) });
+      }
+      lines.push(pts);
+    }
   }
-  ctx.strokeStyle = '#202020';
-  ctx.lineWidth = 7;
-  ctx.beginPath();
-  ctx.moveTo(0, 128);
-  ctx.lineTo(512, 128);
-  ctx.moveTo(128, 0);
-  ctx.lineTo(128, 256);
-  ctx.moveTo(384, 0);
-  ctx.lineTo(384, 256);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(256, 128, 84, 128, 0, 0, Math.PI * 2);
-  ctx.stroke();
+  return lines;
+}
+
+function strokeSeams(ctx: CanvasRenderingContext2D, W: number, H: number, width: number, color: string) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const line of ballSeams(W, H)) {
+    ctx.beginPath();
+    line.forEach((p, i) => {
+      // (curved seams near x = 0/W wrap round: break the path rather than streak across)
+      if (i > 0 && Math.abs(p.x - line[i - 1].x) > W / 2) ctx.moveTo(p.x, p.y);
+      else if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  }
+}
+
+/** League-style composite leather: deep orange with tonal variation, pebbles, black channels, a logo. */
+function makeBallTexture() {
+  const W = 1024;
+  const H = 512;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#c85a1e';
+  ctx.fillRect(0, 0, W, H);
+  // tonal blotches so it isn't flat plastic
+  for (let i = 0; i < 90; i++) {
+    const g = ctx.createRadialGradient(Math.random() * W, Math.random() * H, 0, Math.random() * W, Math.random() * H, 60 + Math.random() * 120);
+    g.addColorStop(0, Math.random() < 0.5 ? 'rgba(150,55,15,0.18)' : 'rgba(230,120,50,0.14)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+  // pebbles: a dark pit and a light top on each
+  for (let i = 0; i < 38000; i++) {
+    const x = Math.random() * W;
+    const y = Math.random() * H;
+    ctx.fillStyle = 'rgba(90,30,5,0.28)';
+    ctx.fillRect(x + 0.8, y + 0.8, 2, 2);
+    ctx.fillStyle = 'rgba(255,170,110,0.22)';
+    ctx.fillRect(x, y, 1.6, 1.6);
+  }
+  // channels: a soft dark groove with a black core
+  strokeSeams(ctx, W, H, 16, 'rgba(60,20,5,0.55)');
+  strokeSeams(ctx, W, H, 9, '#140a06');
+  // our own logo stamp on a panel (black ink, slightly worn)
+  ctx.save();
+  ctx.translate(W * 0.5, H * 0.37);
+  ctx.fillStyle = 'rgba(15,8,4,0.85)';
+  ctx.font = 'italic 900 44px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('RIVAL', 0, 0);
+  ctx.font = '700 13px system-ui, sans-serif';
+  ctx.fillText('★  OFFICIAL GAME BALL  ★', 0, 32);
+  ctx.restore();
+  ctx.save();
+  ctx.translate(W * 0.5, H * 0.63);
+  ctx.fillStyle = 'rgba(15,8,4,0.8)';
+  ctx.font = '800 15px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('SIZE 7 · 29.5"  ·  INDOOR / OUTDOOR', 0, 0);
+  ctx.restore();
   return c;
 }
 
-function makeBallTexture() {
+/** Bump map to match: raised pebbles, deep channels. */
+function makeBallBump() {
+  const W = 1024;
+  const H = 512;
   const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 128;
+  c.width = W;
+  c.height = H;
   const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#e8650d';
-  ctx.fillRect(0, 0, 256, 128);
-  for (let i = 0; i < 2200; i++) {
-    ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.14})`;
-    ctx.fillRect(Math.random() * 256, Math.random() * 128, 1.5, 1.5);
+  ctx.fillStyle = '#7a7a7a';
+  ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 30000; i++) {
+    const v = 150 + Math.floor(Math.random() * 70);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.beginPath();
+    ctx.arc(Math.random() * W, Math.random() * H, 1.4 + Math.random() * 1.3, 0, Math.PI * 2);
+    ctx.fill();
   }
-  ctx.strokeStyle = '#1a0800';
-  ctx.lineWidth = 3.5;
-  ctx.beginPath();
-  ctx.moveTo(0, 64);
-  ctx.lineTo(256, 64);
-  ctx.moveTo(64, 0);
-  ctx.lineTo(64, 128);
-  ctx.moveTo(192, 0);
-  ctx.lineTo(192, 128);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(128, 64, 42, 64, 0, 0, Math.PI * 2);
-  ctx.stroke();
+  strokeSeams(ctx, W, H, 14, '#303030');
+  strokeSeams(ctx, W, H, 8, '#000000');
   return c;
+}
+
+/** 7-segment LED digits (arena scoreboard style): unlit segments faintly visible, lit ones glow. */
+const SEGS: Record<string, string> = { '0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd', '6': 'afgedc', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg', '-': 'g', ' ': '' };
+function drawSeg(ctx: CanvasRenderingContext2D, ch: string, x: number, y: number, w: number, h: number, on: string, off: string) {
+  const t = w * 0.18; // segment thickness
+  const seg = (k: string) => {
+    const half = h / 2;
+    switch (k) {
+      case 'a': return [x + t * 0.6, y, w - t * 1.2, t];
+      case 'd': return [x + t * 0.6, y + h - t, w - t * 1.2, t];
+      case 'g': return [x + t * 0.6, y + half - t / 2, w - t * 1.2, t];
+      case 'f': return [x, y + t * 0.6, t, half - t * 0.9];
+      case 'b': return [x + w - t, y + t * 0.6, t, half - t * 0.9];
+      case 'e': return [x, y + half + t * 0.3, t, half - t * 0.9];
+      default: return [x + w - t, y + half + t * 0.3, t, half - t * 0.9]; // c
+    }
+  };
+  const lit = SEGS[ch] ?? '';
+  for (const k of 'abcdefg') {
+    const [sx, sy, sw, sh] = seg(k);
+    const isOn = lit.includes(k);
+    ctx.fillStyle = isOn ? on : off;
+    ctx.shadowColor = isOn ? on : 'transparent';
+    ctx.shadowBlur = isOn ? w * 0.25 : 0;
+    ctx.beginPath();
+    ctx.roundRect(sx, sy, sw, sh, t * 0.45);
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
 }
 
 export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, onExit }: GameProps) {
@@ -185,7 +281,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
   const seedRef = useLatest(seed);
   const popups = useRef<PopupApi | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false, zone: 'close' as ZoneId });
+  const [hud, pushHud] = useThrottledHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false, zone: 'close' as ZoneId, swishRun: 0, flame: false });
   const resetRef = useRef<() => void>(() => {});
   const shootRef = useRef<(s: Swipe, w: number, h: number) => void>(() => {});
   const aimRef = useRef<(s: Swipe | null, w: number, h: number) => void>(() => {});
@@ -204,8 +300,10 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
     level: 0,
     reload: 0,
     clutchAnnounced: false,
-    nextGold: false,
-    golds: 0,
+    swishRun: 0,
+    flame: false,
+    flames: 0,
+    lastBeep: 99,
     zone: 'close' as ZoneId,
     book: new ScoreBook(),
   });
@@ -224,13 +322,15 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       level: 0,
       reload: 0,
       clutchAnnounced: false,
-      nextGold: false,
-      golds: 0,
+      swishRun: 0,
+      flame: false,
+      flames: 0,
+      lastBeep: 99,
       zone: 'close',
       book: new ScoreBook(),
     });
     resetRef.current();
-    pushHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false, zone: 'close' }, true);
+    pushHud({ score: 0, streak: 0, level: 0, timeLeft: ROUND_SECONDS, clutch: false, zone: 'close', swishRun: 0, flame: false }, true);
     setPhase('playing');
   }, [pushHud]);
 
@@ -270,7 +370,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
 
       // First person: you hold the ball at the free-throw spot and look up at the rim.
       // The camera follows when the shot spot shifts; the lens widens on tall phone screens.
-      const view = { camX: 0, camZ: SPAWN.z, lookY: 1.1, baseLook: 1.1, look: 1.1 };
+      const view = { camX: 0, camZ: SPAWN.z, lookY: 1.1, baseLook: 1.1, look: 0 };
       engine.onResize((_w, _h, aspect) => {
         camera.fov = aspect < 0.6 ? 70 : aspect < 0.8 ? 64 : 50;
         view.baseLook = aspect < 0.8 ? 1.1 : 1.45;
@@ -369,6 +469,87 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       scene.add(wall);
       scene.add(createStarfield(engine, { count: 300, radius: 30, color: '#ffffff', size: 0.12, yMin: 1 }));
 
+      // ---------------- arena scoreboards (red LED): game clock on the left, score on the right
+      const RED = '#ff2a2a';
+      const RED_OFF = 'rgba(255,40,40,0.08)';
+      const ledBoard = (w: number, h: number) => {
+        const cv = document.createElement('canvas');
+        cv.width = w;
+        cv.height = h;
+        const tex = engine.own(new THREE.CanvasTexture(cv));
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return { cv, g: cv.getContext('2d')!, tex };
+      };
+      const frameMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x15161c, roughness: 0.5, metalness: 0.6 }));
+      const makeWallBoard = (x: number) => {
+        const led = ledBoard(512, 256);
+        const grp = new THREE.Group();
+        const frame = new THREE.Mesh(engine.own(new THREE.BoxGeometry(3.5, 1.9, 0.25)), frameMat);
+        const face = new THREE.Mesh(engine.own(new THREE.PlaneGeometry(3.3, 1.65)), engine.own(new THREE.MeshBasicMaterial({ map: led.tex, toneMapped: false })));
+        face.position.z = 0.13;
+        grp.add(frame, face);
+        grp.position.set(x, 6.6, -18.6);
+        scene.add(grp);
+        return led;
+      };
+      const clockBoard = makeWallBoard(-3.7);
+      const scoreBoard = makeWallBoard(3.7);
+      const paintWall = (led: ReturnType<typeof ledBoard>, label: string, text: string, colon: boolean) => {
+        const { g, cv, tex } = led;
+        g.fillStyle = '#050506';
+        g.fillRect(0, 0, cv.width, cv.height);
+        g.fillStyle = '#d8d8e0';
+        g.font = '900 34px system-ui, sans-serif';
+        g.textAlign = 'center';
+        g.fillText(label, cv.width / 2, 42);
+        const n = text.length;
+        const dw = 74;
+        const gap = colon ? 40 : 18;
+        const total = n * dw + (n - 1) * 18 + (colon ? gap : 0);
+        let x = (cv.width - total) / 2;
+        for (let i = 0; i < n; i++) {
+          drawSeg(g, text[i], x, 70, dw, 150, RED, RED_OFF);
+          x += dw + 18;
+          if (colon && i === n - 3) {
+            g.fillStyle = RED;
+            g.shadowColor = RED;
+            g.shadowBlur = 14;
+            g.fillRect(x - 6, 110, 14, 14);
+            g.fillRect(x - 6, 168, 14, 14);
+            g.shadowBlur = 0;
+            x += gap - 18;
+          }
+        }
+        tex.needsUpdate = true;
+      };
+      let shownClock = '';
+      let shownScore = '';
+      const paintBoards = (secs: number, score: number) => {
+        const sTotal = Math.max(0, Math.ceil(secs));
+        const clock = `${Math.floor(sTotal / 60)}${String(sTotal % 60).padStart(2, '0')}`;
+        if (clock !== shownClock) {
+          shownClock = clock;
+          paintWall(clockBoard, 'TIME', clock, true);
+          paintShotClock(sTotal);
+        }
+        const sc = String(Math.min(999, score)).padStart(3, ' ');
+        if (sc !== shownScore) {
+          shownScore = sc;
+          paintWall(scoreBoard, 'SCORE', sc, false);
+        }
+      };
+      // shot clock box on top of the backboard (moves with the hoop) — defined with the hoop below
+      const shotLed = ledBoard(256, 160);
+      const paintShotClock = (secs: number) => {
+        const { g, cv, tex } = shotLed;
+        g.fillStyle = '#050506';
+        g.fillRect(0, 0, cv.width, cv.height);
+        const txt = String(Math.min(99, secs)).padStart(2, ' ');
+        drawSeg(g, txt[0], 38, 22, 76, 116, RED, RED_OFF);
+        drawSeg(g, txt[1], 142, 22, 76, 116, RED, RED_OFF);
+        tex.needsUpdate = true;
+      };
+
       // Light cones
       const coneMat = new THREE.MeshBasicMaterial({ color: 0x9fdcff, transparent: true, opacity: 0.05, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
       [-5, 5].forEach((x) => {
@@ -416,7 +597,18 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const net = new THREE.LineSegments(new THREE.WireframeGeometry(netGeo), new THREE.LineBasicMaterial({ color: 0xf2f6ff, transparent: true, opacity: 0.85 }));
       netGeo.dispose();
       net.position.set(0, RIM_Y - 0.25, HOOP_Z);
-      hoop.add(pole, arm, board, boardEdge, square, rim, net);
+      const shotClock = new THREE.Group();
+      const scBox = new THREE.Mesh(engine.own(new THREE.BoxGeometry(0.62, 0.42, 0.22)), frameMat);
+      const scFace = new THREE.Mesh(engine.own(new THREE.PlaneGeometry(0.56, 0.35)), engine.own(new THREE.MeshBasicMaterial({ map: shotLed.tex, toneMapped: false })));
+      scFace.position.z = 0.115;
+      shotClock.add(scBox, scFace);
+      shotClock.position.set(0, RIM_Y + 0.45 + 0.575 + 0.24, HOOP_Z - BOARD_OFFSET);
+      // a red buzzer light along the top of the glass: flashes when time runs out
+      const buzzMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2020).multiplyScalar(0.25), toneMapped: false }));
+      const buzzLight = new THREE.Mesh(engine.own(new THREE.BoxGeometry(1.8, 0.05, 0.06)), buzzMat);
+      buzzLight.position.set(0, RIM_Y + 0.45 + 0.6, HOOP_Z - BOARD_OFFSET);
+      hoop.add(pole, arm, board, boardEdge, square, rim, net, shotClock, buzzLight);
+      let buzzT = 0;
       const hoopShadow = createBlobShadow(engine, 0.6, 0.35);
       hoopShadow.position.set(0, 0.02, HOOP_Z);
       hoop.add(hoopShadow);
@@ -428,22 +620,67 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       // ---------------- balls
       const ballTex = engine.own(new THREE.CanvasTexture(makeBallTexture()));
       ballTex.colorSpace = THREE.SRGBColorSpace;
-      const ballGeo = engine.own(new THREE.SphereGeometry(BALL_R, 32, 20));
+      ballTex.anisotropy = Math.min(8, engine.renderer.capabilities.getMaxAnisotropy());
+      const ballGeo = engine.own(new THREE.SphereGeometry(BALL_R, 48, 32));
       const ballBump = engine.own(new THREE.CanvasTexture(makeBallBump()));
-      // Pebbled leather: bump grain + soft sheen, rough enough to catch the arena lights gently.
+      // Composite leather: pebble bump, deep channels, a soft satin sheen.
       const ballMat = engine.own(
-        new THREE.MeshPhysicalMaterial({ map: ballTex, bumpMap: ballBump, bumpScale: 1.2, roughness: 0.68, metalness: 0, sheen: 0.4, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xffa060), emissive: 0xff4400, emissiveIntensity: 0 }),
+        new THREE.MeshPhysicalMaterial({ map: ballTex, bumpMap: ballBump, bumpScale: 2.2, roughness: 0.6, metalness: 0, sheen: 0.5, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xff9a5a), clearcoat: 0.08, clearcoatRoughness: 0.6 }),
       );
-      // Gold ball: same leather seams, polished gold, softly glowing — worth 3.
-      const goldMat = engine.own(
-        new THREE.MeshPhysicalMaterial({ map: ballTex, bumpMap: ballBump, bumpScale: 0.8, color: 0xffd34d, roughness: 0.22, metalness: 0.85, clearcoat: 1, emissive: 0xffaa00, emissiveIntensity: 0.35 }),
+      // Flame ball: the same ball, glowing from inside like an ember.
+      const flameMat = engine.own(
+        new THREE.MeshPhysicalMaterial({ map: ballTex, bumpMap: ballBump, bumpScale: 2.2, roughness: 0.5, metalness: 0, emissive: 0xff4a00, emissiveMap: ballTex, emissiveIntensity: 1.6 }),
       );
+      // flames and fireworks get their own particle pools
+      const flames = new ParticleBursts(engine, engine.own(new THREE.TetrahedronGeometry(0.07, 0)));
+      const fireworks = new ParticleBursts(engine, engine.own(new THREE.OctahedronGeometry(0.06, 0)));
+      const flameLight = new THREE.PointLight(0xff6a1a, 0, 4, 2);
+      scene.add(flameLight);
+      // flame aura: two flickering teardrop glows (outer orange, inner yellow) wrapped round the ball
+      const flameTex = (() => {
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 128;
+        const g = c.getContext('2d')!;
+        const grd = g.createRadialGradient(32, 92, 4, 32, 80, 60);
+        grd.addColorStop(0, 'rgba(255,255,255,1)');
+        grd.addColorStop(0.35, 'rgba(255,255,255,0.75)');
+        grd.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = grd;
+        g.beginPath();
+        g.moveTo(32, 2);
+        g.bezierCurveTo(52, 40, 64, 70, 60, 96);
+        g.bezierCurveTo(56, 124, 8, 124, 4, 96);
+        g.bezierCurveTo(0, 70, 12, 40, 32, 2);
+        g.fill();
+        return engine.own(new THREE.CanvasTexture(c));
+      })();
+      const auraOuter = new THREE.Sprite(engine.own(new THREE.SpriteMaterial({ map: flameTex, color: new THREE.Color(0xff4a00).multiplyScalar(2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })));
+      const auraInner = new THREE.Sprite(engine.own(new THREE.SpriteMaterial({ map: flameTex, color: new THREE.Color(0xffc040).multiplyScalar(2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })));
+      auraOuter.visible = auraInner.visible = false;
+      scene.add(auraOuter, auraInner);
+      type Shell = { pos: THREE.Vector3; vel: THREE.Vector3; fuse: number; color: number };
+      const shells: Shell[] = [];
+      const FW_COLORS = [0xff3b3b, 0xffd23f, 0x3fd8ff, 0x9b6bff, 0x4ade80, 0xff7ad9];
+      /** Launch `n` firework shells from behind the stands, bursting high over the hoop. */
+      const launchFireworks = (n: number) => {
+        for (let i = 0; i < n; i++) {
+          const x = (i % 2 ? 1 : -1) * (2 + Math.random() * 4);
+          shells.push({
+            pos: new THREE.Vector3(x, 1.5, -11 - Math.random() * 4),
+            vel: new THREE.Vector3(-x * 0.12 + (Math.random() - 0.5), 10 + Math.random() * 2.5, 1 + Math.random()),
+            fuse: 0.65 + Math.random() * 0.35 + i * 0.12,
+            color: FW_COLORS[Math.floor(Math.random() * FW_COLORS.length)],
+          });
+          sound.playFirework(0.65 + i * 0.12);
+        }
+      };
       const balls: Ball[] = Array.from({ length: MAX_BALLS }, () => {
         const mesh = new THREE.Mesh(ballGeo, ballMat);
         mesh.castShadow = quality.shadows;
         mesh.visible = false;
         scene.add(mesh);
-        return { mesh, pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, resolved: true, rimHits: 0, bank: false, gold: false, perfect: false, zone: 'close' as ZoneId, age: 0, bounces: 0 };
+        return { mesh, pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(), active: false, resolved: true, rimHits: 0, bank: false, flame: false, perfect: false, zone: 'close' as ZoneId, age: 0, bounces: 0 };
       });
       const readyBall = new THREE.Mesh(ballGeo, ballMat);
       readyBall.castShadow = quality.shadows;
@@ -522,6 +759,12 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         spawn.copy(SPAWN);
         view.camX = 0;
         view.camZ = SPAWN.z;
+        view.look = 0;
+        shells.length = 0;
+        flames.clear();
+        fireworks.clear();
+        buzzT = 0;
+        sim.current.lastBeep = 99;
         balls.forEach((b) => {
           b.active = false;
           b.resolved = true;
@@ -650,10 +893,8 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         ball.resolved = false;
         ball.rimHits = 0;
         ball.bank = false;
-        ball.gold = st.nextGold;
-        ball.mesh.material = ball.gold ? goldMat : ballMat;
-        // The next ball may be gold (worth 3) — rarer early, more often once the hoop moves.
-        st.nextGold = rng.next() < (st.level === 0 ? 0.1 : 0.2);
+        ball.flame = st.flame;
+        ball.mesh.material = ball.flame ? flameMat : ballMat;
         ball.perfect = res.perfect;
         ball.age = 0;
         ball.bounces = 0;
@@ -667,44 +908,57 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         feel.kick(0.25);
       };
 
+      const flameOut = () => {
+        const st = sim.current;
+        if (st.flame) popups.current?.banner('FLAME OUT', '#94a3b8');
+        st.flame = false;
+        st.swishRun = 0;
+      };
+
       const score = (ball: Ball) => {
         const st = sim.current;
         st.makes += 1;
         st.streak += 1;
         st.bestStreak = Math.max(st.bestStreak, st.streak);
         const swish = ball.rimHits === 0 && !ball.bank;
-        // 1 point a basket; specials: gold ball 3, swish or bank +1. On fire / clutch double it.
-        const parts: Record<string, number> = { Baskets: PTS.base };
-        if (ball.gold) parts['Gold balls'] = PTS.gold - PTS.base;
-        if (ZONES[ball.zone].bonus) parts['3-pointers'] = ZONES[ball.zone].bonus;
-        if (swish) parts['Swish bonus'] = PTS.bonus;
-        else if (ball.bank) parts['Bank bonus'] = PTS.bonus;
-        const value = Object.values(parts).reduce((a, b) => a + b, 0);
-        const a = award(value, { streak: st.streak, timeLeft: st.timeLeft });
-        st.book.record(a, parts);
+        // Swish 2 · bank shot or rim shot 1 · flame-ball swish 6.
+        const kind = swish ? (ball.flame ? 'flame' : 'swish') : ball.bank ? 'bank' : 'rim';
+        const value = kind === 'flame' ? PTS_FLAME_SWISH : kind === 'swish' ? PTS_SWISH : PTS_OTHER;
+        const label = kind === 'flame' ? 'Flame swishes' : kind === 'swish' ? 'Swishes' : kind === 'bank' ? 'Bank shots' : 'Rim shots';
+        const a = award(value, {});
+        st.book.record(a, { [label]: value });
         st.score = st.book.score;
-        const pts = a.total;
-        const clutchMult = st.timeLeft <= CLUTCH_SECONDS ? 2 : 1;
-        if (ball.gold) st.golds += 1;
         if (swish) st.swishes += 1;
         if (ball.bank) st.banks += 1;
+        if (kind === 'flame') st.flames += 1;
 
         // Feedback
         netKick = 1;
         sound.playSwish();
         haptic(swish ? 'big' : 'score');
-        engine.flash(swish ? 0.7 : 0.35);
+        engine.flash(kind === 'flame' ? 1 : swish ? 0.6 : 0.3);
         rimCenter.set(hoopX, RIM_Y, HOOP_Z);
-        particles.emit(rimCenter, swish ? 0xffd34d : 0x5fe8ff, { count: swish ? 34 : 18, speed: 4.5, life: 0.7 });
+        particles.emit(rimCenter, kind === 'flame' ? 0xff6a1a : swish ? 0xffd34d : 0x5fe8ff, { count: kind === 'flame' ? 50 : swish ? 30 : 16, speed: 4.5, life: 0.7 });
+        if (kind === 'flame') flames.emit(rimCenter, 0xff5a1f, { count: 40, speed: 3.5, life: 0.8, gravity: -4, size: 1.6 });
+        launchFireworks(kind === 'flame' ? 6 : swish ? 3 : 2);
         const p = engine.toScreen(rimCenter);
-        popups.current?.pop(`+${pts}`, p.x, p.y - 30, popStyle(pts, ball.gold ? 'gold' : swish || ball.bank ? 'bonus' : undefined));
-        if (ball.gold) popups.current?.pop('GOLD BALL', p.x, p.y + 10, { color: '#fbbf24', size: 'sm' });
-        else if (ZONES[ball.zone].bonus) popups.current?.pop(ball.zone === 'deep' ? 'DEEP THREE!' : 'THREE!', p.x, p.y + 10, { color: '#fbbf24', size: 'sm' });
-        else if (ball.perfect && clutchMult === 1) popups.current?.banner('PERFECT!', '#fde047');
-        if (swish && !ball.gold) popups.current?.pop('SWISH', p.x, p.y + 10, { color: '#7dd3fc', size: 'sm' });
-        else if (ball.bank && !ball.gold) popups.current?.pop('BANK!', p.x, p.y + 10, { color: '#c4b5fd', size: 'sm' });
-        if (st.streak === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
-        if (swish) feel.kick(0.35);
+        popups.current?.pop(`+${value}`, p.x, p.y - 30, popStyle(value, kind === 'flame' ? 'jackpot' : swish ? 'bonus' : undefined));
+        popups.current?.pop(kind === 'flame' ? '🔥 FLAME SWISH' : kind === 'swish' ? 'SWISH!' : kind === 'bank' ? 'BANK SHOT' : 'RIM SHOT', p.x, p.y + 10, {
+          color: kind === 'flame' ? '#fb923c' : kind === 'swish' ? '#7dd3fc' : kind === 'bank' ? '#c4b5fd' : '#fde68a',
+          size: kind === 'flame' ? 'md' : 'sm',
+        });
+        if (swish) feel.kick(kind === 'flame' ? 0.6 : 0.35);
+
+        // Flame ball: three swishes in a row light it; anything but a swish puts it out.
+        if (swish) {
+          st.swishRun += 1;
+          if (!st.flame && st.swishRun >= FLAME_AFTER) {
+            st.flame = true;
+            popups.current?.banner('🔥 FLAME BALL — SWISH FOR 6', '#f97316');
+            sound.playCombo(3);
+            haptic('big');
+          }
+        } else flameOut();
 
         // Level up → hoop starts moving; shot spot shifts (seeded, same for every player)
         const nextLevel = LEVELS.reduce((lv, l, i) => (st.makes >= l.makes ? i : lv), 0);
@@ -713,14 +967,14 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           popups.current?.banner(`LEVEL ${nextLevel + 1}`, '#5fe8ff');
         }
         newSpot();
-        pushHud({ score: st.score, streak: st.streak, level: st.level }, true);
+        pushHud({ score: st.score, streak: st.streak, level: st.level, swishRun: st.swishRun, flame: st.flame }, true);
       };
 
       const miss = () => {
         const st = sim.current;
-        if (onFire(st.streak)) popups.current?.banner('FIRE OUT', '#94a3b8');
         st.streak = 0;
-        pushHud({ streak: 0 }, true);
+        flameOut();
+        pushHud({ streak: 0, swishRun: 0, flame: false }, true);
       };
 
       const finish = () => {
@@ -728,7 +982,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         st.playing = false;
         hideAim();
         land.visible = false;
-        sound.playLose();
+        sound.playBuzzer();
+        buzzT = 1.4;
+        paintBoards(0, st.score);
         haptic('fail');
         const breakdown = st.book.breakdown();
         pushHud({ timeLeft: 0, score: st.score, clutch: false }, true);
@@ -745,18 +1001,34 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           st.reload = Math.max(0, st.reload - dt);
           if (!st.clutchAnnounced && st.timeLeft <= CLUTCH_SECONDS) {
             st.clutchAnnounced = true;
-            popups.current?.banner('CLUTCH TIME ×2', '#fbbf24');
+            popups.current?.banner('FINAL 10 SECONDS', '#ef4444');
             haptic('big');
+          }
+          // shot-clock beeps through the last five seconds
+          const whole = Math.ceil(st.timeLeft);
+          if (whole <= 5 && whole >= 1 && whole < st.lastBeep) {
+            st.lastBeep = whole;
+            sound.playBeep(whole === 1);
           }
           pushHud({ timeLeft: Math.max(0, st.timeLeft), clutch: st.timeLeft <= CLUTCH_SECONDS });
           if (st.timeLeft <= 0) finish();
         }
 
-        // Hoop sway (deterministic per seed)
+        paintBoards(Math.max(0, st.timeLeft), st.score);
+        if (buzzT > 0) {
+          buzzT = Math.max(0, buzzT - dt);
+          buzzMat.color.setHex(0xff2020).multiplyScalar(Math.floor(buzzT * 8) % 2 ? 3 : 0.4);
+        }
+
+        // Hoop glide (deterministic per seed): a smooth side-to-side ease with brief holds at each
+        // end. Its reach is capped by your distance so the net always stays in view.
         const lv = LEVELS[st.level];
         hoopPhase += lv.speed * dt;
-        const targetX = lv.amp * Math.sin(hoopPhase);
-        hoopX += (targetX - hoopX) * Math.min(1, dt * 4);
+        const spotD = Math.hypot(spawn.x - hoopX, spawn.z - HOOP_Z);
+        const amp = Math.min(lv.amp, spotD * Math.tan(THREE.MathUtils.degToRad(17)));
+        const sw = Math.sin(hoopPhase);
+        const targetX = amp * Math.sign(sw) * Math.pow(Math.abs(sw), 0.7);
+        hoopX += (targetX - hoopX) * Math.min(1, dt * 3);
         hoop.position.x = hoopX;
 
         // Ready ball bob
@@ -764,8 +1036,10 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         readyBall.position.set(spawn.x, spawn.y + Math.sin(t * 3) * 0.03, spawn.z);
         readyBall.rotation.y += dt;
         readyShadow.position.set(spawn.x, 0.02, spawn.z);
-        ballMat.emissiveIntensity = onFire(st.streak) ? 0.9 + Math.sin(t * 20) * 0.2 : 0;
-        readyBall.material = st.nextGold ? goldMat : ballMat;
+        readyBall.material = st.flame ? flameMat : ballMat;
+        flameMat.emissiveIntensity = 1.4 + Math.sin(t * 23) * 0.3;
+        // flames lick up off the ball in your hands while the flame ball is lit
+        if (st.flame && readyBall.visible && Math.random() < dt * 30) flames.emit(readyBall.position, Math.random() < 0.5 ? 0xff5a1f : 0xffb02e, { count: 1, speed: 0.5, life: 0.4, gravity: -3, size: 0.5 });
 
         // Ball physics (sub-stepped for reliable rim contacts)
         rimCenter.set(hoopX, RIM_Y, HOOP_Z);
@@ -830,7 +1104,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           b.mesh.position.copy(b.pos);
           b.mesh.rotation.x -= b.vel.z * dt * 3;
           b.mesh.rotation.z += b.vel.x * dt * 3;
-          if (onFire(st.streak) && !b.resolved) particles.emit(b.pos, 0xff5a1f, { count: 1, speed: 0.6, life: 0.35, size: 1.4, gravity: -2 });
+          if (b.flame && !b.resolved) flames.emit(b.pos, Math.random() < 0.5 ? 0xff4a00 : 0xffb02e, { count: 3, speed: 0.6, life: 0.35, size: 0.6, gravity: -2 });
           if (b.bounces >= 3 || b.age > 4 || b.pos.z > 9 || Math.abs(b.pos.x) > 9) {
             if (!b.resolved && st.playing) miss();
             b.active = false;
@@ -856,7 +1130,9 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         // Closer spots tilt the view up so the rim sits comfortably in frame, not under the HUD.
         const spotDist = Math.hypot(view.camX, view.camZ - HOOP_Z);
         view.lookY += (view.baseLook + THREE.MathUtils.clamp((7.6 - spotDist) / 4.3, 0, 1) * 0.85 - view.lookY) * Math.min(1, dt * 3);
-        camera.lookAt(view.camX * 0.85 + hoopX * 0.15, view.lookY, HOOP_Z);
+        // look toward the hoop (not just straight ahead) so the net never slides out of frame
+        view.look += (THREE.MathUtils.lerp(view.camX, hoopX, 0.65) - view.look) * Math.min(1, dt * 4);
+        camera.lookAt(view.look, view.lookY, HOOP_Z);
 
         // Arms: cradle the ball, then push up and through on the shot.
         arms.ready(t);
@@ -873,7 +1149,38 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           arms.left.pivot.position.y -= 0.05;
           arms.right.pivot.position.y -= 0.05;
         }
-        arms.setGlow(onFire(st.streak) ? 1.5 : 0);
+        arms.setGlow(st.flame ? 1.5 : 0);
+
+        // flame light rides the flame ball (in flight, or in your hands)
+        const flying = balls.find((bb) => bb.active && bb.flame && !bb.resolved);
+        if (flying) flameLight.position.copy(flying.pos);
+        else flameLight.position.copy(readyBall.position);
+        flameLight.intensity = st.flame || flying ? 3 + Math.sin(t * 30) * 0.8 : 0;
+        const auraAt = flying ? flying.pos : st.flame && readyBall.visible ? readyBall.position : null;
+        auraOuter.visible = auraInner.visible = !!auraAt;
+        if (auraAt) {
+          const fl = 1 + Math.sin(t * 31) * 0.08 + Math.sin(t * 13) * 0.06;
+          // flames stream back from a flying ball; straight up from the one in your hands
+          const trail = flying ? tmp.copy(flying.vel).normalize().multiplyScalar(-0.12) : tmp.set(0, 0, 0);
+          auraOuter.position.set(auraAt.x + trail.x, auraAt.y + 0.1 + trail.y * 0.5, auraAt.z + trail.z);
+          auraOuter.scale.set(0.56 * fl, 0.95 * fl, 1);
+          auraInner.position.set(auraAt.x, auraAt.y + 0.05, auraAt.z);
+          auraInner.scale.set(0.36 * fl, 0.6 * fl, 1);
+        }
+
+        // fireworks: shells rise trailing sparks, then burst
+        for (let i = shells.length - 1; i >= 0; i--) {
+          const sh = shells[i];
+          sh.fuse -= dt;
+          sh.vel.y -= 6 * dt;
+          sh.pos.addScaledVector(sh.vel, dt);
+          if (Math.random() < 0.6) fireworks.emit(sh.pos, 0xffe2b0, { count: 1, speed: 0.3, life: 0.3, gravity: 2, size: 0.8 });
+          if (sh.fuse <= 0) {
+            fireworks.emit(sh.pos, sh.color, { count: 60, speed: 6, life: 1.3, gravity: 2, size: 2.4 });
+            fireworks.emit(sh.pos, 0xffffff, { count: 12, speed: 3, life: 0.6, gravity: 2, size: 1 });
+            shells.splice(i, 1);
+          }
+        }
       });
 
       return () => {
@@ -888,16 +1195,21 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
 
   const chips = (
     <>
-      {onFire(hud.streak) && (
-        <span className="flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-orange-500 text-black text-[11px] font-black">
-          <Flame className="w-3 h-3" /> ON FIRE ×2
+      {hud.flame ? (
+        <span className="flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-orange-500 text-black text-[11px] font-black whitespace-nowrap animate-pulse" data-testid="dunk-flame">
+          <Flame className="w-3 h-3" /> FLAME ×6
         </span>
+      ) : (
+        hud.swishRun > 0 && (
+          <span className="px-2 py-0.5 rounded-full bg-black/50 text-sky-200 text-[11px] font-black whitespace-nowrap" data-testid="dunk-swish-run">
+            SWISH {hud.swishRun}/{FLAME_AFTER}
+          </span>
+        )
       )}
-      {hud.streak > 0 && <span className="px-2 py-0.5 rounded-full bg-black/50 text-white text-[11px] font-bold">{hud.streak} in a row</span>}
-      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${ZONES[hud.zone].bonus ? 'bg-amber-400 text-black' : 'bg-black/50 text-white'}`} data-testid="dunk-zone">
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-black whitespace-nowrap ${ZONES[hud.zone].bonus ? 'bg-amber-400 text-black' : 'bg-black/50 text-white'}`} data-testid="dunk-zone">
         {ZONES[hud.zone].label} · {ZONES[hud.zone].dist.toFixed(1)}m
       </span>
-      {hud.level > 0 && <span className="px-2 py-0.5 rounded-full bg-cyan-400/90 text-black text-[11px] font-black">LVL {hud.level + 1}</span>}
+      {hud.level > 0 && <span className="px-2 py-0.5 rounded-full bg-cyan-400/90 text-black text-[11px] font-black whitespace-nowrap">LVL {hud.level + 1}</span>}
     </>
   );
 
@@ -927,21 +1239,19 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           { gesture: 'release', label: 'Let go to shoot · pull back down to cancel' },
         ],
         points: [
-          { label: 'Basket', value: '1' },
-          { label: 'Swish / bank', value: '+1', tone: 'bonus' },
-          { label: '3-pointer', value: '+1', tone: 'bonus' },
-          { label: 'Gold ball', value: '3', tone: 'gold' },
-          { label: '5 in a row', value: '×2', tone: 'fire' },
-          { label: 'Last 10s', value: '×2', tone: 'clutch' },
+          { label: 'Swish (nothing but net)', value: '2', tone: 'bonus' },
+          { label: 'Bank shot / rim shot', value: '1' },
+          { label: '3 swishes in a row', value: '🔥 flame ball', tone: 'fire' },
+          { label: 'Flame-ball swish', value: '6', tone: 'gold' },
         ],
-        ends: '60-second round · shot spots change range · the hoop starts moving',
+        ends: '60-second round on the shot clock · the buzzer ends it · the hoop starts moving',
       }}
       tutorial={[
         { icon: <ArrowUp className="w-6 h-6" />, label: 'Drag up, let go' },
         { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Slide to aim' },
-        { icon: <Flame className="w-6 h-6" />, label: '5 in a row = ×2' },
+        { icon: <Flame className="w-6 h-6" />, label: '3 swishes = flame ball' },
       ]}
-      scoring="Every basket is 1 point. 3-pointer +1 · Gold ball 3 · Swish or bank +1 · 5 in a row sets you ON FIRE ×2 · Last 10s CLUTCH ×2. Touch anywhere and drag up: the longer the pull the farther the shot — the meter on the right shows your power. Slide sideways to aim, and let go to shoot (pull back down to cancel). Shot spots move between close, mid-range, 3-point and deep, the aim help and arc preview fade, and the hoop starts moving as you score."
+      scoring="Swish (nothing but net) 2 · Bank shot or rim shot 1 · Three swishes in a row light the FLAME BALL: a flaming swish is worth 6, and anything but a swish puts the flame out. Touch anywhere and drag up: the longer the pull the farther the shot — the meter on the right shows your power. Slide sideways to aim, and let go to shoot (pull back down to cancel). Shot spots move between close, mid-range, 3-point and deep, the aim help and arc preview fade, and the hoop starts gliding side to side as you score. The arena shot clock runs 60 seconds; the buzzer ends the round."
     />
   );
 }

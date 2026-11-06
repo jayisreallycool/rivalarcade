@@ -80,7 +80,7 @@ const QUEST_METRIC: Record<string, string> = {
   'gem-cascade': 'gem-surge:maxCombo:max',
   'gem-score': 'gem-surge:score:max',
   'swing-vines': 'canopy-swing:vines:max',
-  'swing-fire': 'canopy-swing:maxCombo:max',
+  'swing-fire': 'canopy-swing:vines:max',
   'duel-wins': 'h2hWins',
   'play-three': 'runs',
   'tourney-run': 'cupRuns',

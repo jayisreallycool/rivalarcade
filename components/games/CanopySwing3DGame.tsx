@@ -21,8 +21,8 @@ import { Pointer, Crosshair, Timer } from 'lucide-react';
  * so keep moving. The aim laser fades stage by stage; in CRAZY you aim by feel.
  * Four stages — SLOW → MIDDLE → FINAL → CRAZY — so every run ends; one splash and you're out.
  *
- * Scoring (shared rules): 1 per vine · perfect shot (glowing middle of the vine) +1 · gold vine 3 ·
- * banana 1 · golden idol 3 · sunstone 5 · 5 perfect shots in a row = ON FIRE ×2.
+ * Scoring: 1 point for every vine you get past — that's the whole score. Skip a vine by flying past
+ * it and it still counts, so the score is simply how far you swing.
  */
 
 const HAND_UP = 1.87;
@@ -392,7 +392,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           const i = anchors.length;
           const a = nextAnchor(anchors[i - 1], i, rng);
           anchors.push(a);
-          placeFruit(anchors[i - 1], a, i);
+          a.gold = false; // no special vines: every vine is worth the same
           buildAnchor(a, i);
         }
         for (let i = 0; i < cur - BEHIND; i++) {
@@ -502,7 +502,6 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         if (!playing) return;
         if (line) {
           line = null;
-          feel.kick(0.12);
           sound.playSwish();
           haptic('light');
           return;
@@ -535,21 +534,16 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         lastHooked = i;
         caught += 1 + skipped;
         const perfect = shots === 0 && isPerfect(drop, st.vine);
-        streak = perfect ? streak + 1 : 0;
-        bestStreak = Math.max(bestStreak, streak);
-        const a0 = anchors[i];
-        const base = a0.gold ? PTS.gold : PTS.base;
-        const parts: Record<string, number> = { [a0.gold ? 'Gold vines' : 'Vines']: base };
-        if (perfect) parts['Perfect shots'] = PTS.bonus;
-        if (skipped) parts['Skipped vines'] = skipped * PTS.bonus;
-        const a = award(base + (perfect ? PTS.bonus : 0) + skipped * PTS.bonus, { streak });
-        book.record(a, parts);
-        const A0 = anchorPos(a0, t);
+        // 1 point per vine you got past (a skipped vine counts too) — nothing else scores
+        const gained = 1 + skipped;
+        const a = award(gained, {});
+        book.record(a, { Vines: gained });
+        const A0 = anchorPos(anchors[i], t);
         const A = { f: A0.f, y: A0.y - drop };
-        popAtWorld(A.f, A.y + 0.7, `+${a.total}`, popStyle(a.total, a0.gold ? 'gold' : perfect ? 'bonus' : undefined));
-        if (perfect) popAtWorld(A.f, A.y + 1.2, 'PERFECT', { color: '#fde047', size: 'sm' });
-        if (skipped) popups.current?.banner(skipped > 1 ? `SKIP ×${skipped}!` : 'SKIP!', '#38bdf8');
-        if (streak === FIRE_STREAK) popups.current?.banner('ON FIRE ×2', '#f43f5e');
+        popAtWorld(A.f, A.y + 0.7, `+${a.total}`, popStyle(a.total));
+        if (skipped) popups.current?.banner(skipped > 1 ? `SKIP ×${skipped}` : 'SKIP', '#38bdf8');
+        else if (perfect) popAtWorld(A.f, A.y + 1.2, 'NICE', { color: '#fde047', size: 'sm' });
+        void st;
         // stage change
         const ns = STAGES.findIndex((s) => s.name === stageAt(i + 1).name);
         if (ns > stageIdx) {
@@ -558,10 +552,10 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           popups.current?.banner(s.name === 'CRAZY' ? '🔥 CRAZY MODE' : `${s.name} STAGE`, s.color);
           engine.flash(0.35);
         }
-        sound.playScore(1 + Math.min(1, streak * 0.08));
+        sound.playScore(1 + Math.min(0.6, skipped * 0.2));
         haptic(perfect ? 'score' : 'light');
         feel.kick(perfect ? 0.35 : 0.22);
-        particles.emit(tmpV.set(0, A.y, -A.f), a0.gold ? 0xffc83a : 0x9be15d, { count: perfect ? 22 : 12, speed: 3, life: 0.6, gravity: 5 });
+        particles.emit(tmpV.set(0, A.y, -A.f), 0x9be15d, { count: perfect || skipped ? 20 : 12, speed: 3, life: 0.6, gravity: 5 });
         line = { anchor: i, drop, L: Math.max(MIN_ROPE, dist), t: 0 };
         target = i + 1;
         shots = 0;
@@ -663,7 +657,6 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
               target += 1;
               ensureAhead(target);
             }
-            collectFruit();
             if (b.y < WATER_Y + 0.35) {
               particles.emit(tmpV.set(0, WATER_Y + 0.1, -b.f), 0xbff7ee, { count: 50, speed: 6, life: 1, gravity: 9 });
               finish('SPLASH!');
@@ -794,7 +787,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         const aspect = camera.aspect;
         const viewW = 2 * camDist * Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * aspect;
         const lead = THREE.MathUtils.clamp(T.f - b.f, 0, viewW * 0.6) * 0.5 + viewW * 0.06;
-        camFocus.lerp(tmpV.set(0, THREE.MathUtils.lerp(6.5, b.y - 0.5, 0.4), -(b.f + lead)), 1 - Math.exp(-rawDt * 4));
+        // smooth, fluid follow: glide with the swing instead of snapping to it
+        camFocus.lerp(tmpV.set(0, THREE.MathUtils.lerp(6.8, b.y - 0.5, 0.3), -(b.f + lead)), 1 - Math.exp(-rawDt * 2.6));
         const off = feel.update(rawDt, time, 0);
         camera.position.set(camDist, camFocus.y + 1 + off.y, camFocus.z + off.x);
         camera.lookAt(camFocus);
@@ -839,12 +833,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       <span className="px-2 py-0.5 rounded-full bg-black/50 text-emerald-300 text-[11px] font-black tabular-nums" data-testid="swing-vines">
         {hud.vines} vines
       </span>
-      {hud.streak > 0 && (
-        <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${fire ? 'bg-orange-500 text-black' : 'bg-black/50 text-amber-300'}`}>
-          {fire ? 'ON FIRE ×2 · ' : ''}
-          {hud.streak} perfect
-        </span>
-      )}
+
     </>
   );
 
@@ -871,13 +860,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           { gesture: 'timing', label: 'The gun fires at a fixed angle — time it to cross the vine' },
         ],
         points: [
-          { label: 'Vine', value: '1' },
-          { label: 'Hit the glowing middle', value: '+1', tone: 'bonus' },
-          { label: 'Each vine you skip', value: '+1', tone: 'bonus' },
-          { label: 'Gold vine', value: '3', tone: 'gold' },
-          { label: 'Banana', value: '1' },
-          { label: 'Idol / Sunstone', value: '3 / 5', tone: 'jackpot' },
-          { label: '5 perfect', value: '×2', tone: 'fire' },
+          { label: 'Every vine you pass', value: '1' },
         ],
         ends: 'Slow → Middle → Final → Crazy · vines shorten, the aim laser fades · one splash ends it',
       }}
@@ -886,7 +869,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         { icon: <Crosshair className="w-6 h-6" />, label: 'Fire when the line meets the vine' },
         { icon: <Timer className="w-6 h-6" />, label: 'Ropes fray — keep moving' },
       ]}
-      scoring="One splash ends the run. 1 point per vine hooked · hit the glowing middle of the vine +1 · gold vine 3 · banana 1 · golden idol 3 · sunstone 5 · 5 perfect shots in a row = ON FIRE ×2. The hook gun fires at a fixed angle — no auto-aim — so timing is everything. Four stages — Slow, Middle, Final, Crazy: gaps widen, vines get shorter, the aim laser fades, branches bob and ropes fray faster. Same jungle for every player."
+      scoring="Swing left to right — 1 point for every vine you get past, that's the whole score (fly past a vine and it still counts). One splash ends the run. Tap to let go, tap again to fire the hook at a fixed angle — no auto-aim. Four stages — Slow, Middle, Final, Crazy: gaps widen, vines get shorter, the aim laser fades, branches bob and ropes fray faster. Same jungle for every player."
     />
   );
 }

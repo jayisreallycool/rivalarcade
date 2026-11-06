@@ -146,7 +146,7 @@ ok('canopy swing fire wall: comes after dawdling, burns when it reaches you, die
   assert(P.PACE > 1, 'fast pace');
 });
 
-ok('canopy swing physics: rope constraint, momentum kept on release, reachable sections, no grabbing through brambles', () => {
+ok('canopy swing physics: rope constraint, momentum kept on release, reachable sections, no obstacles, varied heights', () => {
   const P = require('../.test-build/grapple-physics');
   const { mulberry32 } = require('../.test-build/rng');
   const gen = (seed, n) => {
@@ -163,10 +163,11 @@ ok('canopy swing physics: rope constraint, momentum kept on release, reachable s
     const br = as[i - 1].bramble;
     assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st, br) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st, br), `section ${i} not reachable`);
   }
-  assert(as.some((a) => a.bramble) && as.slice(0, 20).every((a) => !a.bramble), 'brambles only after the start');
+  assert(as.every((a) => !a.bramble), 'no obstacles on the course');
+  const ys = as.map((a) => a.y0);
+  assert(Math.max(...ys) - Math.min(...ys) > 5 && ys.slice(1).filter((y, i) => Math.abs(y - ys[i]) > 1).length > ys.length * 0.5, 'vines at all different heights');
   assert(as.some((a) => a.pad) && as.some((a) => a.berries && a.berries.length), 'pads and berries generated');
   assert(P.stageAt(170).reach < P.stageAt(0).reach - 0.8, 'reach shrinks');
-  assert(as.slice(55).filter((a) => a.bramble).length > as.slice(12, 30).filter((a) => a.bramble).length, 'more brambles later');
   assert.deepStrictEqual(gen(77, 30).map((a) => a.f), gen(77, 30).map((a) => a.f));
   // Rope constraint: never stretches; swing accelerates on the way down; pumping builds the arc.
   const A = { f: 0, y: 10 };

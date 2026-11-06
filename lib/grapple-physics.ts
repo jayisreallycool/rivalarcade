@@ -51,10 +51,10 @@ export interface Stage {
 }
 
 export const STAGES: Stage[] = [
-  { name: 'SLOW', from: 0, reach: 3.8, speed: 1, gap: [2.7, 3.4], dy: 0.8, bob: 0, bramble: 0, pad: 0.12, fire: 3.0, color: '#4ade80' },
-  { name: 'MIDDLE', from: 20, reach: 3.6, speed: 1.05, gap: [3.0, 3.9], dy: 1.2, bob: 0.25, bramble: 0.2, pad: 0.09, fire: 2.7, color: '#facc15' },
-  { name: 'FINAL', from: 50, reach: 3.4, speed: 1.1, gap: [3.4, 4.4], dy: 1.6, bob: 0.5, bramble: 0.32, pad: 0.06, fire: 2.4, color: '#fb923c' },
-  { name: 'CRAZY', from: 90, reach: 3.2, speed: 1.16, gap: [3.8, 5.0], dy: 2.0, bob: 0.8, bramble: 0.45, pad: 0.04, fire: 2.1, color: '#f43f5e' },
+  { name: 'SLOW', from: 0, reach: 3.8, speed: 1, gap: [2.7, 3.4], dy: 1.8, bob: 0, bramble: 0, pad: 0.12, fire: 3.0, color: '#4ade80' },
+  { name: 'MIDDLE', from: 20, reach: 3.6, speed: 1.05, gap: [3.0, 3.9], dy: 2.3, bob: 0.25, bramble: 0, pad: 0.09, fire: 2.7, color: '#facc15' },
+  { name: 'FINAL', from: 50, reach: 3.4, speed: 1.1, gap: [3.4, 4.4], dy: 2.7, bob: 0.5, bramble: 0, pad: 0.06, fire: 2.4, color: '#fb923c' },
+  { name: 'CRAZY', from: 90, reach: 3.2, speed: 1.16, gap: [3.8, 5.0], dy: 3.0, bob: 0.8, bramble: 0, pad: 0.04, fire: 2.1, color: '#f43f5e' },
 ];
 
 /**
@@ -208,7 +208,7 @@ export function grabbable(b: Body, anchors: Anchor[], from: number, t: number, r
 }
 
 /** Share of the speed heading into/away from the grab point that the catch swings round into the arc. */
-export const GRAB_KEEP = 0.85;
+export const GRAB_KEEP = 0.93;
 /**
  * Catch a point. The hook bites and your speed is swung round along the arc (most of it kept),
  * so a well-timed catch carries straight on into the next swing instead of stalling you.
@@ -290,7 +290,11 @@ export function reachable(a: Anchor, b: Anchor, s: Stage, avoid?: Bramble | null
 export function nextAnchor(prev: Anchor, i: number, rng: () => number): Anchor {
   const s = stageAt(i);
   let gap = s.gap[0] + rng() * (s.gap[1] - s.gap[0]);
-  const y0 = Math.max(9, Math.min(13, prev.y0 + (rng() - 0.5) * 2 * s.dy));
+  // vines at all different altitudes: a big step up or down each time, kept between 7.5 and 14.5
+  const step = (0.35 + rng() * 0.65) * s.dy * (rng() < 0.5 ? -1 : 1);
+  let y0 = prev.y0 + step;
+  if (y0 > 14.5 || y0 < 7.5) y0 = prev.y0 - step;
+  y0 = Math.max(7.5, Math.min(14.5, y0));
   const bob = s.bob > 0 && rng() < 0.4 + 0.5 * (s.bob / 1.5) ? s.bob * (0.5 + rng() * 0.5) : 0;
   const bobSpeed = 1.1 + rng() * 0.9 + (s.name === 'CRAZY' ? 0.5 : 0);
   const phase = rng() * Math.PI * 2;

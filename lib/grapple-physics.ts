@@ -2,25 +2,25 @@
  * Canopy Swing — vine-swing physics in the vertical plane of travel (`f` = metres forward, `y` = up).
  * Pure and deterministic, so the course generator can prove every gap is makeable and tests can too.
  *
- * One touch: HOLD to hang on and swing, LET GO to fly. While you're holding and flying, your vine
- * whip grabs the next branch by itself the moment it's in reach — no aiming. The longer you hold
- * one vine, the harder the swing pumps: hang on too long and it loops over the top and spins out
- * of control, flinging you off. The skill is when to let go (and not holding too long).
+ * Tap-tap: TAP to let go and fly, TAP in the air to grab the nearest branch in reach (no aiming,
+ * no holding). The longer you stay on a vine the harder it pumps — bigger swings, then loops over
+ * the top — so you launch faster and fly past 1, 2, 3 or more vines. Stay too long and it spins
+ * out of control and throws you off. Thorny vines (later stages) can't be held: fly past them.
  *
  * The course runs through four stages — SLOW → MIDDLE → FINAL → CRAZY — with wider gaps, shorter
- * reach, bobbing branches and faster spin-outs, so every run ends.
+ * reach, bobbing branches, thorns and faster spin-outs, so every run ends.
  */
 
 export const G = 13;
 export const WATER_Y = 0;
-export const MAX_SPEED = 16;
+export const MAX_SPEED = 19;
 /** Ideal rope length the vine settles to after a grab. */
 export const ROPE = 3.4;
 export const REEL_SPEED = 1.6;
 /** A grab never makes the rope shorter than this. */
 export const MIN_ROPE = 2.2;
 /** Full turns over the top before you spin out. */
-export const SPIN_OUT_TURNS = 1.15;
+export const SPIN_OUT_TURNS = 2;
 
 export interface Stage {
   name: 'SLOW' | 'MIDDLE' | 'FINAL' | 'CRAZY';
@@ -63,6 +63,8 @@ export interface Anchor {
   bob: number;
   bobSpeed: number;
   phase: number;
+  /** Thorny vine: grabbing it throws you off — fly past it. */
+  thorn?: boolean;
 }
 
 export const anchorPos = (a: Anchor, t: number) => ({ f: a.f, y: a.y0 + a.bob * Math.sin(a.bobSpeed * t + a.phase) });
@@ -149,7 +151,7 @@ export function step(b: Body, rope: Rope | null, A: { f: number; y: number } | n
       if (da < -Math.PI) da += 2 * Math.PI;
       rope.turned += da;
       rope.lastAngle = theta;
-      if (Math.abs(rope.turned) > Math.PI * 2 * SPIN_OUT_TURNS + Math.PI) spun = true;
+      if (Math.abs(rope.turned) > Math.PI * 2 * SPIN_OUT_TURNS) spun = true;
     }
   }
   const sp = Math.hypot(b.vf, b.vy);
@@ -166,9 +168,12 @@ export function grab(b: Body, i: number, A: { f: number; y: number }, s: Stage):
   return { anchor: i, L: Math.max(MIN_ROPE, Math.hypot(b.f - A.f, b.y - A.y)), t: 0, amp0: s.amp0, pump: s.pump, lastAngle: angle, turned: 0 };
 }
 
-/** The branch you'd grab now: the first one ahead (from `from`) that's within reach. */
+/** Full loops made on this vine so far. */
+export const loops = (r: Rope) => Math.floor(Math.max(0, Math.abs(r.turned) - Math.PI) / (Math.PI * 2) + (Math.abs(r.turned) > Math.PI ? 1 : 0));
+
+/** The branch you'd grab now: the nearest one ahead (from `from`) that's within reach. */
 export function grabbable(b: Body, anchors: Anchor[], from: number, t: number, reach: number) {
-  for (let i = from; i < Math.min(anchors.length, from + 3); i++) {
+  for (let i = from; i < Math.min(anchors.length, from + 6); i++) {
     const A = anchorPos(anchors[i], t);
     if (A.f < b.f - 0.4) continue;
     if (Math.hypot(A.f - b.f, A.y - b.y) <= reach && b.y < A.y + 0.5) return i;
@@ -198,33 +203,47 @@ export function releaseWorks(b: Body, B: Anchor, reach: number, t0 = 0) {
  * Can a typical swing from `a` make it to `b`? Simulates the steady swing on the ideal rope at the
  * stage's starting size, letting go at every point of the forward swing; true if some release works.
  */
-export function reachable(a: Anchor, b: Anchor, s: Stage, t0 = 0) {
+export function reachable(a: Anchor, b: Anchor, s: Stage, t0 = 0, amp = s.amp0 + s.pump * 0.8) {
   const A = anchorPos(a, t0);
-  const amp = s.amp0 + s.pump * 0.8; // a bit of pumping, well short of a spin-out
-  for (let rel = 0; rel <= amp - 0.05; rel += 0.04) {
-    const w = Math.sqrt(Math.max(0, 2 * G * ROPE * (Math.cos(rel) - Math.cos(amp))));
+  // (amp ≥ π: a looping power swing; otherwise a normal swing pumped for a moment)
+  for (let rel = 0; rel <= Math.min(amp, 2.6) - 0.05; rel += 0.04) {
+    const w =
+      amp < Math.PI
+        ? Math.sqrt(Math.max(0, 2 * G * ROPE * (Math.cos(rel) - Math.cos(amp))))
+        : Math.min(MAX_SPEED, Math.sqrt(2 * G * ROPE * (Math.cos(rel) + 1) + G * ROPE * (amp - Math.PI) * 4));
     const body: Body = { f: A.f + ROPE * Math.sin(rel), y: A.y - ROPE * Math.cos(rel), vf: w * Math.cos(rel), vy: w * Math.sin(rel) };
     if (releaseWorks(body, b, s.reach, t0)) return true;
   }
   return false;
 }
 
-/** Next anchor after `prev` (index `i`), seeded; gaps a typical swing can't make are pulled in. */
-export function nextAnchor(prev: Anchor, i: number, rng: () => number): Anchor {
+/** A power swing (looping) — what you need to clear a thorny vine. */
+export const POWER_AMP = Math.PI + 0.6;
+const THORN_CHANCE: Record<Stage['name'], number> = { SLOW: 0, MIDDLE: 0.06, FINAL: 0.14, CRAZY: 0.22 };
+
+/**
+ * Next anchor after `prev` (index `i`), seeded; gaps a typical swing can't make are pulled in.
+ * After a thorny vine, the next one must be reachable from the vine before the thorn with a
+ * power swing. Thorns are never back to back.
+ */
+export function nextAnchor(prev: Anchor, i: number, rng: () => number, before?: Anchor): Anchor {
   const s = stageAt(i);
   let gap = s.gap[0] + rng() * (s.gap[1] - s.gap[0]);
   const y0 = Math.max(9, Math.min(13, prev.y0 + (rng() - 0.5) * 2 * s.dy));
   const bob = s.bob > 0 && rng() < 0.4 + 0.5 * (s.bob / 1.55) ? s.bob * (0.5 + rng() * 0.5) : 0;
   const bobSpeed = 1.1 + rng() * 0.9 + (s.name === 'CRAZY' ? 0.5 : 0);
   const phase = rng() * Math.PI * 2;
-  for (let tries = 0; tries < 18; tries++) {
-    const cand: Anchor = { f: prev.f + gap, y0, bob, bobSpeed, phase };
-    // must work with the branch anywhere on its bob, from the previous branch at rest height
-    const from = { ...prev, bob: 0 };
-    if (reachable(from, { ...cand, bob: 0, y0: y0 + bob }, s) && reachable(from, { ...cand, bob: 0, y0: y0 - bob }, s)) return cand;
+  const thorn = !prev.thorn && i > 14 && rng() < THORN_CHANCE[s.name];
+  for (let tries = 0; tries < 20; tries++) {
+    const cand: Anchor = { f: prev.f + gap, y0, bob, bobSpeed, phase, thorn };
+    const ok = (from: Anchor, amp?: number) => {
+      const f0 = { ...from, bob: 0 };
+      return reachable(f0, { ...cand, bob: 0, y0: y0 + bob }, s, 0, amp) && reachable(f0, { ...cand, bob: 0, y0: y0 - bob }, s, 0, amp);
+    };
+    if (prev.thorn && before ? ok(before, POWER_AMP) : ok(prev)) return cand;
     gap -= 0.3;
   }
-  return { f: prev.f + 4.6, y0: prev.y0, bob: 0, bobSpeed: 1, phase: 0 };
+  return { f: prev.f + 4.6, y0: prev.y0, bob: 0, bobSpeed: 1, phase: 0, thorn: false };
 }
 
 export const FIRST_ANCHOR: Anchor = { f: 0, y0: 10.5, bob: 0, bobSpeed: 1, phase: 0 };

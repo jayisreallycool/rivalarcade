@@ -137,16 +137,21 @@ ok('canopy swing: deterministic course, every gap makeable, holding too long spi
   const gen = (seed, n) => {
     const rng = mulberry32(seed);
     const as = [P.FIRST_ANCHOR];
-    for (let i = 1; i <= n; i++) as.push(P.nextAnchor(as[i - 1], i, rng));
+    for (let i = 1; i <= n; i++) as.push(P.nextAnchor(as[i - 1], i, rng, as[i - 2]));
     return as;
   };
   const as = gen(1234, 90);
   for (let i = 1; i < as.length; i++) {
     const st = P.stageAt(i);
     const b = as[i];
-    const from = { ...as[i - 1], bob: 0 };
-    assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st), `gap ${i} not makeable`);
+    if (b.thorn) continue; // thorns are flown past
+    const viaThorn = as[i - 1].thorn;
+    const from = { ...as[viaThorn ? i - 2 : i - 1], bob: 0 };
+    const amp = viaThorn ? P.POWER_AMP : undefined;
+    assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st, 0, amp) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st, 0, amp), `gap ${i} not makeable${viaThorn ? ' (past a thorn)' : ''}`);
   }
+  assert(as.some((a) => a.thorn) && as.slice(0, 15).every((a) => !a.thorn), 'thorns only after the start');
+  assert(!as.some((a, i) => a.thorn && as[i - 1]?.thorn), 'never two thorns in a row');
   const gap = (x, y) => (as[y].f - as[x].f) / (y - x);
   assert(gap(60, 90) > gap(1, 12) + 1, `crazy gaps (${gap(60, 90)}) should be wider than slow (${gap(1, 12)})`);
   assert(as.slice(56).some((a) => a.bob > 0) && as.slice(1, 12).every((a) => a.bob === 0), 'only later branches bob');
@@ -164,7 +169,7 @@ ok('canopy swing: deterministic course, every gap makeable, holding too long spi
     maxD = Math.max(maxD, Math.hypot(b.f - A.f, b.y - A.y));
   }
   assert(maxD <= Math.max(rope.L, 3.4) + 0.02, `rope stretched to ${maxD}`);
-  assert(spunAt > 4 && spunAt < 13, `spin-out after ${spunAt}s`);
+  assert(spunAt > 5 && spunAt < 16, `spin-out after ${spunAt}s`);
   // Short holds are safe: 2 seconds in, no spin-out.
   const b2 = { f: 1.5, y: 7.5, vf: 0, vy: 0 };
   const r2 = P.grab(b2, 0, A, P.stageAt(0));

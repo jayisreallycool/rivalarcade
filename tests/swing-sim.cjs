@@ -5,7 +5,7 @@ const { mulberry32 } = require('../.test-build/rng');
 function run(seed, react, noise, r2) {
   const rng = mulberry32(seed);
   const as = [P.FIRST_ANCHOR];
-  const ensure = (n) => { while (as.length < n + 4) { const i = as.length; as.push(P.nextAnchor(as[i - 1], i, rng)); } };
+  const ensure = (n) => { while (as.length < n + 4) { const i = as.length; as.push(P.nextAnchor(as[i - 1], i, rng, as[i - 2])); } };
   ensure(5);
   let t = 0;
   const A0 = P.anchorPos(as[0], 0);
@@ -19,12 +19,13 @@ function run(seed, react, noise, r2) {
     t += dt;
     const pv = line ? P.anchorPos(as[line.anchor], t) : null;
     if (P.step(b, line, pv, dt)) { line = null; spins++; }
-    if (line && pendingRel < 0 && P.releaseWorks(b, as[target], st.reach, t)) pendingRel = t + react + (r2() - 0.5) * noise;
+    const goal = as[target].thorn ? target + 1 : target; // fly over thorns
+    if (line && pendingRel < 0 && P.releaseWorks(b, as[goal], st.reach, t)) pendingRel = t + react + (r2() - 0.5) * noise;
     if (line && pendingRel >= 0 && t >= pendingRel) { line = null; pendingRel = -1; }
     if (!line) {
       const g = P.grabbable(b, as, target, t, st.reach);
-      if (g >= 0) { line = P.grab(b, g, P.anchorPos(as[g], t), P.stageAt(g)); caught += g - target + 1; target = g + 1; ensure(target); }
-      else if (b.f > as[target].f + 0.6) target++;
+      if (g >= 0 && !as[g].thorn) { line = P.grab(b, g, P.anchorPos(as[g], t), P.stageAt(g)); caught += g - target + 1; target = g + 1; ensure(target); }
+      else if (b.f > as[target].f + 0.6) { target++; ensure(target); }
     }
     if (b.y < P.WATER_Y + 0.35) return { caught, secs: Math.round(t), spins };
   }

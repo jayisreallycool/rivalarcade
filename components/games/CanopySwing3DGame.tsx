@@ -9,16 +9,16 @@ import { create3DAvatar } from '@/lib/avatar-3d-model';
 import { GameProps } from '@/lib/game-types';
 import { mulberry32, randomSeed } from '@/lib/rng';
 import { award, popStyle, ScoreBook } from '@/lib/scoring';
-import { Anchor, Body, FIRST_ANCHOR, ROPE, Rope, STAGES, WATER_Y, anchorPos, grab, grabbable, nextAnchor, releaseWorks, ropeAngle, stageAt, step, targetAmp } from '@/lib/grapple-physics';
+import { Anchor, Body, FIRST_ANCHOR, ROPE, Rope, SPIN_OUT_TURNS, STAGES, WATER_Y, anchorPos, grab, grabbable, nextAnchor, releaseWorks, ropeAngle, stageAt, step } from '@/lib/grapple-physics';
 import GameShell, { PopupApi, useSwipe } from './GameShell';
 import { Pointer, Hand, RotateCw } from 'lucide-react';
 
 /**
- * CANOPY SWING — side-on vine swinging through a jungle canopy above a river, left to right.
- * One touch: HOLD to hang on and swing, LET GO to fly, and hold again in the air — your vine
- * grabs the next branch by itself as soon as it's in reach (no aiming). Hold one vine too long
- * and the swing pumps out of control, loops over the top and throws you off.
- * Score: 1 point for every vine you get past (fly past one and it still counts).
+ * CANOPY SWING — tap-tap vine swinging through a jungle canopy above a river, left to right.
+ * TAP to let go, TAP in the air to grab the nearest vine in reach (no aiming, no holding).
+ * The longer you stay on a vine the harder it swings — then it loops over the top — so a patient
+ * swing launches you past 2, 3, 4+ vines. Stay too long and it spins out and throws you off.
+ * Thorny vines can't be held: fly over them. Score = vines passed, counted as you fly past them.
  * Four stages — SLOW → MIDDLE → FINAL → CRAZY — so every run ends; one splash and you're out.
  */
 
@@ -102,20 +102,18 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
   const seedRef = useLatest(seed);
   const popups = useRef<PopupApi | null>(null);
   const [phase, setPhase] = useState<Phase>('ready');
-  const [hud, pushHud] = useThrottledHud({ score: 0, stage: 0, danger: 0 });
-  const api = useRef({ press: (_down: boolean) => {}, start: () => {} });
+  const [hud, pushHud] = useThrottledHud({ score: 0, stage: 0, danger: 0, power: 0, loops: 0 });
+  const api = useRef({ tap: () => {}, start: () => {} });
 
   const startGame = useCallback(() => {
     api.current.start();
     setPhase('playing');
   }, []);
 
-  // One touch: finger down = hold on (grab), finger up = let go.
+  // Tap-tap: every tap either lets go or grabs.
   const surface = useSwipe({
-    onDrag: (_s, ph) => {
-      if (ph === 'start') api.current.press(true);
-      else if (ph === 'end') api.current.press(false);
-    },
+    onTap: () => api.current.tap(),
+    onSwipe: () => api.current.tap(),
   });
 
   const { hostRef } = useGameEngine(
@@ -154,6 +152,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       const leafMats = [0x2f7d3a, 0x3f9a45, 0x25663a, 0x4fae52].map((c) => engine.own(new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, metalness: 0, flatShading: true })));
       const vineMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x5c7a2e, roughness: 0.9, metalness: 0 }));
       const knotMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x7a5a2e, roughness: 0.85 }));
+      const thornMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x7a1d1d, roughness: 0.7, emissive: 0x5a0000, emissiveIntensity: 0.6 }));
+      const thornGeo = engine.own(new THREE.ConeGeometry(0.05, 0.18, 5));
       const reachMat = engine.own(new THREE.MeshStandardMaterial({ color: 0xd9fbe9, roughness: 0.4, emissive: 0x4ade80, emissiveIntensity: 1.3 }));
       const trunkGeo = engine.own(new THREE.CylinderGeometry(0.32, 0.48, 26, 12, 1));
       const branchGeo = engine.own(new THREE.CylinderGeometry(0.12, 0.2, 1, 8));
@@ -271,8 +271,17 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           tree.add(branch);
         }
         // the grab knot, and the idle vine hanging from it (drawn until you grab it)
-        const knot = new THREE.Mesh(knotGeo, knotMat);
-        const hang = new THREE.Mesh(hangVineGeo, vineMat);
+        const knot = new THREE.Mesh(knotGeo, a.thorn ? thornMat : knotMat);
+        const hang = new THREE.Mesh(hangVineGeo, a.thorn ? thornMat : vineMat);
+        if (a.thorn) {
+          for (let k = 0; k < 7; k++) {
+            const th = new THREE.Mesh(thornGeo, thornMat);
+            th.position.set(0, -(0.1 + k * 0.13), 0);
+            th.rotation.x = (k % 2 ? 1 : -1) * 1.2;
+            th.scale.y = 1 / (ROPE * 0.9);
+            hang.add(th);
+          }
+        }
         hang.scale.y = ROPE * 0.9;
         holder.add(knot, hang);
         for (let k = 0; k < 3; k++) {
@@ -290,7 +299,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       const ensureAhead = (cur: number) => {
         while (anchors.length < cur + AHEAD) {
           const i = anchors.length;
-          const a = nextAnchor(anchors[i - 1], i, rng);
+          const a = nextAnchor(anchors[i - 1], i, rng, anchors[i - 2]);
           anchors.push(a);
           buildAnchor(a, i);
         }
@@ -316,7 +325,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
 
       const b: Body = { f: 0, y: 0, vf: 0, vy: 0 };
       let line: Rope | null = null;
-      let holding = false;
+      let cooldown = 0;
+      let lastGrab = 0;
       let target = 1;
       let playing = false;
       let over = false;
@@ -346,7 +356,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         b.y = A.y - ROPE * Math.cos(-0.8);
         b.vf = b.vy = 0;
         line = grab(b, 0, A, stageAt(0));
-        holding = true; // you start holding the first vine
+        cooldown = 0;
+        lastGrab = 0;
         target = 1;
         passed = 0;
         stageIdx = 0;
@@ -370,13 +381,20 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         sound.startMusic(0.25);
       };
 
-      api.current.press = (down: boolean) => {
-        if (!playing) return;
-        holding = down;
-        if (!down && line) {
-          line = null; // let go — keep your momentum
+      api.current.tap = () => {
+        if (!playing || cooldown > 0) return;
+        if (line) {
+          line = null; // let go — fly with all the swing you've built
+          cooldown = 0.12;
           sound.playSwish();
           haptic('light');
+          return;
+        }
+        const g = grabbable(b, anchors, target, t, stageAt(target).reach);
+        if (g >= 0) onGrab(g);
+        else {
+          cooldown = 0.25; // a whiff: nothing in reach
+          popAtWorld(b.f + 0.6, b.y + 0.8, 'MISS', { color: '#fca5a5', size: 'sm' });
         }
       };
 
@@ -394,29 +412,50 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         setTimeout(() => onFinishRef.current(book.score, { vines: passed, distance: Math.round(b.f), breakdown: book.breakdown() }), 1200);
       };
 
-      /** Grab branch `i`: 1 point for every vine you've got past (flying past one counts too). */
-      const onGrab = (i: number) => {
-        const A = anchorPos(anchors[i], t);
-        line = grab(b, i, A, stageAt(i));
-        whip = 0;
-        const gained = i - passed;
-        if (gained > 0) {
-          passed = i;
-          const a = award(gained, {});
-          book.record(a, { Vines: gained });
-          popAtWorld(A.f, A.y + 0.7, `+${a.total}`, popStyle(a.total));
-          if (gained > 1) popups.current?.banner(gained > 2 ? `SKIP ×${gained - 1}` : 'SKIP', '#38bdf8');
-          const ns = STAGES.findIndex((s) => s.name === stageAt(i + 1).name);
+      /** Score = vines passed, counted the moment you fly past each one. */
+      const countPassed = () => {
+        while (passed + 1 < anchors.length && b.f > anchors[passed + 1].f) {
+          passed += 1;
+          const A = anchorPos(anchors[passed], t);
+          const a = award(1, {});
+          book.record(a, { Vines: 1 });
+          popAtWorld(A.f, A.y + 0.6, '+1', popStyle(1));
+          const ns = STAGES.findIndex((x) => x.name === stageAt(passed + 1).name);
           if (ns > stageIdx) {
             stageIdx = ns;
-            const s = STAGES[ns];
-            popups.current?.banner(s.name === 'CRAZY' ? '🔥 CRAZY MODE' : `${s.name} STAGE`, s.color);
+            const x = STAGES[ns];
+            popups.current?.banner(x.name === 'CRAZY' ? '🔥 CRAZY MODE' : `${x.name} STAGE`, x.color);
           }
-          sound.playScore(1 + Math.min(0.6, (gained - 1) * 0.2));
-          haptic('score');
-          particles.emit(tmpV.set(0, A.y, -A.f), 0x9be15d, { count: gained > 1 ? 22 : 12, speed: 3, life: 0.6, gravity: 5 });
+          ensureAhead(passed);
           pushScore();
         }
+      };
+
+      /** Tap in the air: grab branch `i` (thorny vines throw you off). */
+      const onGrab = (i: number) => {
+        const an = anchors[i];
+        const A = anchorPos(an, t);
+        if (an.thorn) {
+          popAtWorld(A.f, A.y + 0.6, 'THORNS!', { color: '#f87171', size: 'md' });
+          sound.playLose();
+          haptic('fail');
+          cooldown = 0.6;
+          target = i + 1;
+          return;
+        }
+        line = grab(b, i, A, stageAt(i));
+        whip = 0;
+        cooldown = 0.12;
+        const jump = i - lastGrab;
+        lastGrab = i;
+        if (jump >= 2) {
+          popups.current?.banner(jump >= 4 ? `MEGA JUMP ×${jump}` : `JUMP ×${jump}`, jump >= 4 ? '#f472b6' : '#38bdf8');
+          feel.kick(0.25 + jump * 0.05);
+          engine.flash(0.2);
+        }
+        sound.playScore(1 + Math.min(0.8, (jump - 1) * 0.2));
+        haptic('score');
+        particles.emit(tmpV.set(0, A.y, -A.f), 0x9be15d, { count: 10 + jump * 4, speed: 3, life: 0.6, gravity: 5 });
         target = i + 1;
         ensureAhead(i);
       };
@@ -425,6 +464,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       engine.addUpdate((rawDt, time) => {
         const st = stageAt(target);
         const dt = Math.min(rawDt, 1 / 20) * (playing ? st.speed : 1);
+        cooldown = Math.max(0, cooldown - rawDt);
         t += dt;
         const sub = 4;
         const h = dt / sub;
@@ -434,9 +474,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           const spun = step(b, line, A, h);
           if (!playing) continue;
           if (spun && line) {
-            // held on too long: the swing goes out of control and throws you off
+            // stayed on too long: the swing goes out of control and throws you off
             line = null;
-            holding = false;
             b.vf *= 1.1;
             b.vy = Math.abs(b.vy) * 0.6 + 2;
             popAtWorld(b.f, b.y + 1, 'SPUN OUT!', { color: '#f87171', size: 'md' });
@@ -444,11 +483,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
             haptic('fail');
             feel.kick(0.6);
           }
-          // holding in the air: the vine whip grabs the next branch as soon as it's in reach
-          if (!line && holding) {
-            const g = grabbable(b, anchors, target, t, st.reach);
-            if (g >= 0) onGrab(g);
-          }
+          countPassed();
           if (!line && b.f > anchors[target].f + 0.6) {
             target += 1;
             ensureAhead(target);
@@ -460,9 +495,11 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           }
         }
 
-        // how close the swing is to spinning out (0 = calm, 1 = going over the top)
-        const danger = line && playing ? THREE.MathUtils.clamp((targetAmp(line) - 2.1) / (Math.PI - 2.1), 0, 1) : 0;
-        pushHud({ danger: Math.round(danger * 10) / 10 });
+        // power = how fast you're swinging (→ how far you'll fly); danger = how close to spinning out
+        const speed = Math.hypot(b.vf, b.vy);
+        const turns = line ? Math.abs(line.turned) / (Math.PI * 2) : 0;
+        const danger = line && playing ? THREE.MathUtils.clamp((turns - (SPIN_OUT_TURNS - 0.9)) / 0.9, 0, 1) : 0;
+        pushHud({ danger: Math.round(danger * 10) / 10, power: line && playing ? Math.min(5, Math.round((speed / 19) * 5)) : 0, loops: line ? Math.floor(Math.max(0, turns - 0.5)) : 0 });
 
         // branches bob; the one in reach glows; the idle vine hides on the branch you hold
         const inReach = !line && playing ? grabbable(b, anchors, target, t, st.reach) : -1;
@@ -471,8 +508,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           if (!o) continue;
           const A = anchorPos(anchors[i], t);
           o.holder.position.y = A.y;
-          const glow = i === inReach || (i === target && playing && !line);
-          o.knot.material = glow ? reachMat : knotMat;
+          const glow = !anchors[i].thorn && (i === inReach || (i === target && playing && !line));
+          o.knot.material = anchors[i].thorn ? thornMat : glow ? reachMat : knotMat;
           o.knot.scale.setScalar(i === inReach ? 1.5 : glow ? 1.15 + Math.sin(time * 6) * 0.1 : 1);
           o.hang.visible = !(line && line.anchor === i);
           o.hang.rotation.x = Math.sin(time * 1.3 + i) * 0.08;
@@ -495,7 +532,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           // flying: lean into the jump, one hand reaching ahead for the next vine
           body.rotation.x += (THREE.MathUtils.clamp(-b.vy * 0.035, -0.45, 0.45) - body.rotation.x) * Math.min(1, dt * 8);
           me.leftArm.rotation.x = -2.4;
-          me.rightArm.rotation.x = holding ? -2.9 : -2.2;
+          me.rightArm.rotation.x = inReach >= 0 ? -2.9 : -2.3;
           me.leftLeg.rotation.x = -0.9;
           me.rightLeg.rotation.x = -0.5;
         }
@@ -526,13 +563,14 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         if (danger > 0.6 && playing) feel.kick(0.04 * danger);
 
         // first vines: show when to let go
-        const canRelease = playing && !!line && releaseWorks(b, anchors[target], st.reach, t);
+        const goalI = anchors[target]?.thorn ? target + 1 : target; // fly over thorny vines
+        const canRelease = playing && !!line && !!anchors[goalI] && releaseWorks(b, anchors[goalI], st.reach, t);
         if (passed < 2 && canRelease && Math.floor(time * 4) % 4 === 0) {
           const p = engine.toScreen(tmpV.set(0, b.y + 1, -b.f));
           popups.current?.pop('LET GO!', p.x, p.y, { color: '#fde047', size: 'sm' });
         }
         // (read by automated play-tests)
-        engine.renderer.domElement.dataset.shot = !playing ? 'none' : line ? (canRelease ? 'release' : 'hang') : inReach >= 0 ? 'reach' : 'fly';
+        engine.renderer.domElement.dataset.shot = !playing ? 'none' : line ? (canRelease ? 'release' : 'hang') : inReach >= 0 ? (anchors[inReach].thorn ? 'thorn' : 'reach') : 'fly';
 
         // ---- camera: glide left → right with the swing, keeping you ~30% from the left
         const T = anchorPos(anchors[Math.min(target, anchors.length - 1)], t);
@@ -567,7 +605,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
 
       return () => {
         me.dispose();
-        api.current = { press: () => {}, start: () => {} };
+        api.current = { tap: () => {}, start: () => {} };
       };
     },
     [stableAvatar],
@@ -579,11 +617,15 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       <span className="px-2 py-0.5 rounded-full bg-black/50 text-[11px] font-black" style={{ color: stage.color }} data-testid="swing-stage">
         {stage.name}
       </span>
-      {hud.danger >= 0.3 && (
-        <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${hud.danger >= 0.7 ? 'bg-rose-500 text-white animate-pulse' : 'bg-amber-400 text-black'}`} data-testid="swing-danger">
-          {hud.danger >= 0.7 ? 'LET GO!' : 'SWINGING HARD'}
+      {hud.power > 0 && (
+        <span className="flex items-center gap-0.5 px-2 py-1 rounded-full bg-black/50" data-testid="swing-power" aria-label={`Swing power ${hud.power} of 5`}>
+          {[1, 2, 3, 4, 5].map((k) => (
+            <i key={k} className={`block w-1.5 h-2.5 rounded-sm ${k <= hud.power ? (hud.power >= 4 ? 'bg-pink-400' : 'bg-cyan-300') : 'bg-white/15'}`} />
+          ))}
         </span>
       )}
+      {hud.loops > 0 && hud.danger < 0.5 && <span className="px-2 py-0.5 rounded-full bg-cyan-400 text-black text-[11px] font-black">LOOP {hud.loops}</span>}
+      {hud.danger >= 0.5 && <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white text-[11px] font-black animate-pulse" data-testid="swing-danger">LET GO!</span>}
     </>
   );
 
@@ -601,23 +643,23 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       match={match}
       onExit={onExit}
       surface={surface}
-      hint="Hold to swing · let go to fly · hold again to grab"
+      hint="Tap to let go · tap to grab · wait for more swing to fly farther"
       guide={{
         goal: 'Swing vine to vine across the river, left to right. Don’t fall in.',
         controls: [
-          { gesture: 'release', label: 'Let go on the up-swing to fly' },
-          { gesture: 'drag', label: 'Hold to grab the next vine — no aiming' },
-          { gesture: 'avoid', label: 'Hold too long and you spin out' },
+          { gesture: 'tap', label: 'Tap to let go · tap again to grab' },
+          { gesture: 'timing', label: 'Wait for a bigger swing to fly past more vines' },
+          { gesture: 'avoid', label: 'Stay too long and you spin out · skip red thorny vines' },
         ],
         points: [{ label: 'Every vine you pass', value: '1' }],
         ends: 'Slow → Middle → Final → Crazy · one splash ends the run',
       }}
       tutorial={[
-        { icon: <Hand className="w-6 h-6" />, label: 'Hold to swing' },
-        { icon: <Pointer className="w-6 h-6" />, label: 'Let go to fly' },
+        { icon: <Pointer className="w-6 h-6" />, label: 'Tap: let go · tap: grab' },
+        { icon: <Hand className="w-6 h-6" />, label: 'More swing = farther' },
         { icon: <RotateCw className="w-6 h-6" />, label: 'Too long = spin out' },
       ]}
-      scoring="Swing left to right — 1 point for every vine you get past, that's the whole score (fly past a vine and it still counts). Hold to swing, let go on the up-swing to fly, hold again to grab the next vine — it grabs by itself, no aiming. Hang on too long and the swing pumps out of control and throws you off. One splash ends the run. Four stages — Slow, Middle, Final, Crazy: gaps widen, your reach shortens, branches bob and the swing spins out faster. Same jungle for every player."
+      scoring="Tap to let go, tap in the air to grab the nearest vine — no aiming, no holding. The longer you stay on a vine the harder it swings (then it loops over the top): let go with more swing and you fly past 2, 3, 4 or more vines. Stay too long and it spins out and throws you off. Red thorny vines can't be held — fly over them. 1 point for every vine you pass, counted as you go, so your score is how far you got. One splash ends the run. Stages: Slow, Middle, Final, Crazy. Same jungle for every player."
     />
   );
 }

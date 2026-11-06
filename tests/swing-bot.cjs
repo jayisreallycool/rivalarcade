@@ -1,4 +1,4 @@
-// Plays Canopy Swing with a simple bot: let go when the release would work, then hold to grab.
+// Plays Canopy Swing with a simple tap-tap bot: tap to let go when it would work, tap to grab.
 // APP_URL=http://localhost:3000 node tests/swing-bot.cjs
 const { chromium } = require('playwright');
 const { login } = require('./helpers.cjs');
@@ -21,7 +21,7 @@ const OUT = 'tests/artifacts/swing';
   await p.click('text=TAP TO PLAY');
   await p.waitForTimeout(3300);
   const t0 = Date.now();
-  let down = false, actions = 0;
+  let actions = 0;
   const seen = new Set();
   await p.mouse.move(195, 500);
   while (Date.now() - t0 < 300000) {
@@ -29,14 +29,10 @@ const OUT = 'tests/artifacts/swing';
     const st = await p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.dataset.shot);
     const stage = await p.locator('[data-testid=swing-stage]').innerText().catch(() => '');
     if (stage && !seen.has(stage)) { seen.add(stage); await p.screenshot({ path: `${OUT}/stage-${stage}.png` }); }
-    if (st === 'release') {
-      if (!down) await p.mouse.down();
-      await p.mouse.up();
-      down = false;
+    if (st === 'release' || st === 'reach') {
+      await p.mouse.click(195, 500);
       actions++;
-      await p.mouse.down(); // hold straight away: grabs the next vine when it's in reach
-      down = true;
-      if (actions === 2) await p.screenshot({ path: `${OUT}/1-fly.png` });
+      if (actions === 3) await p.screenshot({ path: `${OUT}/1-fly.png` });
     }
     await p.waitForTimeout(30);
   }

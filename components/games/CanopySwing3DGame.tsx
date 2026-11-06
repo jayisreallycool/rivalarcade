@@ -153,7 +153,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       const vineMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x5c7a2e, roughness: 0.9, metalness: 0 }));
       const knotMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x7a5a2e, roughness: 0.85 }));
       const thornMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x7a1d1d, roughness: 0.7, emissive: 0x5a0000, emissiveIntensity: 0.6 }));
-      const thornGeo = engine.own(new THREE.ConeGeometry(0.05, 0.18, 5));
+      const thornGeo = engine.own(new THREE.ConeGeometry(0.05, 0.2, 5));
       const reachMat = engine.own(new THREE.MeshStandardMaterial({ color: 0xd9fbe9, roughness: 0.4, emissive: 0x4ade80, emissiveIntensity: 1.3 }));
       const trunkGeo = engine.own(new THREE.CylinderGeometry(0.32, 0.48, 26, 12, 1));
       const branchGeo = engine.own(new THREE.CylinderGeometry(0.12, 0.2, 1, 8));
@@ -238,6 +238,19 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       let rng = mulberry32(1);
       let anchors: Anchor[] = [];
       const objs: { tree: THREE.Group; holder: THREE.Group; knot: THREE.Mesh; hang: THREE.Mesh }[] = [];
+      const rings: THREE.Mesh[] = [];
+      // pods, threads and catch rings
+      const threadGeo = engine.own(new THREE.CylinderGeometry(0.012, 0.012, 1, 4));
+      threadGeo.translate(0, -0.5, 0);
+      const threadMat = engine.own(new THREE.MeshBasicMaterial({ color: 0xe9f5df, transparent: true, opacity: 0.55 }));
+      const podGeo = engine.own(new THREE.SphereGeometry(0.22, 16, 12));
+      const podMat = engine.own(new THREE.MeshStandardMaterial({ color: 0xfff0b8, roughness: 0.35, emissive: 0xffb43a, emissiveIntensity: 2.6 }));
+      const perchGeo = engine.own(new THREE.BoxGeometry(0.08, 0.06, 0.7));
+      const perchMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.9 }));
+      const ringGeo = engine.own(new THREE.TorusGeometry(1, 0.03, 8, 64));
+      const ringDimMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffc85a).multiplyScalar(1.2), transparent: true, opacity: 0.25, toneMapped: false, depthWrite: false }));
+      const ringHotMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffd36b).multiplyScalar(2.2), transparent: true, opacity: 0.95, toneMapped: false, depthWrite: false }));
+      const thornRingMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff4d4d).multiplyScalar(1.6), transparent: true, opacity: 0.5, toneMapped: false, depthWrite: false }));
       let t = 0;
 
       const buildAnchor = (a: Anchor, i: number) => {
@@ -255,43 +268,34 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           leaf.castShadow = quality.shadows;
           crown.add(leaf);
         }
-        tree.add(trunk, crown);
-        const holder = new THREE.Group(); // bobs with the branch
+        // (no trunk in front of the pods: they hang from the canopy, so the swing path stays clear)
+        void trunk;
+        crown.position.y += 4.5;
+        tree.add(crown);
+        const holder = new THREE.Group(); // bobs with the pod
         holder.position.set(0, a.y0, -a.f);
-        if (a.bob > 0) {
-          const stub = new THREE.Mesh(hangVineGeo, vineMat);
-          stub.scale.y = 3;
-          stub.position.y = 3;
-          holder.add(stub);
-        } else {
-          const branch = new THREE.Mesh(branchGeo, barkMat);
-          span(branch, new THREE.Vector3(tx, a.y0 + 0.9, -a.f - 0.3), new THREE.Vector3(0, a.y0 + 0.12, -a.f));
-          branch.scale.x = branch.scale.z = 1;
-          branch.castShadow = quality.shadows;
-          tree.add(branch);
-        }
-        // the grab knot, and the idle vine hanging from it (drawn until you grab it)
-        const knot = new THREE.Mesh(knotGeo, a.thorn ? thornMat : knotMat);
-        const hang = new THREE.Mesh(hangVineGeo, a.thorn ? thornMat : vineMat);
+        // a silk thread down from the canopy, a glowing seed-pod to swing from, and its catch ring
+        const hang = new THREE.Mesh(threadGeo, threadMat);
+        hang.scale.y = 12;
+        hang.position.y = 12;
+        const knot = new THREE.Mesh(podGeo, a.thorn ? thornMat : podMat);
+        const perch = new THREE.Mesh(perchGeo, perchMat);
+        perch.position.y = -0.24;
+        holder.add(hang, knot, perch);
         if (a.thorn) {
-          for (let k = 0; k < 7; k++) {
+          for (let k = 0; k < 8; k++) {
             const th = new THREE.Mesh(thornGeo, thornMat);
-            th.position.set(0, -(0.1 + k * 0.13), 0);
-            th.rotation.x = (k % 2 ? 1 : -1) * 1.2;
-            th.scale.y = 1 / (ROPE * 0.9);
-            hang.add(th);
+            const ang = (k / 8) * Math.PI * 2;
+            th.position.set(0, Math.cos(ang) * 0.24, Math.sin(ang) * 0.24);
+            th.rotation.x = -ang;
+            holder.add(th);
           }
         }
-        hang.scale.y = ROPE * 0.9;
-        holder.add(knot, hang);
-        for (let k = 0; k < 3; k++) {
-          const lf = new THREE.Mesh(leafGeo, leafMat);
-          lf.position.set(0.05 * (k % 2 ? 1 : -1), -ROPE * (0.2 + k * 0.25), 0);
-          lf.rotation.set(0.4, Math.PI / 2 + k, 0.6 * (k % 2 ? 1 : -1));
-          hang.add(lf);
-          lf.scale.y = 1 / (ROPE * 0.9);
-          lf.position.y = -(0.2 + k * 0.25);
-        }
+        const ring = new THREE.Mesh(ringGeo, a.thorn ? thornRingMat : ringDimMat);
+        ring.rotation.y = Math.PI / 2;
+        ring.scale.setScalar(stageAt(i).reach);
+        holder.add(ring);
+        rings[i] = ring;
         world.add(tree, holder);
         objs[i] = { tree, holder, knot, hang };
       };
@@ -390,12 +394,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           haptic('light');
           return;
         }
-        const g = grabbable(b, anchors, target, t, stageAt(target).reach);
-        if (g >= 0) onGrab(g);
-        else {
-          cooldown = 0.25; // a whiff: nothing in reach
-          popAtWorld(b.f + 0.6, b.y + 0.8, 'MISS', { color: '#fca5a5', size: 'sm' });
-        }
+        // (in the air a tap does nothing: you catch the next pod by flying through its ring)
       };
 
       const finish = (why: string) => {
@@ -436,9 +435,12 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         const an = anchors[i];
         const A = anchorPos(an, t);
         if (an.thorn) {
+          // thorns: they knock you away — you drop and tumble
           popAtWorld(A.f, A.y + 0.6, 'THORNS!', { color: '#f87171', size: 'md' });
           sound.playLose();
           haptic('fail');
+          b.vf *= -0.25;
+          b.vy = Math.min(b.vy, -2);
           cooldown = 0.6;
           target = i + 1;
           return;
@@ -483,6 +485,11 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
             haptic('fail');
             feel.kick(0.6);
           }
+          // fly through a ring and you catch that pod — no tap needed
+          if (!line && cooldown <= 0) {
+            const g = grabbable(b, anchors, target, t, stageAt(target).reach);
+            if (g >= 0) onGrab(g);
+          }
           countPassed();
           if (!line && b.f > anchors[target].f + 0.6) {
             target += 1;
@@ -502,17 +509,21 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         pushHud({ danger: Math.round(danger * 10) / 10, power: line && playing ? Math.min(5, Math.round((speed / 19) * 5)) : 0, loops: line ? Math.floor(Math.max(0, turns - 0.5)) : 0 });
 
         // branches bob; the one in reach glows; the idle vine hides on the branch you hold
-        const inReach = !line && playing ? grabbable(b, anchors, target, t, st.reach) : -1;
+        const inReach = -1; // (catching is automatic now)
         for (let i = Math.max(0, target - BEHIND); i < anchors.length; i++) {
           const o = objs[i];
           if (!o) continue;
           const A = anchorPos(anchors[i], t);
           o.holder.position.y = A.y;
-          const glow = !anchors[i].thorn && (i === inReach || (i === target && playing && !line));
-          o.knot.material = anchors[i].thorn ? thornMat : glow ? reachMat : knotMat;
-          o.knot.scale.setScalar(i === inReach ? 1.5 : glow ? 1.15 + Math.sin(time * 6) * 0.1 : 1);
-          o.hang.visible = !(line && line.anchor === i);
-          o.hang.rotation.x = Math.sin(time * 1.3 + i) * 0.08;
+          const r = rings[i];
+          const isNext = i === target && playing;
+          if (r) {
+            const held = !!line && line.anchor === i;
+            r.visible = !held && i >= target && i < target + 4;
+            if (!anchors[i].thorn) r.material = isNext ? ringHotMat : ringDimMat;
+            r.scale.setScalar(stageAt(i).reach * (isNext ? 1 + Math.sin(time * 5) * 0.03 : 1));
+          }
+          o.knot.scale.setScalar(isNext ? 1.15 + Math.sin(time * 6) * 0.08 : 1);
         }
 
         // ---- you
@@ -643,23 +654,23 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       match={match}
       onExit={onExit}
       surface={surface}
-      hint="Tap to let go · tap to grab · wait for more swing to fly farther"
+      hint="Tap to let go · fly through a ring to catch it · more swing = farther"
       guide={{
-        goal: 'Swing vine to vine across the river, left to right. Don’t fall in.',
+        goal: 'Swing pod to pod across the river, left to right. Don’t fall in.',
         controls: [
-          { gesture: 'tap', label: 'Tap to let go · tap again to grab' },
-          { gesture: 'timing', label: 'Wait for a bigger swing to fly past more vines' },
-          { gesture: 'avoid', label: 'Stay too long and you spin out · skip red thorny vines' },
+          { gesture: 'tap', label: 'Tap to let go' },
+          { gesture: 'auto', label: 'Fly through a ring to catch the next pod' },
+          { gesture: 'timing', label: 'Wait for more swing to fly over rings · don’t wait too long' },
         ],
         points: [{ label: 'Every vine you pass', value: '1' }],
         ends: 'Slow → Middle → Final → Crazy · one splash ends the run',
       }}
       tutorial={[
-        { icon: <Pointer className="w-6 h-6" />, label: 'Tap: let go · tap: grab' },
+        { icon: <Pointer className="w-6 h-6" />, label: 'Tap to let go' },
         { icon: <Hand className="w-6 h-6" />, label: 'More swing = farther' },
         { icon: <RotateCw className="w-6 h-6" />, label: 'Too long = spin out' },
       ]}
-      scoring="Tap to let go, tap in the air to grab the nearest vine — no aiming, no holding. The longer you stay on a vine the harder it swings (then it loops over the top): let go with more swing and you fly past 2, 3, 4 or more vines. Stay too long and it spins out and throws you off. Red thorny vines can't be held — fly over them. 1 point for every vine you pass, counted as you go, so your score is how far you got. One splash ends the run. Stages: Slow, Middle, Final, Crazy. Same jungle for every player."
+      scoring="One tap: let go. You catch the next pod by yourself when you fly through its ring — no aiming, no holding. The longer you stay on a pod the harder it swings (then it loops over the top): let go with more swing and you fly over 2, 3, 4 or more rings. Stay too long and it spins out and throws you off. Red thorny pods knock you down — fly over or under their ring. 1 point for every pod you pass, counted as you go, so your score is how far you got. One splash ends the run. Stages: Slow, Middle, Final, Crazy. Same jungle for every player."
     />
   );
 }

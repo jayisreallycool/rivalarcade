@@ -24,7 +24,8 @@ function run(seed, react, noise, r2) {
     if (line && pendingRel >= 0 && t >= pendingRel) { line = null; pendingRel = -1; }
     if (!line) {
       const g = P.grabbable(b, as, target, t, st.reach);
-      if (g >= 0 && !as[g].thorn) { line = P.grab(b, g, P.anchorPos(as[g], t), P.stageAt(g)); caught += g - target + 1; target = g + 1; ensure(target); }
+      if (g >= 0 && as[g].thorn) { line = null; } // flew into thorns (sim: just keep falling)
+      else if (g >= 0) { line = P.grab(b, g, P.anchorPos(as[g], t), P.stageAt(g)); caught += g - target + 1; target = g + 1; ensure(target); }
       else if (b.f > as[target].f + 0.6) { target++; ensure(target); }
     }
     if (b.y < P.WATER_Y + 0.35) return { caught, secs: Math.round(t), spins };

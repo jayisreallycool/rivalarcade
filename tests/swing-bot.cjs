@@ -29,7 +29,7 @@ const OUT = 'tests/artifacts/swing';
     const st = await p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.dataset.shot);
     const stage = await p.locator('[data-testid=swing-stage]').innerText().catch(() => '');
     if (stage && !seen.has(stage)) { seen.add(stage); await p.screenshot({ path: `${OUT}/stage-${stage}.png` }); }
-    if (st === 'release' || st === 'reach') {
+    if (st === 'release') {
       await p.mouse.click(195, 500);
       actions++;
       if (actions === 3) await p.screenshot({ path: `${OUT}/1-fly.png` });

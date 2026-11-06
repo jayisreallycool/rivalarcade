@@ -148,7 +148,8 @@ ok('canopy swing: deterministic course, every gap makeable, holding too long spi
     const viaThorn = as[i - 1].thorn;
     const from = { ...as[viaThorn ? i - 2 : i - 1], bob: 0 };
     const amp = viaThorn ? P.POWER_AMP : undefined;
-    assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st, 0, amp) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st, 0, amp), `gap ${i} not makeable${viaThorn ? ' (past a thorn)' : ''}`);
+    const avoid = viaThorn ? { ...as[i - 1], bob: 0 } : undefined;
+    assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st, 0, amp, avoid) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st, 0, amp, avoid), `gap ${i} not makeable${viaThorn ? ' (past a thorn)' : ''}`);
   }
   assert(as.some((a) => a.thorn) && as.slice(0, 15).every((a) => !a.thorn), 'thorns only after the start');
   assert(!as.some((a, i) => a.thorn && as[i - 1]?.thorn), 'never two thorns in a row');

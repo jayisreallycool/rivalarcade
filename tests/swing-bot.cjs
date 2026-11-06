@@ -1,4 +1,5 @@
-// Plays Canopy Swing with a simple "tap on the gold laser" bot; screenshots + how far it gets.
+// Plays Canopy Swing with a simple bot: let go when the release would work, then hold to grab.
+// APP_URL=http://localhost:3000 node tests/swing-bot.cjs
 const { chromium } = require('playwright');
 const { login } = require('./helpers.cjs');
 const URL = process.env.APP_URL || 'http://localhost:3000';
@@ -20,23 +21,27 @@ const OUT = 'tests/artifacts/swing';
   await p.click('text=TAP TO PLAY');
   await p.waitForTimeout(3300);
   const t0 = Date.now();
-  let shots = 0, lastShot = 0, seen = new Set();
-  const greedy = Number(process.env.GREEDY ?? 0.7); // chance to wait for perfect
-  while (Date.now() - t0 < 600000) {
+  let down = false, actions = 0;
+  const seen = new Set();
+  await p.mouse.move(195, 500);
+  while (Date.now() - t0 < 300000) {
     if (await p.locator('[data-testid=match-results]').count()) break;
     const st = await p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.dataset.shot);
     const stage = await p.locator('[data-testid=swing-stage]').innerText().catch(() => '');
-    if (!seen.has(stage)) { seen.add(stage); await p.screenshot({ path: `${OUT}/stage-${stage}.png` }); }
-    if ((st === 'release' || st === 'perfect' || (st === 'range' && Math.random() > greedy)) && Date.now() - lastShot > 250) {
-      await p.mouse.click(195, 500);
-      shots++; lastShot = Date.now();
-      if (shots === 3) await p.screenshot({ path: `${OUT}/1-shot.png` });
+    if (stage && !seen.has(stage)) { seen.add(stage); await p.screenshot({ path: `${OUT}/stage-${stage}.png` }); }
+    if (st === 'release') {
+      if (!down) await p.mouse.down();
+      await p.mouse.up();
+      down = false;
+      actions++;
+      await p.mouse.down(); // hold straight away: grabs the next vine when it's in reach
+      down = true;
+      if (actions === 2) await p.screenshot({ path: `${OUT}/1-fly.png` });
     }
-    await p.waitForTimeout(40);
+    await p.waitForTimeout(30);
   }
-  const secs = ((Date.now() - t0) / 1000).toFixed(0);
-  const vines = await p.locator('text=/branches/').first().innerText().catch(() => '?');
+  const score = await p.locator('[data-testid=your-score]').innerText().catch(() => '?');
   await p.screenshot({ path: `${OUT}/9-end.png` });
-  console.log(JSON.stringify({ secs, shots, stages: [...seen], vines, errs: errs.slice(0, 3) }));
+  console.log(JSON.stringify({ secs: ((Date.now() - t0) / 1000).toFixed(0), actions, stages: [...seen], score, errs: errs.slice(0, 3) }));
   await b.close();
 })();

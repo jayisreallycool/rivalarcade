@@ -131,7 +131,7 @@ ok('item looks: every item has its own design, and named features are really the
   for (const h of items.filter((x) => x.category === 'hair')) assert(C.HAIR_COLORS.some((c) => c.color === h.color), `${h.id} colour not in HAIR_COLORS`);
 });
 
-ok('canopy swing hook course: deterministic, every gap makeable, four stages that get harder', () => {
+ok('canopy swing: deterministic course, every gap makeable, holding too long spins you out', () => {
   const P = require('../.test-build/grapple-physics');
   const { mulberry32 } = require('../.test-build/rng');
   const gen = (seed, n) => {
@@ -140,35 +140,38 @@ ok('canopy swing hook course: deterministic, every gap makeable, four stages tha
     for (let i = 1; i <= n; i++) as.push(P.nextAnchor(as[i - 1], i, rng));
     return as;
   };
-  const as = gen(1234, 100);
+  const as = gen(1234, 90);
   for (let i = 1; i < as.length; i++) {
     const st = P.stageAt(i);
     const b = as[i];
-    assert(P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 + b.bob }, st.range, st.vine) && P.reachable(as[i - 1], { ...b, bob: 0, y0: b.y0 - b.bob }, st.range, st.vine), `gap ${i} not makeable`);
+    const from = { ...as[i - 1], bob: 0 };
+    assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st), `gap ${i} not makeable`);
   }
-  const gap = (x, y) => as.slice(x, y).reduce((s, a, k) => s + a.f - as[x + k - 1 < 0 ? 0 : x + k - 1].f, 0) / (y - x);
-  assert(gap(60, 90) > gap(1, 12) + 2, `crazy gaps (${gap(60, 90)}) should be much wider than slow (${gap(1, 12)})`);
-  assert(as.slice(56).some((a) => a.bob > 0) && as.slice(1, 12).every((a) => a.bob === 0), 'only later anchors bob');
+  const gap = (x, y) => (as[y].f - as[x].f) / (y - x);
+  assert(gap(60, 90) > gap(1, 12) + 1, `crazy gaps (${gap(60, 90)}) should be wider than slow (${gap(1, 12)})`);
+  assert(as.slice(56).some((a) => a.bob > 0) && as.slice(1, 12).every((a) => a.bob === 0), 'only later branches bob');
   assert.deepStrictEqual(['SLOW', 'MIDDLE', 'FINAL', 'CRAZY'], [0, 12, 30, 55].map((i) => P.stageAt(i).name));
-  assert(P.stageAt(100).hold < P.stageAt(55).hold && P.stageAt(55).hold < P.stageAt(0).hold, 'ropes fray faster');
-  assert(P.stageAt(100).range < P.stageAt(0).range, 'rope range shrinks');
+  assert(P.stageAt(80).pump > P.stageAt(0).pump && P.stageAt(80).reach < P.stageAt(0).reach, 'later stages pump faster, reach less');
   assert.deepStrictEqual(gen(77, 30).map((a) => a.f), gen(77, 30).map((a) => a.f));
-  // Rope physics: hanging still, you swing down and the rope keeps its length.
-  const b = { f: 3, y: 10.5 - 1, vf: 0, vy: 0 };
-  const rope = { anchor: 0, drop: 0, L: 3.2, t: 0 };
+  // Hang on: the rope never stretches, the swing grows, and holding too long spins out.
+  const A = { f: 0, y: 10.5 };
+  const b = { f: 1.5, y: 10.5 - 3, vf: 0, vy: 0 };
+  const rope = P.grab(b, 0, A, P.stageAt(0));
   let maxD = 0;
-  for (let k = 0; k < 600; k++) {
-    P.step(b, rope, { f: 0, y: 10.5 }, 1 / 120);
-    maxD = Math.max(maxD, Math.hypot(b.f, b.y - 10.5));
+  let spunAt = -1;
+  for (let k = 0; k < 240 * 15 && spunAt < 0; k++) {
+    if (P.step(b, rope, A, 1 / 240)) spunAt = k / 240;
+    maxD = Math.max(maxD, Math.hypot(b.f - A.f, b.y - A.y));
   }
-  assert(maxD <= 3.21, `rope stretched to ${maxD}`);
-  assert(rope.t > 4.9, 'hold timer runs');
-  // Letting go on the back-swing never reaches a far anchor.
-  assert(!P.reachable(P.FIRST_ANCHOR, { ...P.FIRST_ANCHOR, f: 14 }, 6.6, 2));
-  // The hook fires at a fixed angle: it only bites if that line really crosses the vine.
-  assert(P.hookHit({ f: 0, y: 8 }, { f: 2, y: 11 }, 3, 8), "line crosses vine");
-  assert(!P.hookHit({ f: 0, y: 8 }, { f: 5, y: 11 }, 3, 8), "line passes above the vine");
-  assert(!P.hookHit({ f: 0, y: 4 }, { f: 1, y: 11 }, 3, 8), "line passes below the vine");
+  assert(maxD <= Math.max(rope.L, 3.4) + 0.02, `rope stretched to ${maxD}`);
+  assert(spunAt > 4 && spunAt < 13, `spin-out after ${spunAt}s`);
+  // Short holds are safe: 2 seconds in, no spin-out.
+  const b2 = { f: 1.5, y: 7.5, vf: 0, vy: 0 };
+  const r2 = P.grab(b2, 0, A, P.stageAt(0));
+  for (let k = 0; k < 480; k++) assert(!P.step(b2, r2, A, 1 / 240), 'spun out too soon');
+  // Grab only works within reach, ahead of you.
+  assert.strictEqual(P.grabbable({ f: 0, y: 8 }, [P.FIRST_ANCHOR, { f: 3, y0: 10, bob: 0, bobSpeed: 1, phase: 0 }], 1, 0, 4), 1);
+  assert.strictEqual(P.grabbable({ f: 0, y: 8 }, [P.FIRST_ANCHOR, { f: 9, y0: 10, bob: 0, bobSpeed: 1, phase: 0 }], 1, 0, 4), -1);
 });
 
 ok('scoring: 1 point per action, specials and multipliers', () => {

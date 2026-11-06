@@ -1,4 +1,4 @@
-// Dunk Rush shooting check: computes the "right" flick for each spot and confirms good flicks
+// Dunk Rush shooting check: computes the "right" drag-and-release for each spot and confirms good flicks
 // score while sloppy ones miss. Guest build: APP_URL=http://localhost:3000 node tests/dunk-bot.cjs
 const { chromium } = require('playwright');
 const URL = process.env.APP_URL || 'http://localhost:3000';
@@ -38,8 +38,8 @@ const OUT = 'tests/artifacts/dunk';
     const before = await score();
     const sloppy = i % 3 === 2;
     const power = ((dist - 0.0) / 6) * (sloppy ? 1.25 : 1);
-    if (i === 0) { const x0 = box.x + box.width / 2, y0 = box.y + H * 0.8; await p.mouse.move(x0, y0); await p.mouse.down(); for (let k = 1; k <= 8; k++) { await p.mouse.move(x0, y0 - (power * 0.36 * H * k) / 8); await p.waitForTimeout(40); } await p.screenshot({ path: `${OUT}/aim.png` }); await p.mouse.move(x0, y0); await p.mouse.up(); await p.waitForTimeout(600); }
-    await flick(power * 0.36 * H, 0, 380);
+    if (i === 0) { const x0 = box.x + box.width / 2, y0 = box.y + H * 0.8; await p.mouse.move(x0, y0); await p.mouse.down(); for (let k = 1; k <= 8; k++) { await p.mouse.move(x0, y0 - (power * 0.22 * H * k) / 8); await p.waitForTimeout(40); } await p.screenshot({ path: `${OUT}/aim.png` }); await p.mouse.move(x0, y0); await p.mouse.up(); await p.waitForTimeout(600); }
+    await flick(power * 0.22 * H, 0, 380);
     await p.waitForTimeout(3600);
     const after = await score();
     const ls = await p.evaluate(() => document.querySelector('[data-testid=game-surface] canvas')?.dataset.lastShot);

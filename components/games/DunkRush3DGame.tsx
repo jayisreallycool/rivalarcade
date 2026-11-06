@@ -23,12 +23,12 @@ import GameShell, { PopupApi, useSwipe, Swipe } from './GameShell';
 import { ArrowUp, MoveHorizontal, Flame } from 'lucide-react';
 
 /**
- * DUNK RUSH — flick-to-shoot basketball where the shot is yours:
- * the ANGLE of your flick aims left/right, its LENGTH sets how far the ball travels, and its
- * SPEED sets the arc (slow push = high, soft arc that swishes; quick snap = flat line drive that
- * rattles). You shoot from changing spots — close, mid-range, 3-point and deep — so you have to
- * judge power for each range. Aim help and the arc preview fade as you level up, and the hoop
- * starts moving (lead it yourself).
+ * DUNK RUSH — drag-and-release basketball built for a thumb on a phone screen:
+ * touch anywhere, DRAG UP to set power (a short, comfortable pull — about a quarter of the screen
+ * for a deep three) and slide SIDEWAYS to aim; an aim arc and a power meter show your shot live,
+ * and LETTING GO shoots. Pull back down to cancel. You shoot from changing spots — close,
+ * mid-range, 3-point and deep — so judging power for each range is the skill. The aim help fades
+ * as you level up, and the hoop starts moving (lead it yourself).
  */
 
 const GRAVITY = 12;
@@ -78,15 +78,20 @@ const ZONES: Record<ZoneId, { dist: number; spread: number; label: string; bonus
 };
 /** assist: share of a near-miss corrected (only within `window` metres); preview: share of the arc shown. */
 const LEVELS: { makes: number; amp: number; speed: number; assist: number; window: number; preview: number; zones: ZoneId[] }[] = [
-  { makes: 0, amp: 0, speed: 0, assist: 0.45, window: 0.8, preview: 0.09, zones: ['close', 'mid'] },
-  { makes: 3, amp: 0, speed: 0, assist: 0.35, window: 0.7, preview: 0.08, zones: ['mid', 'close', 'three'] },
-  { makes: 7, amp: 0.5, speed: 0.6, assist: 0.25, window: 0.6, preview: 0.07, zones: ['mid', 'three'] },
-  { makes: 12, amp: 1.0, speed: 0.9, assist: 0.18, window: 0.5, preview: 0.06, zones: ['three', 'mid', 'deep'] },
-  { makes: 18, amp: 1.5, speed: 1.2, assist: 0.12, window: 0.45, preview: 0.05, zones: ['three', 'deep'] },
-  { makes: 25, amp: 2.0, speed: 1.6, assist: 0.08, window: 0.4, preview: 0.04, zones: ['deep', 'three'] },
+  { makes: 0, amp: 0, speed: 0, assist: 0.45, window: 0.8, preview: 0.5, zones: ['close', 'mid'] },
+  { makes: 3, amp: 0, speed: 0, assist: 0.35, window: 0.7, preview: 0.42, zones: ['mid', 'close', 'three'] },
+  { makes: 7, amp: 0.5, speed: 0.6, assist: 0.25, window: 0.6, preview: 0.34, zones: ['mid', 'three'] },
+  { makes: 12, amp: 1.0, speed: 0.9, assist: 0.18, window: 0.5, preview: 0.27, zones: ['three', 'mid', 'deep'] },
+  { makes: 18, amp: 1.5, speed: 1.2, assist: 0.12, window: 0.45, preview: 0.21, zones: ['three', 'deep'] },
+  { makes: 25, amp: 2.0, speed: 1.6, assist: 0.08, window: 0.4, preview: 0.16, zones: ['deep', 'three'] },
 ];
-/** Metres of carry per unit of power (a flick of ~a third of the screen height; a deep three ≈ 45%). */
+/** Metres of carry per unit of power. */
 const CARRY = 6.0;
+/** Share of the screen height you drag for 1 unit of power (a deep 3 ≈ 28%: an easy thumb pull). */
+const POWER_SPAN = 0.22;
+const MAX_POWER = 1.45;
+/** Sideways drag (share of screen height) for a full lean of the aim. */
+const AIM_SPAN = 0.3;
 
 function makeCourtTexture() {
   const c = document.createElement('canvas');
@@ -229,9 +234,15 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
     setPhase('playing');
   }, [pushHud]);
 
+  // Drag to aim (live preview), lift your finger to shoot.
   const swipe = useSwipe({
-    onSwipe: (s) => shootRef.current(s, surfaceRef.current.w, surfaceRef.current.h),
-    onDrag: (s, ph) => aimRef.current(ph === 'end' ? null : s, surfaceRef.current.w, surfaceRef.current.h),
+    onDrag: (s, ph) => {
+      if (ph === 'end') {
+        aimRef.current(null, surfaceRef.current.w, surfaceRef.current.h);
+        shootRef.current(s, surfaceRef.current.w, surfaceRef.current.h);
+      } else aimRef.current(s, surfaceRef.current.w, surfaceRef.current.h);
+    },
+    onCancel: () => aimRef.current(null, surfaceRef.current.w, surfaceRef.current.h),
   });
   const surface = {
     ...swipe,
@@ -440,30 +451,58 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const readyShadow = createBlobShadow(engine, 0.22, 0.5);
       scene.add(readyShadow);
 
-      // Aim preview dots (short arc only: helps without solving the shot for you)
-      const AIM_DOTS = 4;
-      const aimPos = new Float32Array(AIM_DOTS * 3);
-      const aimGeo = new THREE.BufferGeometry();
-      aimGeo.setAttribute('position', new THREE.BufferAttribute(aimPos, 3));
-      // round, small dots (not squares)
+      // Aim arc: a trail of round dots along the start of the real flight (bigger near the ball,
+      // fading out), drifting forward so it reads as motion. The shown share shrinks each level.
+      const AIM_DOTS = 14;
       const dotC = document.createElement('canvas');
-      dotC.width = dotC.height = 32;
+      dotC.width = dotC.height = 64;
       const dg = dotC.getContext('2d')!;
-      dg.fillStyle = '#fff';
+      const dgr = dg.createRadialGradient(32, 32, 0, 32, 32, 30);
+      dgr.addColorStop(0, 'rgba(255,255,255,1)');
+      dgr.addColorStop(0.6, 'rgba(255,255,255,0.95)');
+      dgr.addColorStop(1, 'rgba(255,255,255,0)');
+      dg.fillStyle = dgr;
       dg.beginPath();
-      dg.arc(16, 16, 13, 0, Math.PI * 2);
+      dg.arc(32, 32, 30, 0, Math.PI * 2);
       dg.fill();
       const dotTex = engine.own(new THREE.CanvasTexture(dotC));
-      const aim = new THREE.Points(aimGeo, new THREE.PointsMaterial({ map: dotTex, alphaTest: 0.2, color: new THREE.Color(0xffffff).multiplyScalar(1.5), size: 0.03, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
-      aim.frustumCulled = false;
-      aim.visible = false;
-      scene.add(aim);
-      // landing marker at rim height (first levels only): where this flick would come down
-      const landMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0x5fe8ff).multiplyScalar(1.6), transparent: true, opacity: 0.7, toneMapped: false, depthWrite: false, side: THREE.DoubleSide }));
-      const land = new THREE.Mesh(engine.own(new THREE.RingGeometry(0.09, 0.13, 24)), landMat);
+      const aimDots: THREE.Sprite[] = [];
+      const aimMats: THREE.SpriteMaterial[] = [];
+      for (let i = 0; i < AIM_DOTS; i++) {
+        const m = engine.own(new THREE.SpriteMaterial({ map: dotTex, color: 0xffffff, transparent: true, depthWrite: false, depthTest: false, toneMapped: false }));
+        const d = new THREE.Sprite(m);
+        d.visible = false;
+        d.renderOrder = 10;
+        scene.add(d);
+        aimDots.push(d);
+        aimMats.push(m);
+      }
+      const aim = { visible: false }; // (kept for the hide calls below)
+      const hideAim = () => {
+        aim.visible = false;
+        aimDots.forEach((d) => (d.visible = false));
+        meter.style.opacity = '0';
+      };
+      // landing marker at rim height (first levels only): where this shot would come down
+      const landMat = engine.own(new THREE.MeshBasicMaterial({ color: new THREE.Color(0x5fe8ff).multiplyScalar(1.6), transparent: true, opacity: 0.8, toneMapped: false, depthWrite: false, side: THREE.DoubleSide }));
+      const land = new THREE.Mesh(engine.own(new THREE.RingGeometry(0.1, 0.15, 28)), landMat);
       land.rotation.x = -Math.PI / 2;
       land.visible = false;
       scene.add(land);
+
+      // Power meter: a slim bar at the right edge that fills as you pull. On the first levels a
+      // bracket marks the right power for this spot.
+      const meter = document.createElement('div');
+      meter.setAttribute('data-testid', 'dunk-power');
+      meter.style.cssText = 'position:absolute;right:14px;bottom:24%;width:12px;height:34%;border-radius:8px;background:rgba(0,0,0,.45);border:1.5px solid rgba(255,255,255,.35);opacity:0;transition:opacity .15s;pointer-events:none;overflow:visible;z-index:5';
+      const fill = document.createElement('div');
+      fill.style.cssText = 'position:absolute;left:1px;right:1px;bottom:1px;border-radius:6px;background:linear-gradient(to top,#22d3ee,#a3e635 55%,#facc15 80%,#f97316);height:0%';
+      const band = document.createElement('div');
+      band.style.cssText = 'position:absolute;left:-5px;right:-5px;height:7%;border:2px solid #fff;border-radius:4px;box-shadow:0 0 8px rgba(255,255,255,.7);display:none';
+      const meterLabel = document.createElement('div');
+      meterLabel.style.cssText = 'position:absolute;right:18px;transform:translateY(50%);font:900 11px system-ui;color:#fff;text-shadow:0 1px 3px #000;white-space:nowrap';
+      meter.append(fill, band, meterLabel);
+      engine.renderer.domElement.parentElement?.appendChild(meter);
 
       const particles = new ParticleBursts(engine);
 
@@ -496,19 +535,22 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         out.set((target.x - from.x) / t, (target.y - from.y + 0.5 * GRAVITY * t * t) / t, (target.z - from.z) / t);
 
       let lastShot: Record<string, number> = {};
+      let lastTick = -1;
       /**
-       * Swipe → launch velocity. Angle = left/right, length = carry distance, speed = arc.
-       * Only light aim help on the first levels; none after. Returns null if not a shot.
+       * Drag → launch velocity. Upward pull = power (carry distance), sideways = aim. The arc is a
+       * clean set shot (steeper up close, a touch flatter from deep), so it's the same every time.
+       * Light aim help on the first levels only. Returns null if it isn't a shot (pull too short).
        */
       const shotFromSwipe = (s: Swipe, w: number, h: number, out: THREE.Vector3) => {
-        if (s.dy > -30) return null; // must flick upward
         const up = -s.dy;
+        if (up < h * 0.04) return null; // not pulled far enough (or pulled back down): no shot
         const L = LEVELS[sim.current.level];
-        const power = THREE.MathUtils.clamp(up / (h * 0.36), 0.2, 1.7);
-        const lean = THREE.MathUtils.clamp(s.dx / up, -1, 1);
-        // "Straight up the screen" points at the basket's home spot; lean turns up to ±31°.
+        const power = THREE.MathUtils.clamp(up / (h * POWER_SPAN), 0.25, MAX_POWER);
+        const side = Math.abs(s.dx) < 6 ? 0 : s.dx - Math.sign(s.dx) * 6; // small dead zone: straight is easy
+        const lean = THREE.MathUtils.clamp(side / (h * AIM_SPAN), -1, 1);
+        // "Straight up the screen" points at the basket's home spot; a full lean turns ±29°.
         const baseYaw = Math.atan2(0 - spawn.x, spawn.z - HOOP_Z);
-        let yaw = baseYaw + lean * 0.55;
+        let yaw = baseYaw + lean * 0.5;
         let dist = power * CARRY;
         const wantYaw = Math.atan2(hoopX - spawn.x, spawn.z - HOOP_Z);
         const need = Math.hypot(hoopX - spawn.x, HOOP_Z - spawn.z);
@@ -516,47 +558,66 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
           if (Math.abs(wantYaw - yaw) < 0.1) yaw += (wantYaw - yaw) * L.assist;
           if (Math.abs(need - dist) < L.window) dist += (need - dist) * L.assist;
         }
-        // Arc from flick speed, set as the angle the ball drops into the rim: slow, controlled push
-        // → 48° (soft, swishes); quick snap → 28° line drive (clips the rim more often).
-        const quick = THREE.MathUtils.clamp((s.speed - 0.5) / 2.2, 0, 1);
         const rise = RIM_Y + 0.12 - spawn.y;
         dist += 0.05; // aim a touch past the rim centre so short and long misses are even
-        const theta = Math.atan((2 * rise) / dist + Math.tan(THREE.MathUtils.degToRad(48 - 20 * quick)));
+        const entry = THREE.MathUtils.clamp(50 - ((dist - 3.3) / 4.3) * 5, 44, 51);
+        const theta = Math.atan((2 * rise) / dist + Math.tan(THREE.MathUtils.degToRad(entry)));
         const c = Math.cos(theta);
         const v = Math.sqrt((GRAVITY * dist * dist) / (2 * c * c * (dist * Math.tan(theta) - rise)));
         out.set(v * c * Math.sin(yaw), v * Math.sin(theta), -v * c * Math.cos(yaw));
-        const perfect = Math.abs(dist - 0.05 - need) < 0.12 && Math.abs(yaw - wantYaw) < 0.025 && quick < 0.55;
+        const perfect = Math.abs(dist - 0.05 - need) < 0.12 && Math.abs(yaw - wantYaw) < 0.025;
         void w;
-        lastShot = { dist: +dist.toFixed(2), need: +need.toFixed(2), yaw: +(yaw - wantYaw).toFixed(3), quick: +quick.toFixed(2), h, up };
-        return { perfect, flight: dist / (v * c) };
+        lastShot = { dist: +dist.toFixed(2), need: +need.toFixed(2), yaw: +(yaw - wantYaw).toFixed(3), power: +power.toFixed(2), h, up };
+        return { perfect, flight: dist / (v * c), power, need, onLine: Math.abs(dist - 0.05 - need) < 0.25 && Math.abs(yaw - wantYaw) < 0.05 };
       };
 
       aimRef.current = (s, w, h) => {
         if (!s || !sim.current.playing || sim.current.reload > 0) {
-          aim.visible = false;
+          hideAim();
           land.visible = false;
+          lastTick = -1;
           return;
         }
         const v = tmp.set(0, 0, 0);
         const r = shotFromSwipe(s, w, h, v);
         if (!r) {
-          aim.visible = false;
+          hideAim();
           land.visible = false;
           return;
         }
-        // Arc preview: only the first bit of the flight, shrinking each level.
-        const T = r.flight * LEVELS[sim.current.level].preview;
+        const lvl = sim.current.level;
+        // power meter (+ the right-power bracket on the first levels)
+        meter.style.opacity = '1';
+        fill.style.height = `${(r.power / MAX_POWER) * 100}%`;
+        const want = r.need / CARRY / MAX_POWER;
+        band.style.display = lvl <= 2 ? 'block' : 'none';
+        band.style.bottom = `calc(${want * 100}% - 3.5%)`;
+        meterLabel.textContent = `${(r.power * CARRY).toFixed(1)}m`;
+        meterLabel.style.bottom = `${(r.power / MAX_POWER) * 100}%`;
+        // a light tick every half metre of power, so you can feel it on the phone
+        const tick = Math.floor(r.power * CARRY * 2);
+        if (tick !== lastTick) {
+          if (lastTick >= 0) haptic('tap');
+          lastTick = tick;
+        }
+        // arc dots along the start of the real flight, drifting forward
+        const T = r.flight * LEVELS[lvl].preview;
+        const drift = (performance.now() / 1000) * 1.6;
+        const col = lvl <= 1 && r.onLine ? 0x86efac : 0xffffff;
+        for (let i = 0; i < AIM_DOTS; i++) {
+          const u = (i + (drift % 1)) / AIM_DOTS;
+          const t = u * T;
+          const d = aimDots[i];
+          d.position.set(spawn.x + v.x * t, spawn.y + v.y * t - 0.5 * GRAVITY * t * t, spawn.z + v.z * t);
+          d.scale.setScalar(0.085 * (1 - u * 0.55));
+          aimMats[i].opacity = 0.95 * (1 - u) ** 0.8 * Math.min(1, u * 6);
+          aimMats[i].color.setHex(col);
+          d.visible = true;
+        }
+        aim.visible = true;
         const lt = r.flight;
         land.position.set(spawn.x + v.x * lt, RIM_Y + 0.02, spawn.z + v.z * lt);
-        land.visible = sim.current.level <= 2;
-        for (let i = 0; i < AIM_DOTS; i++) {
-          const t = ((i + 1) / AIM_DOTS) * T;
-          aimPos[i * 3] = spawn.x + v.x * t;
-          aimPos[i * 3 + 1] = spawn.y + v.y * t - 0.5 * GRAVITY * t * t;
-          aimPos[i * 3 + 2] = spawn.z + v.z * t;
-        }
-        aimGeo.attributes.position.needsUpdate = true;
-        aim.visible = true;
+        land.visible = lvl <= 2;
       };
 
       /** Move to a new seeded shot spot for this level's ranges. */
@@ -581,7 +642,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         land.visible = false;
         ball.zone = st.zone;
         engine.renderer.domElement.dataset.lastShot = JSON.stringify(lastShot); // (read by automated play-tests)
-        aim.visible = false;
+        hideAim();
         if (!res) return;
         ball.pos.copy(spawn);
         ball.prev.copy(spawn);
@@ -665,7 +726,8 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       const finish = () => {
         const st = sim.current;
         st.playing = false;
-        aim.visible = false;
+        hideAim();
+        land.visible = false;
         sound.playLose();
         haptic('fail');
         const breakdown = st.book.breakdown();
@@ -815,6 +877,7 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       });
 
       return () => {
+        meter.remove();
         resetRef.current = () => {};
         shootRef.current = () => {};
         aimRef.current = () => {};
@@ -855,13 +918,13 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
       match={match}
       onExit={onExit}
       surface={surface}
-      hint="Flick up: angle = aim · length = distance · speed = arc"
+      hint="Drag up for power · slide to aim · let go to shoot"
       guide={{
         goal: 'Sink as many baskets as you can before the clock runs out.',
         controls: [
-          { gesture: 'flick-up', label: 'Longer flick = farther shot' },
-          { gesture: 'swipe-x', label: 'Angle your flick to aim left / right' },
-          { gesture: 'drag', label: 'Slow push = high arc · quick snap = flat' },
+          { gesture: 'drag', label: 'Touch anywhere and drag up — longer pull = farther shot (watch the meter)' },
+          { gesture: 'swipe-x', label: 'Slide left / right while you pull to aim' },
+          { gesture: 'release', label: 'Let go to shoot · pull back down to cancel' },
         ],
         points: [
           { label: 'Basket', value: '1' },
@@ -874,11 +937,11 @@ export default function DunkRush3DGame({ avatar, onFinish, seed, rival, match, o
         ends: '60-second round · shot spots change range · the hoop starts moving',
       }}
       tutorial={[
-        { icon: <ArrowUp className="w-6 h-6" />, label: 'Flick up to shoot' },
-        { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Lean to aim' },
+        { icon: <ArrowUp className="w-6 h-6" />, label: 'Drag up, let go' },
+        { icon: <MoveHorizontal className="w-6 h-6" />, label: 'Slide to aim' },
         { icon: <Flame className="w-6 h-6" />, label: '5 in a row = ×2' },
       ]}
-      scoring="Every basket is 1 point. 3-pointer +1 · Gold ball 3 · Swish or bank +1 · 5 in a row sets you ON FIRE ×2 · Last 10s CLUTCH ×2. Flick angle aims, flick length sets distance, flick speed sets the arc. Shot spots move between close, mid-range, 3-point and deep, the aim help and arc preview fade, and the hoop starts moving as you score."
+      scoring="Every basket is 1 point. 3-pointer +1 · Gold ball 3 · Swish or bank +1 · 5 in a row sets you ON FIRE ×2 · Last 10s CLUTCH ×2. Touch anywhere and drag up: the longer the pull the farther the shot — the meter on the right shows your power. Slide sideways to aim, and let go to shoot (pull back down to cancel). Shot spots move between close, mid-range, 3-point and deep, the aim help and arc preview fade, and the hoop starts moving as you score."
     />
   );
 }

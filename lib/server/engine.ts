@@ -46,7 +46,7 @@ export const GAME_RULES: Record<string, GameRule> = {
   'cyber-reflex': { timed: true, roundSeconds: 60, maxScore: 700, maxPointsPerSec: 13, maxDurationS: 600, baseline: 90 },
   'gem-surge': { timed: true, roundSeconds: 60, maxScore: 1600, maxPointsPerSec: 30, maxDurationS: 600, baseline: 150 },
   'brick-blitz': { timed: false, roundSeconds: 0, maxScore: 5000, maxPointsPerSec: 6, maxDurationS: 3600, baseline: 220 },
-  'canopy-swing': { timed: false, roundSeconds: 0, maxScore: 3000, maxPointsPerSec: 6, maxDurationS: 3600, baseline: 45 },
+  'canopy-swing': { timed: false, roundSeconds: 0, maxScore: 8000, maxPointsPerSec: 10, maxDurationS: 3600, baseline: 150 },
 };
 
 export interface CupTemplate {

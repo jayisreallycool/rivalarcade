@@ -147,8 +147,8 @@ export const SCORE_BASELINE: Record<GameId, number> = {
   'gem-surge': 150,
   // Endless survival: a steady player clears ~40–50 rows.
   'brick-blitz': 220,
-  // Endless: a steady player swings ~30 vines.
-  'canopy-swing': 45,
+  // Endless distance score (1 per 2 m): a steady player flows ~400 m before a slip.
+  'canopy-swing': 200,
 };
 
 /** Baselines before the 1-point scoring (v1), for rescaling old saves. */

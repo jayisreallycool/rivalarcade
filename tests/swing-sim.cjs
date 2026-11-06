@@ -18,15 +18,16 @@ function run(seed, react, noise, r2) {
   const fire = P.newFire();
   const taken = new Set();
   const knocked = new Set();
-  let stun = 0;
+  let stun = 0, hangSteps = 0;
   const h = 1 / 240; // real seconds per step
-  const end = (why) => ({ why, passed, secs: Math.round(k * h), hits, bigAir, berries, escapes });
+  const end = (why) => ({ why, passed, secs: Math.round(k * h), hits, bigAir, berries, escapes, fly: Math.round(100 - (100 * hangSteps) / Math.max(1, k)), far: Math.round(b.f) });
   let k = 0;
   for (; k < 240 * 60 * MINUTES; k++) {
     const st = P.stageAt(target);
     const dt = h * st.speed * P.PACE;
     t += dt;
     stun = Math.max(0, stun - h);
+    if (line) hangSteps++;
     const pv = line ? P.anchorPos(as[line.anchor], t) : null;
     P.step(b, line, pv, dt);
     // holding on the rope: let go (after reaction time) once the release would carry you to the next point
@@ -57,5 +58,6 @@ function run(seed, react, noise, r2) {
 for (const [react, noise] of [[0.08, 0.05], [0.18, 0.12], [0.28, 0.18], [0.4, 0.25]]) {
   const res = [];
   for (let s = 1; s <= 8; s++) res.push(run(s * 97, react, noise, mulberry32(s)));
-  console.log('react', react, res.map((r) => `${r.passed}/${r.secs}s/${r.why}${r.escapes ? '/esc' + r.escapes : ''}`).join(' '));
+  console.log('react', react, res.map((r) => `${r.passed}/${r.secs}s/${r.why}/fly${r.fly}%${r.escapes ? '/esc' + r.escapes : ''}`).join(' '));
+  console.log('   distance/s', res.map((r) => (r.far / Math.max(1, r.secs)).toFixed(1)).join(' '));
 }

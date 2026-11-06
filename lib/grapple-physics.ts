@@ -19,9 +19,9 @@ export const MAX_SPEED = 18;
 /** Air drag per second (fraction of speed). */
 export const DRAG = 0.04;
 /** The winch pulls a long rope in to this length. */
-export const ROPE = 3.2;
+export const ROPE = 2.8;
 export const REEL_SPEED = 1.4;
-export const MIN_ROPE = 2.0;
+export const MIN_ROPE = 1.4;
 /** Pumping: tangential push near the bottom of the arc (m/s²), up to this swing size (rad). */
 export const PUMP = 11;
 export const PUMP_MAX_AMP = 1.45;
@@ -51,10 +51,10 @@ export interface Stage {
 }
 
 export const STAGES: Stage[] = [
-  { name: 'SLOW', from: 0, reach: 4.4, speed: 0.92, gap: [5.0, 6.0], dy: 0.6, bob: 0, bramble: 0, pad: 0.25, fire: 3.2, color: '#4ade80' },
-  { name: 'MIDDLE', from: 12, reach: 4.0, speed: 1, gap: [5.8, 7.0], dy: 1.3, bob: 0.3, bramble: 0.25, pad: 0.18, fire: 2.8, color: '#facc15' },
-  { name: 'FINAL', from: 30, reach: 3.7, speed: 1.07, gap: [6.4, 7.6], dy: 1.8, bob: 0.7, bramble: 0.4, pad: 0.12, fire: 2.5, color: '#fb923c' },
-  { name: 'CRAZY', from: 55, reach: 3.4, speed: 1.14, gap: [7.0, 8.4], dy: 2.2, bob: 1.1, bramble: 0.55, pad: 0.08, fire: 2.2, color: '#f43f5e' },
+  { name: 'SLOW', from: 0, reach: 3.8, speed: 1, gap: [2.7, 3.4], dy: 0.8, bob: 0, bramble: 0, pad: 0.12, fire: 3.0, color: '#4ade80' },
+  { name: 'MIDDLE', from: 20, reach: 3.6, speed: 1.05, gap: [3.0, 3.9], dy: 1.2, bob: 0.25, bramble: 0.2, pad: 0.09, fire: 2.7, color: '#facc15' },
+  { name: 'FINAL', from: 50, reach: 3.4, speed: 1.1, gap: [3.4, 4.4], dy: 1.6, bob: 0.5, bramble: 0.32, pad: 0.06, fire: 2.4, color: '#fb923c' },
+  { name: 'CRAZY', from: 90, reach: 3.2, speed: 1.16, gap: [3.8, 5.0], dy: 2.0, bob: 0.8, bramble: 0.45, pad: 0.04, fire: 2.1, color: '#f43f5e' },
 ];
 
 /**
@@ -88,8 +88,8 @@ export function stageAt(i: number): Stage {
   let s = STAGES[0];
   for (const st of STAGES) if (i >= st.from) s = st;
   if (s.name !== 'CRAZY') return s;
-  const k = Math.min(1, (i - s.from) / 45);
-  return { ...s, reach: s.reach - 0.35 * k, speed: s.speed + 0.1 * k, gap: [s.gap[0] + 0.4 * k, s.gap[1] + 0.8 * k], bob: s.bob + 0.4 * k };
+  const k = Math.min(1, (i - s.from) / 80);
+  return { ...s, reach: s.reach - 0.3 * k, speed: s.speed + 0.1 * k, gap: [s.gap[0] + 0.4 * k, s.gap[1] + 0.7 * k], bob: s.bob + 0.3 * k };
 }
 
 export interface Bramble {
@@ -207,8 +207,26 @@ export function grabbable(b: Body, anchors: Anchor[], from: number, t: number, r
   return best;
 }
 
+/** Share of the speed heading into/away from the grab point that the catch swings round into the arc. */
+export const GRAB_KEEP = 0.85;
+/**
+ * Catch a point. The hook bites and your speed is swung round along the arc (most of it kept),
+ * so a well-timed catch carries straight on into the next swing instead of stalling you.
+ */
 export function grab(b: Body, i: number, A: { f: number; y: number }): Rope {
-  return { anchor: i, L: Math.max(MIN_ROPE, Math.hypot(b.f - A.f, b.y - A.y)), t: 0 };
+  const d = Math.hypot(b.f - A.f, b.y - A.y);
+  if (d > 1e-6) {
+    const tf = -(b.y - A.y) / d; // unit tangent (points forward when you're under the point)
+    const ty = (b.f - A.f) / d;
+    const speed = Math.hypot(b.vf, b.vy);
+    const vt = b.vf * tf + b.vy * ty;
+    const vr2 = Math.max(0, speed * speed - vt * vt);
+    const mag = Math.sqrt(vt * vt + GRAB_KEEP * GRAB_KEEP * vr2);
+    const dir = Math.abs(vt) > 0.3 * speed ? Math.sign(vt) : Math.sign(b.vf * tf || 1) || 1;
+    b.vf = tf * mag * dir;
+    b.vy = ty * mag * dir;
+  }
+  return { anchor: i, L: Math.max(MIN_ROPE, d), t: 0 };
 }
 
 /** Bounce off a pad on the water (returns true if you hit one). */
@@ -241,7 +259,7 @@ export function releaseWorks(b: Body, B: Anchor, reach: number, t0 = 0, avoid?: 
     const P = anchorPos(B, t0 + k * dtS);
     const d = Math.hypot(P.f - body.f, P.y - body.y);
     if (d <= reach * 0.85 && P.y > body.y + 0.3 && !blocked(body, P, avoid) && P.y - Math.max(d, ROPE) > WATER_Y + 1.5) return path;
-    if (k % 6 === 0) path.push({ f: body.f, y: body.y });
+    if (k % 3 === 0) path.push({ f: body.f, y: body.y });
     step(body, null, null, dtS);
     if (body.y < WATER_Y + 1) return null;
   }
@@ -276,10 +294,10 @@ export function nextAnchor(prev: Anchor, i: number, rng: () => number): Anchor {
   const bob = s.bob > 0 && rng() < 0.4 + 0.5 * (s.bob / 1.5) ? s.bob * (0.5 + rng() * 0.5) : 0;
   const bobSpeed = 1.1 + rng() * 0.9 + (s.name === 'CRAZY' ? 0.5 : 0);
   const phase = rng() * Math.PI * 2;
-  const wantBramble = i > 12 && rng() < s.bramble;
+  const wantBramble = i > 20 && rng() < s.bramble;
   const brU = 0.35 + rng() * 0.3;
   const brY = (rng() - 0.5) * 3;
-  const brR = 0.55 + rng() * 0.35;
+  const brR = 0.45 + rng() * 0.3;
   const wantPad = rng() < s.pad;
   const berryCount = rng() < 0.6 ? 1 + Math.floor(rng() * 3) : 0;
   for (let tries = 0; tries < 18; tries++) {
@@ -289,15 +307,15 @@ export function nextAnchor(prev: Anchor, i: number, rng: () => number): Anchor {
     const ends = (a: Anchor) => (a.bob > 0 ? [-a.bob, a.bob] : [0]).map((d) => ({ ...a, bob: 0, y0: a.y0 + d }));
     const froms = ends(prev);
     const tos = ends(cand);
-    let br: Bramble | null = wantBramble ? { f: prev.f + gap * brU, y: (prev.y0 + y0) / 2 - 2.6 + brY, r: brR } : null;
+    let br: Bramble | null = wantBramble ? { f: prev.f + gap * brU, y: (prev.y0 + y0) / 2 - 2.2 + brY, r: brR } : null;
     if (br) {
-      // never inside a swing: clear of the arc you make right after catching `prev` (rope up to its
-      // reach) and of the reeled-in backswing on the new point; too low over the river → no bramble
+      // never inside any rope arc: below the longest rope (its reach) on both points, so a bramble
+      // only threatens you when you sag low; too low over the river → no bramble
       const below = (f: number, yLow: number, D: number) => {
         const df = Math.abs(br!.f - f);
         return df >= D ? Infinity : yLow - Math.sqrt(D * D - df * df);
       };
-      br.y = Math.min(br.y, below(prev.f, prev.y0 - prev.bob, Math.max(ROPE, stageAt(i - 1).reach) + br.r + 0.45), below(cand.f, y0 - bob, ROPE + br.r + 0.45));
+      br.y = Math.min(br.y, below(prev.f, prev.y0 - prev.bob, Math.max(ROPE, stageAt(i - 1).reach) + br.r + 0.5), below(cand.f, y0 - bob, Math.max(ROPE, s.reach) + br.r + 0.5));
       if (br.y < WATER_Y + 2.4) br = null;
     }
     const ok = (avoid: Bramble | null) => {
@@ -319,7 +337,7 @@ export function nextAnchor(prev: Anchor, i: number, rng: () => number): Anchor {
     if (path) {
       prev.bramble = bramble;
       prev.pad = wantPad ? { f: prev.f + gap * (0.45 + rng() * 0.2), w: 0.9 } : null;
-      prev.berries = path.length > 6 ? Array.from({ length: berryCount }, (_, k) => path[Math.min(path.length - 1, Math.floor(path.length * (0.35 + k * 0.2)))]) : [];
+      prev.berries = path.length > 5 ? Array.from({ length: berryCount }, (_, k) => path[Math.min(path.length - 1, Math.floor(path.length * (0.35 + k * 0.2)))]) : [];
       return cand;
     }
     gap -= 0.3;
@@ -327,7 +345,7 @@ export function nextAnchor(prev: Anchor, i: number, rng: () => number): Anchor {
   prev.bramble = null;
   prev.pad = null;
   prev.berries = [];
-  return { f: prev.f + 4.6, y0: prev.y0, bob: 0, bobSpeed: 1, phase: 0 };
+  return { f: prev.f + 3, y0: prev.y0, bob: 0, bobSpeed: 1, phase: 0 };
 }
 
 export const FIRST_ANCHOR: Anchor = { f: 0, y0: 10.5, bob: 0, bobSpeed: 1, phase: 0 };

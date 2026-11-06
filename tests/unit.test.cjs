@@ -163,14 +163,14 @@ ok('canopy swing physics: rope constraint, momentum kept on release, reachable s
     const br = as[i - 1].bramble;
     assert(P.reachable(from, { ...b, bob: 0, y0: b.y0 + b.bob }, st, br) && P.reachable(from, { ...b, bob: 0, y0: b.y0 - b.bob }, st, br), `section ${i} not reachable`);
   }
-  assert(as.some((a) => a.bramble) && as.slice(0, 12).every((a) => !a.bramble), 'brambles only after the start');
+  assert(as.some((a) => a.bramble) && as.slice(0, 20).every((a) => !a.bramble), 'brambles only after the start');
   assert(as.some((a) => a.pad) && as.some((a) => a.berries && a.berries.length), 'pads and berries generated');
-  assert(P.stageAt(80).reach < P.stageAt(0).reach - 1, 'reach shrinks');
+  assert(P.stageAt(170).reach < P.stageAt(0).reach - 0.8, 'reach shrinks');
   assert(as.slice(55).filter((a) => a.bramble).length > as.slice(12, 30).filter((a) => a.bramble).length, 'more brambles later');
   assert.deepStrictEqual(gen(77, 30).map((a) => a.f), gen(77, 30).map((a) => a.f));
   // Rope constraint: never stretches; swing accelerates on the way down; pumping builds the arc.
   const A = { f: 0, y: 10 };
-  const b = { f: 3.2 * Math.sin(-0.5), y: 10 - 3.2 * Math.cos(-0.5), vf: 0, vy: 0 };
+  const b = { f: P.ROPE * Math.sin(-0.5), y: 10 - P.ROPE * Math.cos(-0.5), vf: 0, vy: 0 };
   const rope = P.grab(b, 0, A);
   let maxD = 0, maxSpeed = 0, speedAtBottom = 0, maxAngle = 0;
   for (let k = 0; k < 240 * 12; k++) {
@@ -184,6 +184,11 @@ ok('canopy swing physics: rope constraint, momentum kept on release, reachable s
   assert(maxD <= rope.L + 0.01, `rope stretched to ${maxD}`);
   assert(speedAtBottom > 2, 'gravity accelerates the swing down');
   assert(maxAngle > 1.2 && maxAngle < 1.7, `pumping builds a big but controlled arc (${maxAngle})`);
+  // A catch swings your speed round into the arc instead of killing it.
+  const fb = { f: -1, y: 8, vf: 7, vy: 1 };
+  const sp0 = Math.hypot(fb.vf, fb.vy);
+  P.grab(fb, 0, { f: 1, y: 10 });
+  assert(Math.hypot(fb.vf, fb.vy) > 0.8 * sp0 && Math.abs(fb.vf * 2 + fb.vy * 2) < 1e-6, 'catch keeps momentum along the arc');
   // Release keeps velocity exactly.
   const v0 = { vf: b.vf, vy: b.vy };
   P.step(b, null, null, 1 / 240);

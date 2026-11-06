@@ -21,11 +21,16 @@ import { Crosshair, Hand, Flame } from 'lucide-react';
  * two, three or more vines. Dawdle and a FIRE WALL sweeps in from the left — catch a new vine
  * before it reaches you and it dies back; let it touch you and the run is over.
  * Brambles block the hook and knock you down; lily pads bounce you back up; berries are +1.
- * Score (small numbers): 1 per vine passed, +1 per berry, +1 per vine skipped in one flight,
- * +1 every 5 catches in a row. Four stages — SLOW → MIDDLE → FINAL → CRAZY.
+ * Score: the distance you travel (1 point per 2 m), counting up as you go, +3 per berry.
+ * Catches keep your momentum, so a good run is one long flowing chain. Stages: SLOW → MIDDLE → FINAL → CRAZY.
  */
 
-const HAND_UP = 1.87;
+/** A small, nimble swinger: the avatar is drawn at this scale so the jungle reads big around you. */
+const AV_SCALE = 0.62;
+const HAND_UP = 1.87 * AV_SCALE;
+/** Distance score: 1 point per this many metres travelled. */
+const M_PER_POINT = 2;
+const BERRY_POINTS = 3;
 const VIEW_W = 12.5;
 const VIEW_H = 11;
 const FOV = 42;
@@ -239,11 +244,11 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
 
       // River
       const water = engine.own(waterTexture());
-      const river = new THREE.Mesh(new THREE.PlaneGeometry(50, 420), new THREE.MeshStandardMaterial({ map: water, roughness: 0.15, metalness: 0.35, color: 0xbfffee }));
+      const river = new THREE.Mesh(new THREE.PlaneGeometry(48, 420), new THREE.MeshStandardMaterial({ map: water, roughness: 0.15, metalness: 0.35, color: 0xbfffee }));
       engine.own(river.geometry);
       engine.own(river.material as THREE.Material);
       river.rotation.x = -Math.PI / 2;
-      river.position.set(0, WATER_Y, -180);
+      river.position.set(16, WATER_Y, -180); // from under the camera back to the bank (x ≈ -8)
       river.receiveShadow = quality.shadows;
       scene.add(river);
 
@@ -267,7 +272,22 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         farLeaves.setMatrixAt(i, m4);
       }
       const world = new THREE.Group();
-      world.add(farTrunks, farLeaves);
+      // the far bank: a wall of bushes rising out of the water, and the forest floor behind it
+      const bankN = Math.round(220 * Math.max(0.6, quality.propDensity));
+      const bank = new THREE.InstancedMesh(canopyGeo, leafMats[0], bankN);
+      const bankRng = mulberry32(11);
+      for (let i = 0; i < bankN; i++) {
+        sc.set(0.55 + bankRng() * 0.45, 0.45 + bankRng() * 0.45, 0.55 + bankRng() * 0.45);
+        m4.compose(pv.set(-8 - bankRng() * 1.5, 0.3 + bankRng() * 1.1, -(i / bankN) * 200), q.setFromEuler(new THREE.Euler(bankRng(), bankRng() * 3, 0)), sc);
+        bank.setMatrixAt(i, m4);
+        bank.setColorAt(i, new THREE.Color().setHSL(0.3 + bankRng() * 0.06, 0.45, 0.22 + bankRng() * 0.12));
+      }
+      const floorMat = engine.own(new THREE.MeshStandardMaterial({ color: 0x24492f, roughness: 1 }));
+      const floor = new THREE.Mesh(engine.own(new THREE.PlaneGeometry(40, 420)), floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(-28, WATER_Y + 0.25, -180);
+      world.add(farTrunks, farLeaves, bank);
+      scene.add(floor);
       scene.add(world);
 
       // Sun shafts + fireflies
@@ -310,6 +330,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       spool.rotation.z = Math.PI / 2;
       spool.position.set(0, 0.04, 0.08);
       gun.add(gunBody, barrel, muzzle, grip, spool);
+      gun.scale.setScalar(0.75);
       gun.traverse((o) => ((o as THREE.Mesh).castShadow = quality.shadows));
       scene.add(gun);
       const hook = new THREE.Group();
@@ -506,6 +527,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       // ---------------- player
       const me = create3DAvatar(stableAvatar);
       const body = new THREE.Group();
+      me.group.scale.setScalar(AV_SCALE);
       me.group.position.y = -HAND_UP;
       me.group.rotation.y = Math.PI - 0.75;
       me.group.traverse((o) => {
@@ -526,6 +548,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       let playing = false;
       let over = false;
       let passed = 0;
+      let distPts = 0;
       let stageIdx = 0;
       let whip = 1; // 0 → 1: the hook flying out to the vine tip on a shot
       let reel = 0; // 1 → 0: the hook reeling back into the gun after you let go
@@ -564,6 +587,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         streak = 0;
         best = readBest();
         passed = 0;
+        distPts = 0;
         stageIdx = 0;
         whip = 1;
         reel = 0;
@@ -624,12 +648,20 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         setTimeout(() => onFinishRef.current(book.score, { vines: passed, distance: Math.round(b.f), breakdown: book.breakdown() }), 1200);
       };
 
-      /** Distance: 1 point for each vine you get past, counted the moment you pass it. */
+      /** Distance: the score ticks up as you travel (1 per M_PER_POINT metres, furthest point reached). */
+      const countDistance = () => {
+        const want = Math.floor(Math.max(0, b.f) / M_PER_POINT);
+        if (want > distPts) {
+          book.record(award(want - distPts, {}), { Distance: want - distPts });
+          distPts = want;
+          pushScore();
+        }
+      };
+      /** Vines passed (for stats, quests and stage changes). */
       const countPassed = () => {
+        countDistance();
         while (passed + 1 < anchors.length && b.f > anchors[passed + 1].f) {
           passed += 1;
-          const A = anchorPos(anchors[passed], t);
-          addPoints(1, 'Distance', A.f, A.y + 0.6);
           const ns = STAGES.findIndex((x) => x.name === stageAt(passed + 1).name);
           if (ns > stageIdx) {
             stageIdx = ns;
@@ -659,20 +691,14 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         const jump = i - lastGrab;
         lastGrab = i;
         streak += 1;
-        sound.playScore(1 + Math.min(0.8, (jump - 1) * 0.2));
-        haptic('score');
-        feel.kick(0.12);
-        particles.emit(tmpV.set(0, A.y, -A.f), 0x9be15d, { count: 10 + jump * 4, speed: 3, life: 0.6, gravity: 5 });
-        if (jump >= 2) {
-          // long jump: +1 for every pod you flew past without touching
-          popups.current?.banner(jump >= 4 ? `MEGA AIR ×${jump}` : `BIG AIR ×${jump}`, jump >= 4 ? '#f472b6' : '#38bdf8');
-          addPoints(jump - 1, 'Big air', A.f, A.y + 1.2);
-          feel.kick(0.25 + jump * 0.05);
-          engine.flash(0.2);
-        }
-        if (streak > 0 && streak % 5 === 0) {
-          addPoints(1, 'Streak', b.f, b.y + 1.4, `STREAK ×${streak} +1`);
-          sound.playCombo(streak / 5);
+        sound.playScore(1 + Math.min(0.8, (jump - 1) * 0.15));
+        haptic('light');
+        feel.kick(0.06);
+        particles.emit(tmpV.set(0, A.y, -A.f), 0x9be15d, { count: 6 + jump * 3, speed: 3, life: 0.6, gravity: 5 });
+        if (jump >= 3) {
+          // a long flight over several vines: the distance is its own reward, this is the cheer
+          popAtWorld(A.f, A.y + 1, jump >= 5 ? `MEGA AIR ×${jump}` : `BIG AIR ×${jump}`, { color: jump >= 5 ? '#f472b6' : '#38bdf8', size: 'md' });
+          feel.kick(0.2 + jump * 0.04);
         }
         target = Math.max(target, i + 1);
         ensureAhead(i);
@@ -739,7 +765,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
               if (bb.taken || Math.min(Math.hypot(b.f - bb.f, b.y - bb.y), Math.hypot(b.f - bb.f, b.y - HAND_UP * 0.5 - bb.y)) > 0.7) continue;
               bb.taken = true;
               bb.mesh.visible = false;
-              addPoints(1, 'Berries', bb.f, bb.y + 0.5);
+              addPoints(BERRY_POINTS, 'Berries', bb.f, bb.y + 0.5);
               particles.emit(tmpV.set(0, bb.y, -bb.f), 0xff3d8b, { count: 16, speed: 3, life: 0.5, gravity: 3 });
               sound.playPowerup();
               haptic('light');
@@ -775,8 +801,9 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           const isNext = i === target && playing;
           if (r) {
             const held = !!line && line.anchor === i;
-            r.visible = !held && i >= target && i < target + 4;
-            setReticle(r, i === inReach ? tgtLockMat : isNext ? tgtNextMat : tgtDimMat);
+            // one ring only: on the tip you'd catch right now, else (dimmer) on the next one
+            r.visible = !held && (inReach >= 0 ? i === inReach : isNext);
+            setReticle(r, i === inReach ? tgtLockMat : tgtNextMat);
             // a locked target snaps tight and spins; the next one breathes
             r.scale.setScalar(i === inReach ? 0.8 + Math.sin(time * 14) * 0.05 : isNext ? 1.1 + Math.sin(time * 5) * 0.08 : 1);
             r.rotation.x = i === inReach ? time * 3 : 0;
@@ -821,7 +848,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         gun.lookAt(tmpB.set(hand.x, hand.y + aimY, hand.z - aimF));
         gun.rotateY(Math.PI); // the barrel points down local -z
         gun.updateMatrixWorld();
-        const muzzleAt = tmpV.set(0, 0, -0.42).applyMatrix4(gun.matrixWorld);
+        const muzzleAt = tmpV.set(0, 0, -0.42).applyMatrix4(gun.matrixWorld); // (local units: scale applies)
         if (line) {
           const A = anchorPos(anchors[line.anchor], t);
           whip = Math.min(1, whip + rawDt * 12);
@@ -893,17 +920,17 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         const aspect = camera.aspect;
         const viewW = 2 * camDist * Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * aspect;
         const lead = THREE.MathUtils.clamp(T.f - b.f, 0, viewW * 0.6) * 0.5 + viewW * 0.06;
-        camFocus.lerp(tmpV.set(0, THREE.MathUtils.lerp(6.8, b.y - 0.5, 0.3), -(b.f + lead)), 1 - Math.exp(-rawDt * 2.6));
+        camFocus.lerp(tmpV.set(0, THREE.MathUtils.lerp(6.8, b.y - 0.5, 0.3), -(b.f + lead)), 1 - Math.exp(-rawDt * 4.5));
         const off = feel.update(rawDt, time, 0);
         camera.position.set(camDist, camFocus.y + 1 + off.y, camFocus.z + off.x);
         camera.lookAt(camFocus);
 
         sun.position.set(10, 24, camFocus.z + 6);
         sun.target.position.set(0, 8, camFocus.z);
-        river.position.z = camFocus.z - 150;
+        river.position.z = floor.position.z = camFocus.z - 150;
         (river.material as THREE.MeshStandardMaterial).map!.offset.y += rawDt * 0.05;
         const zNow = camFocus.z + 12;
-        if (Math.abs(zNow - farTrunks.position.z) > 100) farTrunks.position.z = farLeaves.position.z = Math.round(zNow / 100) * 100;
+        if (Math.abs(zNow - farTrunks.position.z) > 100) farTrunks.position.z = farLeaves.position.z = bank.position.z = Math.round(zNow / 100) * 100;
         shafts.forEach((sh, i) => {
           if (sh.position.z > zNow + 6) sh.position.z -= 72;
           sh.rotation.y += rawDt * 0.02 * (i % 2 ? 1 : -1);
@@ -933,11 +960,6 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
       <span className="px-2 py-0.5 rounded-full bg-black/50 text-[11px] font-black" style={{ color: stage.color }} data-testid="swing-stage">
         {stage.name}
       </span>
-      {hud.streak >= 2 && (
-        <span className="px-2 py-0.5 rounded-full bg-cyan-400 text-black text-[11px] font-black" data-testid="swing-streak">
-          ×{hud.streak}
-        </span>
-      )}
       {hud.fire > 0 && (
         <span className={`px-2 py-0.5 rounded-full text-[11px] font-black animate-pulse ${hud.fire === 2 ? 'bg-orange-500 text-black' : 'bg-black/60 text-orange-300'}`} data-testid="swing-fire">
           {hud.fire === 2 ? '🔥 FIRE — JUMP!' : 'MOVE!'}
@@ -975,10 +997,8 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
           { gesture: 'avoid', label: 'Hang around and a fire wall comes from the left — hook a new vine to escape it' },
         ],
         points: [
-          { label: 'Every vine you pass', value: '1' },
-          { label: 'Berry', value: '+1', tone: 'bonus' },
-          { label: 'Each vine skipped in one jump', value: '+1', tone: 'gold' },
-          { label: 'Every 5 catches in a row', value: '+1', tone: 'fire' },
+          { label: 'Every 2 m you travel', value: '1' },
+          { label: 'Berry', value: '+3', tone: 'bonus' },
         ],
         ends: 'Slow → Middle → Final → Crazy · the fire or one splash ends the run',
       }}
@@ -987,7 +1007,7 @@ export default function CanopySwing3DGame({ avatar, onFinish, seed, rival, match
         { icon: <Crosshair className="w-6 h-6" />, label: 'Let go = fly far' },
         { icon: <Flame className="w-6 h-6" />, label: 'Outrun the fire' },
       ]}
-      scoring="You carry a hook gun. Hold anywhere on the screen and it fires a hook on a rope at the tip of the nearest vine in reach — the target at the bottom of that vine turns green — and you swing on it for as long as you hold. Let go to fly off with all the speed you had: gravity speeds you up on the way down, and letting go on the upswing carries you over two, three or more vines. Don’t hang around: after a few seconds without a new catch a wall of fire sweeps in from the left. Hook a new vine before it reaches you and it dies back; if it touches you, the run is over. The hook can’t pass through brambles, and touching one knocks you down; lily pads on the water bounce you back up. 1 point for every vine you pass, +1 per berry, +1 for every vine you skip in one flight, +1 for every 5 catches in a row. One splash ends the run too. Stages: Slow, Middle, Final, Crazy. Same jungle for every player; your best is saved on this device."
+      scoring="You carry a hook gun. Hold anywhere on the screen and it fires a hook on a rope at the tip of the nearest vine in reach — the target at the bottom of that vine turns green — and you swing on it for as long as you hold. Let go to fly off with all the speed you had: gravity speeds you up on the way down, and letting go on the upswing carries you over two, three or more vines. Don’t hang around: after a few seconds without a new catch a wall of fire sweeps in from the left. Hook a new vine before it reaches you and it dies back; if it touches you, the run is over. The hook can’t pass through brambles, and touching one knocks you down; lily pads on the water bounce you back up. Your score counts up with the distance you travel (1 point every 2 m), plus +3 per berry — fly fast and far. One splash ends the run too. Stages: Slow, Middle, Final, Crazy. Same jungle for every player; your best is saved on this device."
     />
   );
 }

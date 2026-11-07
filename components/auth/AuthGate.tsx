@@ -157,7 +157,7 @@ function PhoneFlow({ link, onBack }: { link: boolean; onBack?: () => void }) {
             ))}
           </div>
         </label>
-        {err && <p className="mt-4 text-sm text-rose-300 text-center" role="alert">{err}</p>}
+        {err && <p className="mt-4 text-sm text-rose-300 text-center whitespace-pre-line break-words" role="alert">{err}</p>}
         <button onClick={() => verify()} disabled={code.length !== 6 || busy} className="mt-6 w-full h-14 rounded-2xl bg-amber-400 text-black font-black text-lg disabled:opacity-40 flex items-center justify-center gap-2" data-testid="verify-code">
           {busy && <Loader2 className="w-5 h-5 animate-spin" />} Verify
         </button>
@@ -199,7 +199,7 @@ function PhoneFlow({ link, onBack }: { link: boolean; onBack?: () => void }) {
           className="flex-1 bg-transparent outline-none text-white text-lg font-bold placeholder:text-white/20"
         />
       </div>
-      {err && <p className="mt-3 text-sm text-rose-300" role="alert">{err}</p>}
+      {err && <p className="mt-3 text-sm text-rose-300 whitespace-pre-line break-words" role="alert">{err}</p>}
       <button onClick={send} disabled={busy} className="mt-5 w-full h-14 rounded-2xl bg-amber-400 text-black font-black text-lg disabled:opacity-50 flex items-center justify-center gap-2" data-testid="send-code">
         {busy && <Loader2 className="w-5 h-5 animate-spin" />} {link ? 'Text me a code' : 'Continue'}
       </button>
@@ -318,7 +318,7 @@ function ProfileSetup() {
         </select>
       </div>
       <p className="text-[11px] text-slate-500 mt-2">Used to confirm your age. Cash games require 18+ and a matching ID. It can’t be changed later.</p>
-      {err && <p className="mt-3 text-sm text-rose-300" role="alert">{err}</p>}
+      {err && <p className="mt-3 text-sm text-rose-300 whitespace-pre-line break-words" role="alert">{err}</p>}
       <button onClick={submit} disabled={busy} className="mt-5 w-full h-14 rounded-2xl bg-amber-400 text-black font-black text-lg disabled:opacity-50 flex items-center justify-center gap-2" data-testid="create-player">
         {busy && <Loader2 className="w-5 h-5 animate-spin" />} Start playing
       </button>

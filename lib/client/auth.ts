@@ -67,8 +67,17 @@ function guestSession(): Session {
   return { uid: id, phone: null, email: null, name: null, provider: 'guest', token: async () => 'guest' };
 }
 
-/** Friendly messages for the errors players can actually hit. */
+/** Friendly message plus a small technical line (code + Firebase's text) so a screenshot says what broke. */
 export function authMessage(e: unknown): string {
+  const msg = friendlyAuthMessage(e);
+  const code = (e as { code?: string })?.code ?? '';
+  const text = ((e as { message?: string })?.message ?? '').replace(/^Firebase:\s*/, '').slice(0, 160);
+  const detail = [code, text && !text.includes(code) ? text : code ? '' : text].filter(Boolean).join(' · ');
+  return detail ? `${msg}\n${detail}` : msg;
+}
+
+/** Friendly messages for the errors players can actually hit. */
+function friendlyAuthMessage(e: unknown): string {
   const code = (e as { code?: string })?.code ?? (e instanceof Error ? e.message : String(e));
   // Firebase hides the real reason inside 'auth/internal-error' — pull it out.
   if (code === 'auth/internal-error') {

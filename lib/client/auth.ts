@@ -29,7 +29,8 @@ const FIREBASE_HOST = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'rivalarca
  * Firebase). Signing in on the site's own address keeps phone browsers (Safari especially) from
  * dropping the result, which happens when it comes back through firebaseapp.com.
  */
-const SAME_SITE_AUTH_HOSTS = ['rivalarcade.vercel.app', ...(process.env.NEXT_PUBLIC_AUTH_HOSTS ?? '').split(',').map((h) => h.trim()).filter(Boolean)];
+// Opt-in (NEXT_PUBLIC_AUTH_HOSTS=rivalarcade.vercel.app) once that address is on the Google OAuth client.
+const SAME_SITE_AUTH_HOSTS = [...(process.env.NEXT_PUBLIC_AUTH_HOSTS ?? '').split(',').map((h) => h.trim()).filter(Boolean)];
 function authDomain() {
   if (typeof window !== 'undefined' && SAME_SITE_AUTH_HOSTS.includes(window.location.host)) return window.location.host;
   return FIREBASE_HOST;

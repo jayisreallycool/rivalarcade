@@ -2,6 +2,11 @@ import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Tells the browser bundle whether this deployment's server can sign players in (a yes/no flag
+  // only — the service-account key itself never leaves the server).
+  env: {
+    NEXT_PUBLIC_RA_SERVER_READY: process.env.FIREBASE_SERVICE_ACCOUNT ? '1' : '0',
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },

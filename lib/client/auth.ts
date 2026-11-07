@@ -19,13 +19,18 @@ export interface Session {
 
 export const TEST_AUTH = process.env.NEXT_PUBLIC_RA_TEST_AUTH === '1';
 
+/**
+ * Firebase web config for the "rivalarcade" project. These values are public by design (they ship in
+ * every browser bundle); env vars override them for a different project.
+ */
 export const firebaseClientConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDDPfHmXGWtvd1HycWVGxZ5ElxcMlKSELg',
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'rivalarcadedev.firebaseapp.com',
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'rivalarcadedev',
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || '1:501777083388:web:85121cc08ce2f10e00e079',
 };
-const firebaseReady = !!(firebaseClientConfig.apiKey && firebaseClientConfig.projectId);
+/** Sign-in turns on only when this deployment's server also has its Firebase key (else guest mode). */
+const firebaseReady = !!(firebaseClientConfig.apiKey && firebaseClientConfig.projectId) && process.env.NEXT_PUBLIC_RA_SERVER_READY === '1';
 /**
  * Guest mode (no sign-in): on when NEXT_PUBLIC_GUEST_MODE=1, or automatically while Firebase isn't
  * set up yet. The game runs on this device with local progress; real-player matches need sign-in.

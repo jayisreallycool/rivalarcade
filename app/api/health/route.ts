@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { adminAuth, firestoreDb, serviceAccountInfo } from '@/lib/server/firestore-store';
 import { cashMode } from '@/lib/server/backend';
+import { ensureFirebaseSetup } from '@/lib/server/firebase-setup';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,15 @@ export async function GET() {
     appProject: CLIENT_PROJECT,
     sameProject: key.projectId ? key.projectId === CLIENT_PROJECT : null,
   };
+  if (key.valid && key.projectId === CLIENT_PROJECT) {
+    // Switch on whatever sign-in still needs (phone sign-in, allowed sites, database).
+    const hosts = ['rivalarcade.vercel.app', ...(process.env.NEXT_PUBLIC_AUTH_HOSTS ?? '').split(',').map((h) => h.trim()).filter(Boolean)];
+    try {
+      out.setup = await withTimeout(ensureFirebaseSetup(CLIENT_PROJECT, hosts), 25000);
+    } catch (e) {
+      out.setup = `error — ${String((e as Error).message).slice(0, 160)}`;
+    }
+  }
   if (key.valid) {
     try {
       await withTimeout(adminAuth().listUsers(1), 8000);

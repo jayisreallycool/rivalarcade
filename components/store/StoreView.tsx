@@ -370,7 +370,8 @@ export default function StoreView() {
                   className="flex-1 h-12 rounded-full bg-amber-400 text-black font-black flex items-center justify-center gap-2 disabled:opacity-40"
                   data-testid="buy-item"
                 >
-                  <Coins className="w-4 h-4" /> Buy for {detail.cost.toLocaleString()}
+                  <Coins className="w-4 h-4" />{' '}
+                  {userState.stats.coins >= detail.cost ? `Buy for ${detail.cost.toLocaleString()}` : `${(detail.cost - userState.stats.coins).toLocaleString()} more coins`}
                 </button>
               )}
               <button onClick={() => setDetail(null)} className="h-12 px-5 rounded-full bg-white/10 text-white font-bold">

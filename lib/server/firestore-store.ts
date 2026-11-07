@@ -2,6 +2,7 @@ import { cert, getApps, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, type Firestore, type Query, type Transaction } from 'firebase-admin/firestore';
 import type { Data, QueryOpts, Row, Store, Tx } from './store';
+import { FIRESTORE_DB_ID } from '../firestore-db-id';
 
 /**
  * Service account from FIREBASE_SERVICE_ACCOUNT: the JSON key, raw or base64. Forgiving about how it
@@ -50,7 +51,7 @@ export function adminApp() {
 export const adminAuth = () => getAuth(adminApp());
 function firestore() {
   if (db) return db;
-  db = getFirestore(adminApp());
+  db = FIRESTORE_DB_ID === '(default)' ? getFirestore(adminApp()) : getFirestore(adminApp(), FIRESTORE_DB_ID);
   db.settings({ ignoreUndefinedProperties: true });
   return db;
 }

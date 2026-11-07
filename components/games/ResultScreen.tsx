@@ -35,8 +35,9 @@ function useMatch(contestId: string | null) {
       void (async () => {
         const { getApps } = await import('firebase/app');
         const { getFirestore, doc, onSnapshot } = await import('firebase/firestore');
+        const { FIRESTORE_DB_ID } = await import('@/lib/firestore-db-id');
         if (dead || !getApps()[0]) return;
-        off = onSnapshot(doc(getFirestore(getApps()[0]), 'users', uid, 'matches', contestId), (s) => {
+        off = onSnapshot(doc(getFirestore(getApps()[0], FIRESTORE_DB_ID), 'users', uid, 'matches', contestId), (s) => {
           if (s.exists()) {
             setM(s.data() as ServerMatch);
             if (['settled', 'cancelled'].includes((s.data() as ServerMatch).status)) void userStore.refresh();

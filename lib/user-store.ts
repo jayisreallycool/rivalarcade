@@ -384,9 +384,10 @@ class UserStore {
     void (async () => {
       const { getApps } = await import('firebase/app');
       const { getFirestore, doc, onSnapshot } = await import('firebase/firestore');
+        const { FIRESTORE_DB_ID } = await import('@/lib/firestore-db-id');
       if (dead || !getApps()[0]) return;
       off = onSnapshot(
-        doc(getFirestore(getApps()[0]), 'users', uid),
+        doc(getFirestore(getApps()[0], FIRESTORE_DB_ID), 'users', uid),
         () => {
           if (first) return void (first = false);
           void this.refresh();

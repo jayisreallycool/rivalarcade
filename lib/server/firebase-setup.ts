@@ -1,4 +1,5 @@
 import { adminApp } from './firestore-store';
+import { FIRESTORE_DB_ID } from '../firestore-db-id';
 
 /**
  * Turns on what sign-in needs, using the server's own Firebase admin key: phone sign-in, this
@@ -106,12 +107,13 @@ async function run(project: string, hosts: string[]): Promise<SetupReport> {
   // --- Firestore database
   try {
     const fsBase = `https://firestore.googleapis.com/v1/projects/${project}/databases`;
-    const d = await call('GET', `${fsBase}/(default)`);
-    if (d.status === 200) rep.database = 'ok';
-    else if (d.status === 404) {
-      const c = await call('POST', `${fsBase}?databaseId=(default)`, { type: 'FIRESTORE_NATIVE', locationId: 'nam5' });
-      rep.database = c.status === 200 ? 'creating just now — ready in about a minute' : `missing — couldn't create (${errText(c)})`;
-    } else rep.database = `can't read — ${errText(d)}`;
+    const d = await call('GET', `${fsBase}/${FIRESTORE_DB_ID}`);
+    if (d.status === 200) rep.database = `ok (${FIRESTORE_DB_ID})`;
+    else {
+      const list = await call('GET', fsBase);
+      const names = ((list.json.databases as { name?: string }[] | undefined) ?? []).map((x) => String(x.name).split('/').pop());
+      rep.database = `"${FIRESTORE_DB_ID}" not found (${errText(d)}); databases in project: ${names.length ? names.join(', ') : list.status === 200 ? 'none' : errText(list)}`;
+    }
   } catch (e) {
     rep.database = `error — ${String((e as Error).message).slice(0, 140)}`;
   }

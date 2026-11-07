@@ -45,7 +45,8 @@ const nextConfig: NextConfig = {
     ].join('; ');
     return [
       {
-        source: '/:path*',
+        // Not on /__/… — those are Firebase's own sign-in pages, proxied below, with their own rules.
+        source: '/((?!__/).*)',
         headers: [
           { key: 'Content-Security-Policy', value: csp },
           { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
@@ -56,6 +57,14 @@ const nextConfig: NextConfig = {
         ],
       },
       { source: '/api/:path*', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
+    ];
+  },
+  // Firebase's sign-in pages, served from this site's own address (see SAME_SITE_AUTH_HOSTS).
+  async rewrites() {
+    const fb = `https://${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'rivalarcadedev'}.firebaseapp.com`;
+    return [
+      { source: '/__/auth/:path*', destination: `${fb}/__/auth/:path*` },
+      { source: '/__/firebase/:path*', destination: `${fb}/__/firebase/:path*` },
     ];
   },
   transpilePackages: ['motion'],

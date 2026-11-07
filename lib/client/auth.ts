@@ -23,9 +23,22 @@ export const TEST_AUTH = process.env.NEXT_PUBLIC_RA_TEST_AUTH === '1';
  * Firebase web config for the "rivalarcade" project. These values are public by design (they ship in
  * every browser bundle); env vars override them for a different project.
  */
+const FIREBASE_HOST = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'rivalarcadedev.firebaseapp.com';
+/**
+ * Sites that serve Firebase's sign-in pages themselves (next.config.ts proxies /__/auth/* to
+ * Firebase). Signing in on the site's own address keeps phone browsers (Safari especially) from
+ * dropping the result, which happens when it comes back through firebaseapp.com.
+ */
+const SAME_SITE_AUTH_HOSTS = ['rivalarcade.vercel.app', ...(process.env.NEXT_PUBLIC_AUTH_HOSTS ?? '').split(',').map((h) => h.trim()).filter(Boolean)];
+function authDomain() {
+  if (typeof window !== 'undefined' && SAME_SITE_AUTH_HOSTS.includes(window.location.host)) return window.location.host;
+  return FIREBASE_HOST;
+}
 export const firebaseClientConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || 'AIzaSyDDPfHmXGWtvd1HycWVGxZ5ElxcMlKSELg',
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'rivalarcadedev.firebaseapp.com',
+  get authDomain() {
+    return authDomain();
+  },
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'rivalarcadedev',
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || '1:501777083388:web:85121cc08ce2f10e00e079',
 };
@@ -57,6 +70,16 @@ function guestSession(): Session {
 /** Friendly messages for the errors players can actually hit. */
 export function authMessage(e: unknown): string {
   const code = (e as { code?: string })?.code ?? (e instanceof Error ? e.message : String(e));
+  // Firebase hides the real reason inside 'auth/internal-error' — pull it out.
+  if (code === 'auth/internal-error') {
+    const raw = `${(e as { message?: string })?.message ?? ''} ${JSON.stringify((e as { customData?: unknown })?.customData ?? '')}`;
+    if (/CONFIGURATION_NOT_FOUND/.test(raw)) return 'Sign-in isn’t set up yet: open Firebase → Authentication and click “Get started”.';
+    if (/OPERATION_NOT_ALLOWED|provider is disabled/i.test(raw)) return 'Google sign-in isn’t switched on yet (Firebase → Authentication → Sign-in method → Google).';
+    if (/invalid_client|OAUTH/i.test(raw)) return 'Google sign-in needs a support email: Firebase → Authentication → Sign-in method → Google → save.';
+    if (/redirect_uri|UNAUTHORIZED_DOMAIN/i.test(raw)) return 'This web address isn’t allowed to sign in yet (add it in Firebase → Authentication → Settings).';
+    const detail = raw.match(/[A-Z][A-Z_]{5,}/)?.[0];
+    return `Google sign-in hit a problem${detail ? ` (${detail})` : ''}. Reload and try again.`;
+  }
   const map: Record<string, string> = {
     'auth/invalid-phone-number': 'That phone number doesn’t look right.',
     'auth/missing-phone-number': 'Enter your phone number.',

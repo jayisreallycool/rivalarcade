@@ -50,6 +50,11 @@ export const GAME_RULES: Record<string, GameRule> = {
   'canopy-swing': { timed: false, roundSeconds: 0, maxScore: 8000, maxPointsPerSec: 10, maxDurationS: 3600, baseline: 150 },
   // 3 rounds × 45 s, ends early on a knockout.
   'fight-night': { timed: false, roundSeconds: 0, maxScore: 800, maxPointsPerSec: 8, maxDurationS: 900, baseline: 60 },
+  'sky-stack': { timed: false, roundSeconds: 0, maxScore: 1500, maxPointsPerSec: 6, maxDurationS: 1800, baseline: 30 },
+  'axe-spin': { timed: false, roundSeconds: 0, maxScore: 2500, maxPointsPerSec: 8, maxDurationS: 1800, baseline: 30 },
+  'beat-tiles': { timed: false, roundSeconds: 0, maxScore: 6000, maxPointsPerSec: 16, maxDurationS: 1800, baseline: 90 },
+  'slice-storm': { timed: false, roundSeconds: 0, maxScore: 3000, maxPointsPerSec: 12, maxDurationS: 1800, baseline: 60 },
+  'prism-hop': { timed: false, roundSeconds: 0, maxScore: 1500, maxPointsPerSec: 5, maxDurationS: 1800, baseline: 12 },
 };
 
 export interface CupTemplate {

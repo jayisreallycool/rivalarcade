@@ -35,10 +35,15 @@ export const TILES: Record<GameId, GameTile> = {
   'neon-dash': { id: 'neon-dash', title: 'Neon Dash', genre: 'Swipe Runner', blurb: 'Swipe lanes, jump and slide down a neon highway.', from: '#ec4899', to: '#1e0b4b', tags: ['action', 'popular'] },
   'gem-surge': { id: 'gem-surge', title: 'Gem Surge', genre: 'Match-3', blurb: 'Build power gems, chain cascades — and never run out of moves.', from: '#c084fc', to: '#2e1065', tags: ['puzzle'] },
   'canopy-swing': { id: 'canopy-swing', title: 'Canopy Swing', genre: 'Hold & Swing', blurb: 'Hook a vine, swing, let go and fly. Keep your momentum.', from: '#4ade80', to: '#065f46', tags: ['action', 'new', 'popular'] },
+  'sky-stack': { id: 'sky-stack', title: 'Sky Stack', genre: 'Tap Timing', blurb: "Tap to drop each slab. Perfect drops keep the tower wide — how high can you go?", from: '#f472b6', to: '#2a1b6e', tags: ['action', 'new'] },
+  'axe-spin': { id: 'axe-spin', title: 'Axe Spin', genre: 'Tap Timing', blurb: "Throw axes into the spinning log. Hit another axe and it's over.", from: '#f59e0b', to: '#2b1709', tags: ['action', 'new'] },
+  'beat-tiles': { id: 'beat-tiles', title: 'Beat Tiles', genre: 'Rhythm', blurb: "Tap the tiles to play the song. Faster and faster — don't miss a beat.", from: '#c084fc', to: '#12052b', tags: ['action', 'new'] },
+  'slice-storm': { id: 'slice-storm', title: 'Slice Storm', genre: 'Swipe', blurb: "Swipe to slice flying fruit. Chain combos, dodge the bombs.", from: '#fb923c', to: '#2b1306', tags: ['action', 'new'] },
+  'prism-hop': { id: 'prism-hop', title: 'Prism Hop', genre: 'Tap Timing', blurb: "Hop through spinning rings — only through your own colour.", from: '#a855f7', to: '#0b0718', tags: ['puzzle', 'new'] },
   'fight-night': { id: 'fight-night', title: 'FightNight', genre: 'Boxing', blurb: 'Jab, slip and land haymakers. Read his guard, counter his punches, go for the KO.', from: '#ef4444', to: '#1c0a0a', tags: ['sports', 'action', 'new'] },
   'cyber-reflex': { id: 'cyber-reflex', title: 'Cyber Reflex', genre: 'Tap & Slash', blurb: 'Hit targets dead-centre, chain perfects, dodge hazards.', from: '#14b8a6', to: '#042f2e', tags: ['action', 'new'] },
 };
-const ORDER: GameId[] = ['dunk-rush', 'fight-night', 'canopy-swing', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
+const ORDER: GameId[] = ['dunk-rush', 'fight-night', 'sky-stack', 'slice-storm', 'beat-tiles', 'axe-spin', 'prism-hop', 'canopy-swing', 'brick-blitz', 'neon-dash', 'gem-surge', 'cyber-reflex'];
 
 interface ModeCard {
   mode: Exclude<MatchMode, 'tournament' | 'blitz' | 'streak'>;

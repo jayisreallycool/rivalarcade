@@ -90,6 +90,57 @@ class ArcadeAudioEngine {
     osc.stop(t + 0.05);
   }
 
+  /** A plucked musical note (MIDI number): used by rhythm games and rising-pitch streaks. */
+  public playNote(midi: number, length = 0.35, vol = 0.12) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const f = 440 * Math.pow(2, (midi - 69) / 12);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + length);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(Math.min(9000, f * 6), t);
+    lp.frequency.exponentialRampToValueAtTime(Math.max(300, f * 1.5), t + length);
+    lp.connect(g);
+    g.connect(ctx.destination);
+    for (const [type, mul, a] of [['triangle', 1, 1], ['sine', 2, 0.35], ['square', 1, 0.08]] as const) {
+      const o = ctx.createOscillator();
+      const og = ctx.createGain();
+      o.type = type;
+      o.frequency.value = f * mul;
+      og.gain.value = a;
+      o.connect(og);
+      og.connect(lp);
+      o.start(t);
+      o.stop(t + length + 0.02);
+    }
+  }
+
+  /** Blade / axe biting into wood. */
+  public playThunk(pitch = 1) {
+    if (!this.enabled) return;
+    this.initCtx();
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(260 * pitch, t);
+    o.frequency.exponentialRampToValueAtTime(90 * pitch, t + 0.09);
+    g.gain.setValueAtTime(0.22, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start(t);
+    o.stop(t + 0.16);
+  }
+
   /** Glove landing: a low body thump plus a short slap of noise (heavier for haymakers). */
   public playPunch(heavy = false, blocked = false) {
     if (!this.enabled) return;

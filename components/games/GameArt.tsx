@@ -542,6 +542,195 @@ function FightArt() {
   );
 }
 
+
+function StackArt() {
+  const cols = ['#f9a8d4', '#f0abfc', '#c4b5fd', '#a5b4fc', '#93c5fd', '#7dd3fc', '#67e8f9', '#5eead4'];
+  return (
+    <svg viewBox="0 0 300 430" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="ss-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#2a1b6e" />
+          <stop offset="1" stopColor="#ff9ad5" />
+        </linearGradient>
+      </defs>
+      <rect width="300" height="430" fill="url(#ss-bg)" />
+      {[[40, 200], [230, 150], [190, 330]].map(([x, y], i) => (
+        <g key={i} fill="#fff" opacity="0.85">
+          <ellipse cx={x} cy={y} rx="30" ry="14" />
+          <ellipse cx={x + 22} cy={y - 8} rx="20" ry="14" />
+        </g>
+      ))}
+      {cols.map((c, i) => {
+        const y = 400 - i * 28;
+        const w = 150 - i * 6 + (i % 3 === 2 ? 10 : 0);
+        const x = 150 - w / 2 + (i % 2 ? 6 : -4);
+        return (
+          <g key={i}>
+            <path d={`M${x} ${y} l${w} 0 l24 -14 l-${w} 0z`} fill="#fff" opacity="0.55" />
+            <rect x={x} y={y} width={w} height="24" fill={c} stroke="#1b1030" strokeWidth="4" />
+            <path d={`M${x + w} ${y} l24 -14 l0 24 l-24 14z`} fill={c} stroke="#1b1030" strokeWidth="4" opacity="0.8" />
+          </g>
+        );
+      })}
+      {/* the falling slab */}
+      <g transform="translate(70 120) rotate(-12)">
+        <rect width="120" height="24" fill="#fde68a" stroke="#1b1030" strokeWidth="4" />
+      </g>
+      <path d="M200 138 l26 0" stroke="#fff" strokeWidth="5" strokeLinecap="round" />
+      <Title lines={['SKY', 'STACK']} y={62} fill={['#ffffff', '#f9a8d4']} size={58} tilt={-4} />
+    </svg>
+  );
+}
+
+function AxeArt() {
+  return (
+    <svg viewBox="0 0 300 430" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <radialGradient id="ax-bg" cx="0.5" cy="0.45" r="0.8">
+          <stop offset="0" stopColor="#a1622c" />
+          <stop offset="1" stopColor="#2b1709" />
+        </radialGradient>
+        <radialGradient id="ax-log" cx="0.45" cy="0.4" r="0.7">
+          <stop offset="0" stopColor="#f1c48a" />
+          <stop offset="1" stopColor="#c98a4b" />
+        </radialGradient>
+      </defs>
+      <rect width="300" height="430" fill="url(#ax-bg)" />
+      <circle cx="150" cy="215" r="92" fill="#5b3a1f" stroke="#1b1030" strokeWidth="6" />
+      <circle cx="150" cy="215" r="80" fill="url(#ax-log)" stroke="#1b1030" strokeWidth="4" />
+      {[60, 45, 30, 16].map((r) => (
+        <circle key={r} cx="150" cy="215" r={r} fill="none" stroke="#8a5428" strokeWidth="3" opacity="0.6" />
+      ))}
+      {[-20, 70, 160, 230].map((deg, i) => (
+        <g key={i} transform={`rotate(${deg} 150 215) translate(150 120)`}>
+          <rect x="-5" y="-70" width="10" height="72" rx="4" fill="#9a5b2b" stroke="#1b1030" strokeWidth="3" />
+          <path d="M-4 0 L22 -6 Q30 8 22 22 L-4 16Z" fill="#cbd5e1" stroke="#1b1030" strokeWidth="3" />
+        </g>
+      ))}
+      <circle cx="226" cy="168" r="13" fill="#ffc83a" stroke="#1b1030" strokeWidth="4" />
+      {/* the axe flying up */}
+      <g transform="translate(150 360)">
+        <rect x="-6" y="0" width="12" height="62" rx="4" fill="#9a5b2b" stroke="#1b1030" strokeWidth="4" />
+        <path d="M-6 0 L30 -10 Q42 10 30 30 L-6 20Z" fill="#e5e7eb" stroke="#1b1030" strokeWidth="4" />
+      </g>
+      <path d="M130 410 l0 -30 M170 410 l0 -30" stroke="#fff" strokeWidth="4" strokeLinecap="round" opacity="0.6" />
+      <Title lines={['AXE', 'SPIN']} y={66} fill={['#fff7ed', '#fbbf24']} size={60} tilt={-5} />
+    </svg>
+  );
+}
+
+function TilesArt() {
+  const lanes = [2, 0, 3, 1, 2, 0];
+  const cols = ['#22d3ee', '#a855f7', '#f472b6', '#34d399'];
+  return (
+    <svg viewBox="0 0 300 430" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="bt-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#12052b" />
+          <stop offset="1" stopColor="#3b0764" />
+        </linearGradient>
+      </defs>
+      <rect width="300" height="430" fill="url(#bt-bg)" />
+      {[75, 150, 225].map((x) => (
+        <rect key={x} x={x - 1} y="0" width="2" height="430" fill="#ffffff" opacity="0.12" />
+      ))}
+      {lanes.map((l, i) => (
+        <rect key={i} x={l * 75 + 5} y={150 + i * 50 - (i > 3 ? 0 : 0)} width="65" height="46" rx="8" fill={cols[l]} opacity={i === 5 ? 0.35 : 1} stroke="#1b1030" strokeWidth="4" />
+      ))}
+      <rect x="0" y="330" width="300" height="100" fill="#a855f7" opacity="0.18" />
+      <rect x="0" y="328" width="300" height="4" fill="#e9d5ff" />
+      {/* music notes */}
+      {[[40, 120], [250, 105], [205, 300]].map(([x, y], i) => (
+        <g key={i} transform={`translate(${x} ${y})`} fill="#fde047" stroke="#1b1030" strokeWidth="3">
+          <ellipse cx="0" cy="18" rx="10" ry="8" />
+          <rect x="7" y="-14" width="5" height="32" />
+          <path d="M12 -14 q14 4 14 16 q-6 -8 -14 -6z" />
+        </g>
+      ))}
+      {/* a tapping finger */}
+      <g transform="translate(190 365)">
+        <circle cx="0" cy="0" r="18" fill="#fff" opacity="0.35" />
+        <ellipse cx="0" cy="0" rx="10" ry="14" fill="#ffd7b5" stroke="#1b1030" strokeWidth="3" />
+      </g>
+      <Title lines={['BEAT', 'TILES']} y={62} fill={['#ffffff', '#c084fc']} size={58} tilt={-4} />
+    </svg>
+  );
+}
+
+function SliceArt() {
+  return (
+    <svg viewBox="0 0 300 430" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="sl-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#64391b" />
+          <stop offset="1" stopColor="#2b1306" />
+        </linearGradient>
+      </defs>
+      <rect width="300" height="430" fill="url(#sl-bg)" />
+      {[60, 140, 220, 300, 380].map((y) => (
+        <rect key={y} x="0" y={y} width="300" height="4" fill="#000" opacity="0.25" />
+      ))}
+      {/* sliced melon halves */}
+      <g transform="translate(110 230) rotate(-25)">
+        <path d="M-60 0 A60 60 0 0 1 60 0 Z" fill="#1f9d55" stroke="#1b1030" strokeWidth="5" transform="translate(0 -10)" />
+        <path d="M-52 0 A52 52 0 0 1 52 0 Z" fill="#ff3b5c" transform="translate(0 -10)" />
+        <path d="M-60 0 A60 60 0 0 0 60 0 Z" fill="#1f9d55" stroke="#1b1030" strokeWidth="5" transform="translate(0 14)" />
+        <path d="M-52 0 A52 52 0 0 0 52 0 Z" fill="#ff3b5c" transform="translate(0 14)" />
+        {[-30, -10, 10, 30].map((x) => (
+          <ellipse key={x} cx={x} cy={-26} rx="3" ry="5" fill="#1b1030" />
+        ))}
+      </g>
+      <circle cx="225" cy="160" r="34" fill="#ff8a1f" stroke="#1b1030" strokeWidth="5" />
+      <circle cx="215" cy="150" r="8" fill="#fff" opacity="0.5" />
+      <circle cx="230" cy="320" r="26" fill="#7c3aed" stroke="#1b1030" strokeWidth="5" />
+      {/* bomb */}
+      <g transform="translate(70 345)">
+        <circle cx="0" cy="0" r="26" fill="#1f2937" stroke="#1b1030" strokeWidth="5" />
+        <path d="M10 -24 q10 -14 22 -10" stroke="#9ca3af" strokeWidth="4" fill="none" />
+        <circle cx="34" cy="-36" r="7" fill="#ffb02e" />
+      </g>
+      {/* the blade swoosh */}
+      <path d="M20 330 Q150 180 290 110" stroke="#e0f2fe" strokeWidth="9" fill="none" strokeLinecap="round" opacity="0.9" />
+      <path d="M20 330 Q150 180 290 110" stroke="#67e8f9" strokeWidth="3" fill="none" strokeLinecap="round" />
+      {[[150, 200], [175, 230], [95, 185]].map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={5 + i} fill="#ff3b5c" />
+      ))}
+      <Title lines={['SLICE', 'STORM']} y={62} fill={['#fff7ed', '#fb923c']} size={58} tilt={-5} />
+    </svg>
+  );
+}
+
+function PrismArt() {
+  const cols = ['#22d3ee', '#f43f5e', '#facc15', '#a855f7'];
+  const arcs = (cx: number, cy: number, r: number, rot: number) =>
+    cols.map((c, k) => {
+      const a0 = ((k * 90 + rot) * Math.PI) / 180;
+      const a1 = (((k + 1) * 90 + rot) * Math.PI) / 180;
+      return <path key={k} d={`M${cx + r * Math.cos(a0)} ${cy + r * Math.sin(a0)} A${r} ${r} 0 0 1 ${cx + r * Math.cos(a1)} ${cy + r * Math.sin(a1)}`} stroke={c} strokeWidth="16" fill="none" />;
+    });
+  return (
+    <svg viewBox="0 0 300 430" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <radialGradient id="ph-bg" cx="0.5" cy="0.5" r="0.8">
+          <stop offset="0" stopColor="#2e1065" />
+          <stop offset="1" stopColor="#0b0718" />
+        </radialGradient>
+      </defs>
+      <rect width="300" height="430" fill="url(#ph-bg)" />
+      {Array.from({ length: 40 }, (_, i) => (
+        <circle key={i} cx={(i * 67) % 300} cy={(i * 113) % 430} r={1 + (i % 3)} fill="#c4b5fd" opacity="0.6" />
+      ))}
+      {arcs(150, 215, 82, 20)}
+      <path d="M150 192 l7 15 l16 2 l-12 11 l3 16 l-14 -8 l-14 8 l3 -16 l-12 -11 l16 -2z" fill="#fff" />
+      {arcs(150, 410, 60, -40)}
+      <circle cx="150" cy="345" r="16" fill="#facc15" stroke="#1b1030" strokeWidth="4" />
+      <circle cx="145" cy="340" r="5" fill="#fff" opacity="0.7" />
+      <path d="M150 368 l0 22" stroke="#fde047" strokeWidth="4" strokeDasharray="4 5" />
+      <Title lines={['PRISM', 'HOP']} y={64} fill={['#ffffff', '#a855f7']} size={58} tilt={-4} />
+    </svg>
+  );
+}
+
 const ART: Record<GameId, () => React.ReactElement> = {
   'dunk-rush': DunkArt,
   'neon-dash': DashArt,
@@ -550,6 +739,11 @@ const ART: Record<GameId, () => React.ReactElement> = {
   'gem-surge': GemArt,
   'canopy-swing': SwingArt,
   'fight-night': FightArt,
+  'sky-stack': StackArt,
+  'axe-spin': AxeArt,
+  'beat-tiles': TilesArt,
+  'slice-storm': SliceArt,
+  'prism-hop': PrismArt,
 };
 
 export default function GameArt({ id }: { id: GameId }) {

@@ -71,15 +71,30 @@ export function authMessage(e: unknown): string {
     'auth/captcha-check-failed': 'The security check failed. Reload and try again.',
     'auth/operation-not-allowed': 'Phone sign-in isn’t switched on for this app yet.',
     'auth/unauthorized-domain': 'This web address isn’t allowed to sign in yet (add it in Firebase → Authentication → Settings).',
+    'auth/popup-blocked': 'Your browser blocked the Google window. Allow pop-ups for this site and tap again.',
+    'auth/cancelled-popup-request': 'Google sign-in was closed.',
+    'auth/network-request-failed': 'Can’t reach Google. Check your connection and try again.',
+    'auth/configuration-not-found': 'Sign-in isn’t set up yet: open Firebase → Authentication and click “Get started”.',
+    'auth/admin-restricted-operation': 'That sign-in method isn’t switched on yet (Firebase → Authentication → Sign-in method).',
+    'auth/billing-not-enabled': 'Text-message codes need billing turned on for the Firebase project. Use Google for now.',
+    'auth/invalid-app-credential': 'The security check failed. Reload the page and try again.',
+    'auth/missing-app-credential': 'The security check didn’t load. Reload the page and try again.',
+    'auth/web-storage-unsupported': 'This browser is blocking storage (private mode?). Try a normal tab.',
+    'auth/internal-error': 'Google sign-in hit a problem. Reload and try again.',
+    'auth/invalid-api-key': 'This app’s Firebase key isn’t valid.',
+    'auth/app-not-authorized': 'This web address isn’t allowed to use this Firebase project.',
     phone_in_use: 'This phone number already has an account.',
     voip_not_allowed: 'Internet / VoIP and toll-free numbers can’t be used. Use your mobile number.',
   };
-  return map[code] ?? 'Something went wrong. Try again.';
+  // unknown problems still say which one it was, so it can be fixed
+  return map[code] ?? (code && code !== '[object Object]' ? `Sign-in failed (${code.replace(/^auth\//, '')}). Try again.` : 'Something went wrong. Try again.');
 }
 
 // ------------------------------------------------------------------------------- firebase
 
 let fbAuth: Auth | null = null;
+let authMod: typeof import('firebase/auth') | null = null;
+let redirectChecked = false;
 async function fb() {
   if (fbAuth) return fbAuth;
   const { initializeApp, getApps } = await import('firebase/app');
@@ -88,7 +103,26 @@ async function fb() {
   fbAuth = getAuth(app);
   fbAuth.useDeviceLanguage();
   await setPersistence(fbAuth, browserLocalPersistence);
+  authMod = await import('firebase/auth');
   return fbAuth;
+}
+
+/**
+ * Load Firebase before the player taps a sign-in button: phones only open the Google window when
+ * it's opened straight from the tap, with nothing to wait for first. Also finishes a sign-in that
+ * came back through a redirect (and reports its error, if any).
+ */
+export async function warmAuth(): Promise<string | null> {
+  if (GUEST || TEST_AUTH) return null;
+  const auth = await fb();
+  if (redirectChecked) return null;
+  redirectChecked = true;
+  try {
+    await authMod!.getRedirectResult(auth);
+    return null;
+  } catch (e) {
+    return authMessage(e);
+  }
 }
 
 const fromUser = (u: User): Session => ({
@@ -192,14 +226,15 @@ export async function signInWithGoogle() {
     setTestSession({ uid: `g${Math.random().toString(36).slice(2, 10)}`, phone: null, provider: 'google' });
     return;
   }
-  const auth = await fb();
-  const { GoogleAuthProvider, signInWithPopup, signInWithRedirect } = await import('firebase/auth');
-  const provider = new GoogleAuthProvider();
+  // Already loaded (warmAuth)? Then open the Google window right now, inside the tap.
+  const auth = fbAuth ?? (await fb());
+  const m = authMod ?? (await import('firebase/auth'));
+  const provider = new m.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
   try {
-    await signInWithPopup(auth, provider);
+    await m.signInWithPopup(auth, provider);
   } catch (e) {
-    if ((e as { code?: string }).code === 'auth/popup-blocked') await signInWithRedirect(auth, provider);
+    if ((e as { code?: string }).code === 'auth/popup-blocked') await m.signInWithRedirect(auth, provider);
     else throw e;
   }
 }

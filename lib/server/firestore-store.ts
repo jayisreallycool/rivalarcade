@@ -3,14 +3,38 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, type Firestore, type Query, type Transaction } from 'firebase-admin/firestore';
 import type { Data, QueryOpts, Row, Store, Tx } from './store';
 
-/** Service account from FIREBASE_SERVICE_ACCOUNT (the JSON key, raw or base64). */
-function serviceAccount() {
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!raw) return null;
-  const json = raw.trim().startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
-  const sa = JSON.parse(json);
+/**
+ * Service account from FIREBASE_SERVICE_ACCOUNT: the JSON key, raw or base64. Forgiving about how it
+ * was pasted — surrounding quotes, stray whitespace, or a JSON string of the JSON.
+ */
+function parseServiceAccount(raw: string) {
+  let t = raw.trim();
+  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('`') && t.endsWith('`'))) t = t.slice(1, -1).trim();
+  let v: unknown;
+  try {
+    v = JSON.parse(t.startsWith('{') || t.startsWith('"') ? t : Buffer.from(t, 'base64').toString('utf8'));
+  } catch {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT is not valid JSON');
+  }
+  if (typeof v === 'string') v = JSON.parse(v); // a JSON-encoded string of the key
+  const sa = v as { project_id?: string; client_email?: string; private_key?: string };
+  if (!sa.project_id || !sa.client_email || !sa.private_key) throw new Error('FIREBASE_SERVICE_ACCOUNT is missing project_id, client_email or private_key');
   return { projectId: sa.project_id, clientEmail: sa.client_email, privateKey: String(sa.private_key).replace(/\\n/g, '\n') };
 }
+function serviceAccount() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  return raw ? parseServiceAccount(raw) : null;
+}
+/** What the health check may say about the key (never the key itself). */
+export function serviceAccountInfo(): { present: boolean; valid: boolean; projectId: string | null; problem: string | null } {
+  try {
+    const sa = serviceAccount();
+    return { present: !!sa, valid: !!sa, projectId: sa?.projectId ?? null, problem: sa ? null : 'not set' };
+  } catch (e) {
+    return { present: true, valid: false, projectId: null, problem: e instanceof Error ? e.message : 'unreadable' };
+  }
+}
+export const firestoreDb = () => firestore();
 
 export const firebaseConfigured = () => !!process.env.FIREBASE_SERVICE_ACCOUNT;
 

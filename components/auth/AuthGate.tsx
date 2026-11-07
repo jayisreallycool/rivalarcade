@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { userStore, useUserStore, errorText } from '@/lib/user-store';
-import { authMessage, confirmCode, sendCode, signInWithGoogle } from '@/lib/client/auth';
+import { authMessage, confirmCode, sendCode, signInWithGoogle, warmAuth } from '@/lib/client/auth';
 import { getStarterAvatar } from '@/lib/cosmetics-catalog';
 import AvatarView from '@/components/avatar/AvatarView';
 import { ShieldCheck, Smartphone, ChevronLeft, Loader2 } from 'lucide-react';
@@ -72,6 +72,17 @@ function PhoneFlow({ link, onBack }: { link: boolean; onBack?: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [wait, setWait] = useState(0);
   const codeRef = useRef<HTMLInputElement>(null);
+
+  // load Firebase now, so tapping "Continue with Google" opens Google straight away on phones
+  useEffect(() => {
+    let live = true;
+    void warmAuth()
+      .then((msg) => live && msg && setErr(msg))
+      .catch((e) => live && setErr(authMessage(e)));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (wait <= 0) return;
